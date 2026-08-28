@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# wdd-finish — Phase 3. Take a plan branch whose waves are all integrated to a
+# merged PR, then remove everything the run created.
+#
+# WHY THIS EXISTS RATHER THAN pitcall:finishing-a-development-branch.
+#
+# That skill's option 1 runs `git checkout <base>` and `git pull` in the MAIN
+# checkout. Where concurrent sessions share that checkout this is destructive:
+# a real run measured the base branch moving twice in the minutes between the
+# menu appearing and the controller acting, with another session's uncommitted
+# edits in that tree throughout. WDD's answer was prose telling the controller
+# to pick option 2. Prose lost three times in one week on the project this
+# grew in, and each loss was only fixed by making the wrong thing mechanically
+# impossible. So: this script refuses to run anywhere but a plan worktree, and
+# never touches the main checkout at all.
+#
+# It also closes a gap that skill never covered. SKILL.md says task branches
+# "persist until the final PR"; nothing then deleted them. Measured on one
+# repository: 33 task branches on disk, 20 of them already merged.
+#
+# It does NOT merge the PR. That stays a human decision, as it is everywhere
+# else in this workflow.
+#
+# Usage:
+#   wdd-finish check   PLAN_FILE   # verify only, no side effects
+#   wdd-finish ship    PLAN_FILE   # check, push, open PR
+#   wdd-finish cleanup PLAN_FILE   # AFTER the PR merges: branches + worktrees + workspace
+#
+# Exit: 0 ok | 1 verification failed | 2 usage or wrong location
+set -Eeuo pipefail
+
+CMD="${1:-}"; PLAN="${2:-}"
+case "$CMD" in check|ship|cleanup) ;; *)
+  sed -n '/^# Usage:/,/^# Exit:/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac
+[ -n "$PLAN" ] || { echo "wdd-finish: PLAN_FILE required" >&2; exit 2; }
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(git rev-parse --show-toplevel)"
+SLUG="$(basename "$PLAN" .md)"
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+# ---------------------------------------------------------------------------
+# Location guard. The whole point: make "finish from the shared checkout"
+# unreachable rather than forbidden. A plan worktree has a git-dir under
+# .git/worktrees/<name>; the main checkout's equals its common dir.
+# ---------------------------------------------------------------------------
+GIT_DIR="$(git rev-parse --path-format=absolute --git-dir)"
+GIT_COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
+if [ "$GIT_DIR" = "$GIT_COMMON" ]; then
+  echo "wdd-finish: refusing to run in the main checkout ($ROOT)." >&2
+  echo "  It is shared by concurrent sessions; this would move HEAD under live work." >&2
+  echo "  Run from the plan worktree instead." >&2
+  exit 2
+fi
+
+# The default branch, READ FROM THE PROJECT CONFIG. Sets BASE, and refuses
+# rather than guessing.
+#
+# Not `origin/HEAD`. That is a clone-time cache, and it is wrong in both
+# directions: after a remote renames its default branch it still reports the
+# OLD name, `fetch --prune` included, and a clone built by `init` + `fetch`
+# -- what CI checkouts do -- never sets it at all.
+#
+# The stale case is the dangerous one, because `cleanup` gates branch DELETION
+# on `--is-ancestor HEAD origin/$BASE`. A stale name that is still a live
+# branch, and that happens to contain HEAD, deletes task branches whose work
+# never reached the real default -- and every task branch is the only copy of
+# its work. A name that merely does not exist fails loudly on the fetch; this
+# one does not fail at all.
+#
+# `default_branch` is in the config's REQUIRED_KEYS, so it is never absent, and
+# SKILL.md already tells the planner to take the base from it and "never a name
+# assumed here". This is the same answer from the same place.
+#
+# `check` never calls this: it compares local refs only, and has no business
+# failing because of a config key it does not use.
+require_base_branch() {
+  # `if !` suppresses `set -e` for the assignment, so the refusal below runs
+  # instead of the script dying silently. project-config writes its own
+  # diagnosis to stderr; this adds only what it cannot know -- why the caller
+  # will not proceed without an answer.
+  if ! BASE="$("$HERE/project-config" --scalar default_branch)"; then
+    echo "wdd-finish: cannot read default_branch from the project config." >&2
+    echo "  Refusing rather than guessing: the wrong base either fails on push," >&2
+    echo "  or names a real branch nobody meant and then gates the deletion of" >&2
+    echo "  task branches -- the only copy of their work -- on it." >&2
+    exit 1
+  fi
+}
+
+fail=0
+note() { printf '  %s\n' "$*"; }
+bad()  { printf '  FAIL: %s\n' "$*" >&2; fail=1; }
+
+# ---------------------------------------------------------------------------
+# Verification, shared by every subcommand. Reads the ledger, which is the only
+# durable record of what the run actually did.
+# ---------------------------------------------------------------------------
+WORKSPACE="$("$HERE/wdd-workspace" "$PLAN")"
+LEDGER="$WORKSPACE/progress.md"
+echo "wdd-finish $CMD: plan '$SLUG' on branch '$BRANCH'"
+
+if [ ! -f "$LEDGER" ]; then
+  bad "no ledger at $LEDGER — this run never dispatched a wave"
+else
+  head -1 "$LEDGER" | grep -qF "$PLAN" || bad "ledger's first line names a different plan — that is another run's, never yours to finish"
+
+  dispatched="$(grep -oE '^Wave ([0-9]+): dispatched' "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
+  integrated="$(grep -oE '^Wave ([0-9]+): integrated'  "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
+  [ -n "$dispatched" ] || bad "ledger records no dispatched wave"
+  for w in $dispatched; do
+    printf '%s\n' "$integrated" | grep -qx "$w" || bad "wave $w was dispatched but never integrated — finish the wave first"
+  done
+  grep -q 'BLOCKED' "$LEDGER" && bad "ledger contains a BLOCKED entry; resolve it before finishing"
+  note "waves: $(printf '%s' "$dispatched" | tr '\n' ' ')— all integrated"
+fi
+
+# Every task branch must already be an ancestor of the plan branch. A wave whose
+# integrator died after writing its ledger line leaves the line and not the
+# merge; nothing else in the workflow would notice.
+task_branches="$(git for-each-ref --format='%(refname:short)' "refs/heads/${SLUG}-t*" || true)"
+if [ -n "$task_branches" ]; then
+  for b in $task_branches; do
+    git merge-base --is-ancestor "$b" HEAD 2>/dev/null \
+      || bad "task branch $b is NOT merged into $BRANCH — the ledger claims otherwise"
+  done
+  # `grep -c .` counts non-empty LINES. `printf '%s' … | wc -l` counted NEWLINES,
+  # so an unterminated list reported n-1 — six branches as five. A verification
+  # tool that miscounts by one is a verification tool nobody trusts.
+  note "task branches: $(printf '%s\n' "$task_branches" | grep -c .) — all merged into $BRANCH"
+else
+  note "task branches: none found for slug '$SLUG'"
+fi
+
+[ "$fail" = 0 ] || { echo "wdd-finish: verification failed." >&2; exit 1; }
+note "verification OK"
+
+# ---------------------------------------------------------------------------
+case "$CMD" in
+
+check) exit 0 ;;
+
+ship)
+  require_base_branch
+  git push -u origin "$BRANCH"
+  if command -v gh >/dev/null 2>&1; then
+    gh pr create --base "$BASE" --head "$BRANCH" --fill || note "PR may already exist"
+    pr="$(gh pr view "$BRANCH" --json number -q .number 2>/dev/null || true)"
+  fi
+  echo ""
+  note "PUSHED (PR ${pr:-<PR>}, base $BASE). Before merging, re-check freshness:"
+  note "the required check proves the branch was clean against the base AS OF WHEN"
+  note "IT RAN, and two branches can each add a differently-named migration claiming"
+  note "the same number, which git merges cleanly and leaves broken. Require the"
+  note "check green on a branch that is UP TO DATE with the base, plus whatever"
+  note "pre-merge gate the project provides."
+  note "Then merge on GitHub. This script never merges for you."
+  ;;
+
+cleanup)
+  # Refuse until the work is actually on the remote default branch. Deleting a
+  # task branch whose work has not landed destroys the only copy.
+  require_base_branch
+  git fetch --no-tags --quiet origin "$BASE"
+  git merge-base --is-ancestor HEAD "origin/$BASE" 2>/dev/null || {
+    echo "wdd-finish: $BRANCH is not merged into origin/$BASE yet — nothing to clean up." >&2
+    exit 1; }
+
+  for b in $task_branches; do
+    # Same expression wave-worktree used to create it (`git rev-parse
+    # --show-toplevel` from the plan worktree), so the two cannot disagree.
+    d="$ROOT/.worktrees/$b"
+    [ -d "$d" ] && git worktree remove --force "$d" 2>/dev/null && note "worktree removed: $b"
+    git branch -d "$b" >/dev/null 2>&1 && note "branch deleted:   $b" \
+      || note "branch KEPT (not fully merged, -d refused): $b"
+  done
+
+  [ -d "$WORKSPACE" ] && rm -rf "$WORKSPACE" && note "workspace deleted: $WORKSPACE"
+
+  echo ""
+  note "Plan worktree not removed — you are standing in it. From anywhere else:"
+  note "    git worktree remove --force $ROOT && git branch -d $BRANCH"
+  ;;
+esac

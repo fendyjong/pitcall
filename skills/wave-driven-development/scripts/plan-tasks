@@ -1,0 +1,485 @@
+#!/usr/bin/env python3
+"""Summarise an implementation plan's task-graph inputs.
+
+Prints, per task, the file paths it declares and its Interfaces block verbatim,
+then every pairwise file-path overlap. The controller reads this instead of the
+plan file: edge inference needs only the Interfaces prose, and path overlap --
+which Interfaces cannot express -- is computed here rather than judged.
+
+Two tasks that share a declared path must not run in the same wave even when
+their Interfaces blocks are independent: they would collide textually at the
+wave merge, and no amount of careful reading of Interfaces would predict it.
+
+Usage: plan-tasks [--validate] PLAN_FILE
+Exit:  0 ok | 1 validation failed (--validate only) | 2 usage or unreadable plan | 3 no tasks found
+"""
+
+import re
+import sys
+from pathlib import Path
+
+TASK_RE = re.compile(r"^#{1,6}\s+Task\s+(\d+)\s*:?\s*(.*?)\s*$")
+BOLD_RE = re.compile(r"^\*\*(.+?):\*\*\s*$")
+STEP_RE = re.compile(r"^- \[[ xX]\]")
+FENCE_RE = re.compile(r"^\s*(`{3,})(.*)$")
+BACKTICKED_RE = re.compile(r"`([^`]+)`")
+LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
+EXTENSION_RE = re.compile(r"\.\w+$")
+WAVES_HEADING_RE = re.compile(r"^##\s+Waves\s*$")
+HEADING_RE = re.compile(r"^#{1,6}\s")
+WAVE_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|\s*([0-9,\s]*?)\s*\|")
+DEPENDS_RE = re.compile(r"^\s*-\s*Depends:\s*(.*?)\s*$", re.IGNORECASE)
+MODEL_RE = re.compile(r"^\s*-\s*Model:\s*(.*?)\s*$", re.IGNORECASE)
+# Tiers, not concrete model names: the vocabulary has to outlive whichever
+# models exist this month, and the skill is meant to be usable in repos whose
+# available models differ. SKILL.md's Model Selection maps tier -> model at
+# dispatch; this file only checks that a tier was chosen at all.
+MODEL_TIERS = ("cheapest", "standard", "most-capable")
+MIGRATION_RE = re.compile(r"^(?P<home>.*/migrations)/(?P<number>\d+)")
+FILES_BULLET_RE = re.compile(r"^-\s*(?:Create|Modify|Delete|Bump|Test):\s*(.*)$", re.IGNORECASE)
+BARE_WORD_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+SLASHED_TOKEN_RE = re.compile(r"[\w.-]+/[\w./-]+")
+
+
+def looks_like_path(token: str) -> bool:
+    """Decide whether a backticked token from a Files block names a file.
+
+    Files blocks also carry backticked prose -- `R100`, `main()`, `--check
+    artefacts` -- so require a directory separator or a dotted extension.
+    """
+    return "/" in token or bool(EXTENSION_RE.search(token))
+
+
+def normalize_path(token: str) -> str:
+    """Canonicalise a declared path so aliased spellings collide correctly.
+
+    `libs/shared` and `libs/shared/` name the same tree; `./x/y`
+    and `x/y` name the same file. Comparing raw strings lets both aliases
+    validate as disjoint under Rules 4/5 and then collide for real at the
+    wave merge -- exactly the failure the validator exists to prevent.
+    """
+    if token.startswith("./"):
+        token = token[2:]
+    return token.rstrip("/")
+
+
+def unchecked_path_warning(line: str, task_n: int) -> str | None:
+    """Flag Files-block content the backtick/extension heuristic cannot see.
+
+    Two gaps `looks_like_path` cannot close by itself: a declared path nobody
+    backticked (invisible to BACKTICKED_RE), and a backticked bare filename
+    like `Makefile` that has neither a `/` nor an extension for
+    `looks_like_path` to key on. Both are silently dropped from the task's
+    file list today, which lets a real shared path go unchecked while
+    `--validate` still prints "valid".
+
+    Restricted to the token immediately after the bullet's `Create:` /
+    `Modify:` / etc. label -- the position a real declared path occupies.
+    A symbol name quoted later in the same line (`` `publish_typing` ``,
+    `` `Document` ``) is not a declaration, and real plans quote plenty of
+    those; matching anywhere on the line turns every such mention into a false
+    warning.
+    """
+    bullet = FILES_BULLET_RE.match(line.strip())
+    if not bullet:
+        return None
+    rest = bullet.group(1)
+
+    first = BACKTICKED_RE.match(rest)
+    if first:
+        token = LINE_SUFFIX_RE.sub("", first.group(1).strip())
+        if token and not looks_like_path(token) and BARE_WORD_RE.match(token):
+            return (
+                f"Task {task_n}: `{token}` looks like a bare filename (no `/`, no "
+                f"extension), so looks_like_path() drops it -- backtick a real "
+                f"path deliberately, or ignore this warning: {line.strip()!r}"
+            )
+        return None
+
+    if SLASHED_TOKEN_RE.search(BACKTICKED_RE.sub("", rest)):
+        return (
+            f"Task {task_n}: this line looks like it names a path that is not "
+            f"backticked, so it is invisible to disjointness checking: "
+            f"{line.strip()!r}"
+        )
+    return None
+
+
+def parse(text: str) -> tuple[list[dict], list[str]]:
+    """Extract one record per task: number, title, declared paths, Interfaces lines.
+
+    Also returns warnings for Files-block content `unchecked_path_warning`
+    could not classify either way -- printed but never a validation failure,
+    since neither gap can be told apart from ordinary prose with certainty.
+    """
+    tasks: list[dict] = []
+    warnings: list[str] = []
+    current: dict | None = None
+    section: str | None = None
+
+    for line in unfenced_lines(text):
+        heading = TASK_RE.match(line)
+        if heading:
+            current = {
+                "n": int(heading.group(1)),
+                "title": heading.group(2),
+                "files": [],
+                "interfaces": [],
+            }
+            tasks.append(current)
+            section = None
+            continue
+
+        if current is None:
+            continue
+
+        # A checkbox step ends the metadata region; everything after it is
+        # implementation detail the controller must not read.
+        if STEP_RE.match(line):
+            section = None
+            continue
+
+        bold = BOLD_RE.match(line)
+        if bold:
+            name = bold.group(1).strip().lower()
+            section = name if name in ("files", "interfaces") else None
+            continue
+
+        if section == "files":
+            warning = unchecked_path_warning(line, current["n"])
+            if warning:
+                warnings.append(warning)
+            for token in BACKTICKED_RE.findall(line):
+                token = LINE_SUFFIX_RE.sub("", token.strip())
+                # Classify on the token as written, before normalising: a
+                # sole leading "./" is the only "/" a token like "./Makefile"
+                # has, so normalising first would strip the very signal
+                # looks_like_path needs and silently drop it.
+                if looks_like_path(token):
+                    current["files"].append(normalize_path(token))
+        elif section == "interfaces" and line.strip():
+            current["interfaces"].append(line.rstrip())
+
+    return tasks, warnings
+
+
+def render(plan: Path, tasks: list[dict]) -> str:
+    out: list[str] = [f"# Tasks in {plan}", ""]
+
+    for task in tasks:
+        title = task["title"].strip()
+        out.append(f"## Task {task['n']}: {title}" if title else f"## Task {task['n']}")
+        out.append("Files:")
+        # dict.fromkeys preserves declaration order while dropping repeats.
+        unique = list(dict.fromkeys(task["files"]))
+        if unique:
+            out.extend(f"  {path}" for path in unique)
+        else:
+            out.append("  (none declared)")
+        out.append("Interfaces:")
+        if task["interfaces"]:
+            out.extend(f"  {line}" for line in task["interfaces"])
+        else:
+            out.append("  (none declared)")
+        out.append("")
+
+    out.append("# File overlaps - these pairs MUST NOT share a wave")
+    overlaps = []
+    for i, left in enumerate(tasks):
+        for right in tasks[i + 1 :]:
+            shared = sorted(set(left["files"]) & set(right["files"]))
+            if shared:
+                overlaps.append(
+                    f"Task {left['n']} & Task {right['n']}: {', '.join(shared)}"
+                )
+    out.extend(overlaps or ["(none)"])
+
+    return "\n".join(out)
+
+
+def unfenced_lines(text: str):
+    """Yield every line that is not inside a fenced code block.
+
+    Fence runs are length-aware: a block opened with N backticks closes only on
+    a run of at least N with nothing after it. Both parsers in this file need
+    that, and a second, naive implementation of it is exactly how phantom
+    entries get into the wave graph — so there is one implementation and both
+    callers use it.
+    """
+    fence: int | None = None
+    for line in text.splitlines():
+        opener = FENCE_RE.match(line)
+        if opener:
+            ticks = len(opener.group(1))
+            trailing = opener.group(2).strip()
+            if fence is None:
+                fence = ticks
+            elif ticks >= fence and not trailing:
+                fence = None
+            continue
+        if fence is None:
+            yield line
+
+
+def parse_waves(text: str) -> list[tuple[int, list[int]]] | None:
+    """Read the `## Waves` table as ordered rows. None when there is no table.
+
+    Rows rather than a dict: two rows labelled with the same wave number is
+    author error worth reporting, and a dict would silently merge them.
+
+    Only rows inside that section count. A table elsewhere in the plan is
+    ordinary content, and a validator that scooped up every numeric table row
+    would fail on documents that merely contain tables.
+    """
+    rows: list[tuple[int, list[int]]] = []
+    in_section = False
+    found = False
+
+    for line in unfenced_lines(text):
+        if WAVES_HEADING_RE.match(line):
+            in_section, found = True, True
+            continue
+        if in_section and HEADING_RE.match(line):
+            break
+        if not in_section:
+            continue
+        row = WAVE_ROW_RE.match(line)
+        if row:
+            rows.append((int(row.group(1)), [int(n) for n in re.findall(r"\d+", row.group(2))]))
+
+    return rows if found else None
+
+
+def declared_depends(task: dict) -> set[int] | None:
+    """Task numbers this task declares. None means the line is missing entirely."""
+    for line in task["interfaces"]:
+        match = DEPENDS_RE.match(line)
+        if not match:
+            continue
+        body = match.group(1).strip().rstrip(".")
+        if body.lower() in ("none", "nothing", ""):
+            return set()
+        return {int(n) for n in re.findall(r"\d+", body)}
+    return None
+
+
+def declared_model(task: dict) -> str | None:
+    """The tier this task declares, lowercased. None means the line is missing."""
+    for line in task["interfaces"]:
+        match = MODEL_RE.match(line)
+        if match:
+            return match.group(1).strip().rstrip(".").lower()
+    return None
+
+
+def find_cycle(edges: dict[int, set[int]]) -> list[int] | None:
+    """Return one cycle as a list of task numbers, or None. Iterative DFS."""
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour = {n: WHITE for n in edges}
+
+    for start in sorted(edges):
+        if colour[start] != WHITE:
+            continue
+        stack = [(start, iter(sorted(edges[start])))]
+        path = [start]
+        colour[start] = GREY
+        while stack:
+            node, children = stack[-1]
+            advanced = False
+            for child in children:
+                if child not in colour:
+                    continue
+                if colour[child] == GREY:
+                    return path[path.index(child):] + [child]
+                if colour[child] == WHITE:
+                    colour[child] = GREY
+                    path.append(child)
+                    stack.append((child, iter(sorted(edges[child]))))
+                    advanced = True
+                    break
+            if not advanced:
+                colour[node] = BLACK
+                path.pop()
+                stack.pop()
+    return None
+
+
+def validate(tasks: list[dict], rows: list[tuple[int, list[int]]] | None) -> list[str]:
+    """Every rule reads a declared field. None interprets prose."""
+    problems: list[str] = []
+
+    if rows is None:
+        return ["no ## Waves table — a wave plan must declare its waves"]
+
+    numbers = {task["n"] for task in tasks}
+    by_number = {task["n"]: task for task in tasks}
+
+    # Rule 0 — the wave table itself is well formed. A duplicate row label
+    # silently merges two waves, and an empty row silently inflates the wave
+    # count; both are author error, and both look like success without this.
+    waves: dict[int, list[int]] = {}
+    for wave, task_ns in rows:
+        if wave in waves:
+            problems.append(f"wave {wave} is declared by more than one row in the wave table")
+        if not task_ns:
+            problems.append(f"wave {wave} declares no tasks")
+        waves.setdefault(wave, []).extend(task_ns)
+
+    # Rule 1 — every task in exactly one wave, every wave entry a real task.
+    placed: dict[int, int] = {}
+    for wave in sorted(waves):
+        for n in waves[wave]:
+            if n not in numbers:
+                problems.append(f"wave {wave} names Task {n}, which does not exist")
+            elif n in placed:
+                problems.append(f"Task {n} appears in wave {placed[n]} and wave {wave}")
+            else:
+                placed[n] = wave
+    for n in sorted(numbers - set(placed)):
+        problems.append(f"Task {n} is in no wave")
+
+    # Rule 2 — Depends is declared, its targets exist, and the graph is acyclic.
+    edges: dict[int, set[int]] = {}
+    for n in sorted(numbers):
+        declared = declared_depends(by_number[n])
+        if declared is None:
+            problems.append(f"Task {n} has no 'Depends:' line in its Interfaces block")
+            edges[n] = set()
+            continue
+        for target in sorted(declared):
+            if target not in numbers:
+                problems.append(f"Task {n} depends on Task {target}, which does not exist")
+            elif target == n:
+                problems.append(f"Task {n} depends on itself")
+        edges[n] = {t for t in declared if t in numbers and t != n}
+
+    cycle = find_cycle(edges)
+    if cycle:
+        problems.append("dependency cycle: " + " -> ".join(f"Task {n}" for n in cycle))
+
+    # Rule 3 — every dependency sits in a strictly earlier wave.
+    if not cycle:
+        for n in sorted(edges):
+            if n not in placed:
+                continue
+            for target in sorted(edges[n]):
+                if target not in placed:
+                    continue
+                if placed[target] == placed[n]:
+                    problems.append(
+                        f"Task {n} depends on Task {target} in the same wave "
+                        f"({placed[n]}) — a dependency must be in an earlier wave"
+                    )
+                elif placed[target] > placed[n]:
+                    problems.append(
+                        f"Task {n} (wave {placed[n]}) depends on Task {target} "
+                        f"(wave {placed[target]}) — a dependency must be in an earlier wave"
+                    )
+
+    # Rule 4 — declared paths are pairwise disjoint within a wave.
+    for wave in sorted(waves):
+        members = [n for n in waves[wave] if n in by_number]
+        for i, left in enumerate(members):
+            for right in members[i + 1 :]:
+                shared = sorted(set(by_number[left]["files"]) & set(by_number[right]["files"]))
+                if shared:
+                    problems.append(
+                        f"wave {wave}: Task {left} and Task {right} both declare "
+                        + ", ".join(shared)
+                    )
+
+    # Rule 5 — migration numbers unique per migration home, across the whole plan.
+    seen_migrations: dict[tuple[str, str], int] = {}
+    for n in sorted(numbers):
+        for path in by_number[n]["files"]:
+            match = MIGRATION_RE.match(path)
+            if not match:
+                continue
+            key = (match.group("home"), match.group("number"))
+            if key in seen_migrations and seen_migrations[key] != n:
+                problems.append(
+                    f"migration number {key[1]} is claimed twice in {key[0]} "
+                    f"— Task {seen_migrations[key]} and Task {n}"
+                )
+            else:
+                seen_migrations.setdefault(key, n)
+
+    # Rule 6 — a task with no declared files cannot be checked for disjointness.
+    for n in sorted(numbers):
+        if not by_number[n]["files"]:
+            problems.append(f"Task {n} declares no files — nothing to check for disjointness")
+
+    # Rule 7 — every task declares a model tier.
+    #
+    # This is a planning-time assignment for the same reason migration numbers
+    # are (Rule 5): a decision deferred to dispatch is a decision skipped. WDD
+    # dispatches a whole wave in ONE message, so the controller would be judging
+    # N tasks' complexity simultaneously while composing N calls — and `model`
+    # is an OPTIONAL parameter that silently inherits the session's own, usually
+    # most expensive, tier when omitted. Nothing downstream records which model
+    # ran, so the omission leaves no trace in the ledger or anywhere else.
+    #
+    # Only presence and vocabulary are checked. Whether `cheapest` is the RIGHT
+    # tier for a given task is not mechanically decidable — a one-file change
+    # can still be architecturally hard — and guessing from file count would
+    # break this validator's one promise: every rule reads a declared field,
+    # none interprets prose.
+    for n in sorted(numbers):
+        tier = declared_model(by_number[n])
+        if tier is None:
+            problems.append(f"Task {n} has no 'Model:' line in its Interfaces block")
+        elif tier not in MODEL_TIERS:
+            problems.append(
+                f"Task {n} declares Model: {tier!r} — must be one of {', '.join(MODEL_TIERS)}"
+            )
+
+    return problems
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    validating = False
+    if args and args[0] == "--validate":
+        validating = True
+        args = args[1:]
+
+    if len(args) != 1:
+        print("usage: plan-tasks [--validate] PLAN_FILE", file=sys.stderr)
+        return 2
+
+    plan = Path(args[0])
+    try:
+        text = plan.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"cannot read plan file: {exc}", file=sys.stderr)
+        return 2
+
+    tasks, warnings = parse(text)
+    if not tasks:
+        print(
+            f"no tasks found in {plan} (no heading matching '# Task <N>')",
+            file=sys.stderr,
+        )
+        return 3
+
+    for warning in warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+
+    if not validating:
+        print(render(plan, tasks))
+        return 0
+
+    rows = parse_waves(text)
+    problems = validate(tasks, rows)
+    if problems:
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        return 1
+
+    wave_count = len({wave for wave, _ in rows}) if rows else 0
+    print(f"{plan}: {len(tasks)} tasks in {wave_count} waves — valid")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
