@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Resolve and ensure the working-tree directory WDD uses for one plan's
+# short-lived artifacts: task briefs, implementer reports, review packages, and
+# the progress ledger. Prints the plan directory's absolute path.
+#
+# Forked from pitcall:subagent-driven-development's `sdd-workspace`. The
+# fork exists because superpowers lives in a version-pinned plugin cache whose
+# paths break on upgrade. Two deliberate differences from the original:
+#   - the namespace is .superpowers/wdd/, so a plan executed under both skills
+#     never has two controllers writing one ledger;
+#   - it refuses to run inside a task worktree.
+#
+# That refusal matters only under WDD. The directory is derived from
+# `git rev-parse --show-toplevel`, which inside a task worktree resolves to the
+# task worktree -- so every implementer would silently get its own orphan
+# workspace the controller cannot read. Only the controller resolves the
+# workspace; subagents receive absolute paths.
+#
+# The workspace lives in the working tree (not under .git/) because Claude Code
+# treats .git/ as a protected path and denies agent writes there, which would
+# block an implementer from writing its report file. A self-ignoring .gitignore
+# at .superpowers/wdd/ keeps every plan's workspace out of `git status`.
+#
+# Usage: wdd-workspace PLAN_FILE
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+  echo "usage: wdd-workspace PLAN_FILE" >&2
+  exit 2
+fi
+
+plan=$1
+[ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
+
+slug=$(basename "$plan" .md)
+if [ -z "$slug" ] || [ "$slug" = "." ] || [ "$slug" = ".." ]; then
+  echo "cannot derive a workspace name from: $plan" >&2
+  exit 2
+fi
+
+root=$(git rev-parse --show-toplevel)
+
+# Task worktrees for THIS plan are named <plan-slug>-t<N> by `wave-worktree`.
+#
+# Key the guard on this plan's own slug, not on any directory ending in -t<N>.
+# A bare `*-t[0-9]` suffix match locks out an ordinary checkout that merely
+# happens to be named `something-t1`, which is a worse failure than the one the
+# guard prevents. The trailing `[0-9]*` keeps the task number unbounded: a
+# fixed one-or-two-digit pattern silently stops matching at t100, and silently
+# not guarding is the exact failure mode this exists to close.
+case "$(basename "$root")" in
+  "${slug}-t"[0-9]*)
+    cat >&2 <<EOF
+refusing: $root looks like a task worktree.
+Only the controller resolves the workspace, and only from the plan worktree;
+subagents receive absolute paths. Running here would create an orphan workspace
+the controller cannot read.
+EOF
+    exit 2
+    ;;
+esac
+
+base="$root/.superpowers/wdd"
+dir="$base/$slug"
+mkdir -p "$dir"
+printf '*\n' > "$base/.gitignore"
+cd "$dir" && pwd

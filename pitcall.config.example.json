@@ -1,0 +1,9 @@
+{
+  "bringup": "make up",
+  "validate": "make test",
+  "default_branch": "main",
+  "required_check": "ci",
+  "regenerated_paths": [],
+  "migration_homes": [],
+  "outbound_allowlist": []
+}

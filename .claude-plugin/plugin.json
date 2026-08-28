@@ -1,0 +1,18 @@
+{
+  "name": "pitcall",
+  "description": "A development workflow for Claude Code: spec, plan, parallel execution in isolated worktrees, review, and ship — with a machine-wide validation lane",
+  "version": "0.1.0",
+  "author": {
+    "name": "Fendy Jong"
+  },
+  "homepage": "https://github.com/fendyjong/pitcall",
+  "repository": "https://github.com/fendyjong/pitcall",
+  "license": "MIT",
+  "keywords": [
+    "workflow",
+    "automation",
+    "skills",
+    "collaboration",
+    "development"
+  ]
+}
