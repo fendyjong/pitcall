@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pytest
+
+      # No path argument: `testpaths` in pytest.ini is the single source of
+      # truth for which suites exist, so CI and a bare local `pytest` cannot
+      # disagree about what got run.
+      - name: Run tests
+        run: python -m pytest -q

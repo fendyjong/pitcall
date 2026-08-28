@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Extract one task's full text from an implementation plan into a file the
+# implementer reads in one call, so the task text never has to be pasted
+# through the controller's context.
+#
+# Forked from pitcall:subagent-driven-development's `task-brief`, with two
+# changes: the workspace resolver it calls, and run-length-aware fence tracking.
+#
+# The original toggles `infence` on every ```-prefixed line. That desynchronises
+# on a plan containing a fenced example that itself contains a fence -- the
+# parser then believes a heading inside that example is a real task heading and
+# truncates the brief there, handing an implementer half its requirements.
+#
+# Usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]
+# Default OUTFILE: <repo-root>/.superpowers/wdd/<plan-basename>/task-<N>-brief.md
+set -euo pipefail
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]" >&2
+  exit 2
+fi
+
+plan=$1
+n=$2
+[ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
+
+if [ $# -eq 3 ]; then
+  out=$3
+else
+  dir=$("$(cd "$(dirname "$0")" && pwd)/wdd-workspace" "$plan")
+  out="$dir/task-${n}-brief.md"
+fi
+
+awk -v want="$n" '
+  {
+    if ($0 ~ /^[ \t]*```/) {
+      # A fence closes only on a run at least as long as the one that opened
+      # it, with nothing after it (CommonMark). Counting the run is what makes
+      # a ```-inside-```` example safe to walk past.
+      s = $0
+      sub(/^[ \t]*/, "", s)
+      ticks = 0
+      while (substr(s, ticks + 1, 1) == "`") ticks++
+      rest = substr(s, ticks + 1)
+      gsub(/[ \t\r]/, "", rest)
+      if (fence == 0) fence = ticks
+      else if (ticks >= fence && rest == "") fence = 0
+    } else if (fence == 0 && $0 ~ /^#+[ \t]+Task[ \t]+[0-9]+/) {
+      intask = ($0 ~ ("^#+[ \t]+Task[ \t]+" want "([^0-9]|$)"))
+    }
+    # Fence lines themselves belong to the task body and are printed.
+    if (intask) print
+  }
+' "$plan" > "$out"
+
+if [ ! -s "$out" ]; then
+  echo "task ${n} not found in ${plan} (no heading matching 'Task ${n}')" >&2
+  exit 3
+fi
+
+echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"

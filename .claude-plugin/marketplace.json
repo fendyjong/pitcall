@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "pitcall",
+  "description": "A development workflow for Claude Code: spec, plan, parallel execution in isolated worktrees, review, and ship — with a machine-wide validation lane",
+  "owner": {
+    "name": "Fendy Jong"
+  },
+  "plugins": [
+    {
+      "name": "pitcall",
+      "description": "A development workflow for Claude Code: spec, plan, parallel execution in isolated worktrees, review, and ship — with a machine-wide validation lane",
+      "author": {
+        "name": "Fendy Jong"
+      },
+      "source": "./",
+      "homepage": "https://github.com/fendyjong/pitcall"
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Create or remove one task worktree for a wave.
+#
+# `git worktree add` does not initialise submodules, so every submodule lands
+# empty and any tooling that reads one fails. The failure is worse than it
+# sounds: a package manager pointed at an empty submodule reports the PROJECT
+# as missing rather than the submodule, which sends the reader looking in the
+# wrong place. That is why the controller creates worktrees through this script
+# rather than through the harness's isolation option, which performs a bare add
+# with no project setup.
+#
+# Branch names are flat -- <slug>-t<N>, never <plan-branch>/t<N>. Git stores
+# refs as files: if refs/heads/foo exists, creating refs/heads/foo/t1 fails
+# with "cannot lock ref", which a nested scheme hits the moment someone names
+# the plan branch as the parent segment.
+#
+# Usage:
+#   wave-worktree create SLUG N BASE_REF   -> prints the worktree's absolute path
+#   wave-worktree remove SLUG N
+# Exit: 0 ok | 2 usage or no such worktree | 3 branch or path exists | 4 refused
+set -euo pipefail
+
+cmd=${1:-}
+slug=${2:-}
+n=${3:-}
+
+if [ -z "$cmd" ] || [ -z "$slug" ] || [ -z "$n" ]; then
+  echo "usage: wave-worktree create SLUG N BASE_REF | wave-worktree remove SLUG N" >&2
+  exit 2
+fi
+
+root=$(git rev-parse --show-toplevel)
+branch="${slug}-t${n}"
+dir="$root/.worktrees/${branch}"
+
+case "$cmd" in
+  create)
+    base=${4:-}
+    if [ -z "$base" ]; then
+      echo "usage: wave-worktree create SLUG N BASE_REF" >&2
+      exit 2
+    fi
+
+    # .worktrees is ignored here through .git/info/exclude, which is
+    # per-clone and never committed. A fresh clone has no such rule, and a
+    # worktree created there would be committed wholesale.
+    #
+    # Test the CHILD path, never the directory itself: a trailing-slash pattern
+    # (`.worktrees/`) only matches something git can see is a directory,
+    # so `check-ignore .worktrees` returns "not ignored" whenever the
+    # directory does not exist yet -- which is exactly the first-run case this
+    # guard has to get right.
+    if ! git -C "$root" check-ignore -q ".worktrees/$branch"; then
+      echo "refusing: .worktrees is not git-ignored in this clone." >&2
+      echo "Add it to .gitignore or .git/info/exclude before creating worktrees." >&2
+      exit 4
+    fi
+
+    if git -C "$root" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+      echo "branch $branch already exists -- a prior run left it behind." >&2
+      echo "Inspect it, then delete it with: git branch -D $branch" >&2
+      exit 3
+    fi
+
+    if [ -e "$dir" ]; then
+      echo "path already exists: $dir" >&2
+      exit 3
+    fi
+
+    git -C "$root" worktree add "$dir" -b "$branch" "$base" >&2
+
+    if [ -f "$root/.gitmodules" ]; then
+      git -C "$dir" submodule update --init --recursive >&2
+    fi
+
+    echo "$dir"
+    ;;
+
+  remove)
+    if [ ! -d "$dir" ]; then
+      echo "no such worktree: $dir" >&2
+      exit 2
+    fi
+
+    # --ignore-submodules=none is load-bearing, not redundant. A committed
+    # `submodule.<name>.ignore = all` in .gitmodules -- or a user's global
+    # diff.ignoreSubmodules -- makes a plain `status --porcelain` report a
+    # dirty submodule as clean. Because the removal below is forced, a blinded
+    # check here silently destroys an implementer's work. This flag pins the
+    # answer regardless of ambient config.
+    if [ -n "$(git -C "$dir" status --porcelain --ignore-submodules=none)" ]; then
+      echo "refusing: $dir has uncommitted changes." >&2
+      echo "Commit them or remove the worktree by hand -- silently discarding an" >&2
+      echo "implementer's work is never this script's call." >&2
+      exit 4
+    fi
+
+    # --force is safe HERE AND ONLY HERE: the porcelain check immediately above
+    # has already refused any uncommitted work. Git blocks a plain
+    # `worktree remove` on ANY worktree containing a submodule, clean or not --
+    # and `create` populates submodules by design, so without --force this
+    # command can never succeed in a repo that has any. It also makes a worktree
+    # orphaned by a failed submodule init recoverable, which is otherwise a
+    # dead end: the branch-exists guard blocks a retry, and `git branch -D`
+    # fails while a worktree still holds the branch.
+    git -C "$root" worktree remove --force "$dir" >&2
+    echo "removed $dir (branch $branch kept)"
+    ;;
+
+  *)
+    echo "unknown command: $cmd (expected create or remove)" >&2
+    exit 2
+    ;;
+esac
