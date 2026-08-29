@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 SKILL = Path(__file__).parent.parent
-WDD_FINISH = SKILL / "scripts" / "wdd-finish"
+WDD = SKILL / "scripts" / "wdd"
 SLUG = "2026-01-01-demo"
 PLAN = f"docs/superpowers/plans/{SLUG}.md"
 
@@ -57,7 +57,7 @@ def commit_path(cwd, rel, msg):
 def finish(cwd, *args, env=None):
     """Run the real script from its real place in the plugin.
 
-    Not a copy into the fixture repo: `wdd-finish` resolves its siblings
+    Not a copy into the fixture repo: `wdd` resolves its siblings
     through `$HERE`, and `project-config` resolves the config loader four
     levels up from itself. A copy flattens that layout, so the copy would pass
     while the shipped arrangement failed — the one difference a test of a
@@ -67,7 +67,7 @@ def finish(cwd, *args, env=None):
     inherits this process's environment, which is what every other test wants.
     """
     return subprocess.run(
-        ["bash", str(WDD_FINISH), *args],
+        ["bash", str(WDD), *args],
         cwd=cwd, capture_output=True, text=True, env=env,
     )
 
@@ -976,3 +976,38 @@ def test_a_pr_retargeted_to_another_base_is_refused(run, gh):
     assert r.returncode == 1, r.stdout + r.stderr
     assert "release-2" in r.stderr and "master" in r.stderr
     assert merges(gh) == []
+
+
+def test_every_script_named_in_the_skill_exists():
+    """A `scripts/<name>` in the prose must resolve to a file that ships.
+
+    Nothing else checks this. `tests/test_plugin_closure.py` catches a dangling
+    `pitcall:<skill>` and a dangling `../` path, and a script reference is
+    neither — so renaming a script and missing one mention in SKILL.md leaves a
+    controller running a command that does not exist, with every gate green.
+    That is not hypothetical: this script was named `wdd-finish` and its name is
+    spelled seven times across the skill's markdown.
+    """
+    import re
+
+    referenced = set()
+    for doc in sorted(SKILL.glob("*.md")):
+        for name in re.findall(r"scripts/([a-z0-9][a-z0-9-]*)", doc.read_text()):
+            referenced.add((doc.name, name))
+
+    assert referenced, "no script references found - the scan did not run"
+    missing = sorted(
+        (doc, name) for doc, name in referenced
+        if not (SKILL / "scripts" / name).is_file()
+    )
+    assert not missing, f"named in the skill's prose but not shipped: {missing}"
+
+
+def test_the_retired_script_name_is_gone():
+    """`wdd-finish` was renamed to `wdd`; the old path must not come back.
+
+    A stray copy left behind would be found first by anyone following an older
+    document, and would keep working — which is exactly why nothing would
+    report the duplication.
+    """
+    assert not (SKILL / "scripts" / "wdd-finish").exists()
