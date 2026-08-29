@@ -73,6 +73,35 @@ So the sha is captured BEFORE `bringup` and re-read after `validate`, and a run
 whose HEAD moved writes NO receipt: `validate` observed a state that is neither
 commit, so neither is an honest answer, and there is nothing to fall back to.
 
+## A commit is a state, not a name
+
+**The tree has to match HEAD, or the sha is a label on the wrong thing.** Edit a
+tracked file without committing and HEAD never moves at all, so every check above
+passes while `validate` runs against a state no commit contains — and the receipt
+then certifies a commit that `validate` was never given. Same dishonesty as the
+moving head, reached without anything moving. So the capture reads the worktree's
+DIRT as well as its sha, and a run that began with tracked modifications writes no
+receipt either.
+
+## What none of that catches
+
+Written down because silence here would read as coverage, and because each of
+these is cheap to mistake for a bug later:
+
+- **A tracked file changed BY the run.** The tree is only inspected at capture,
+  so a `bringup` or `validate` that rewrites a tracked file (a regenerated
+  lockfile, a snapshot) still gets a receipt. Deliberate: that dirt is a
+  CONSEQUENCE of validating, not an input to it, and refusing on it would make
+  the lane unusable for any project whose test run touches tracked state.
+- **HEAD moving and moving back** to the same sha inside one run. The comparison
+  sees equality and writes. Catching it needs a reflog watcher, which is a great
+  deal of machinery for a case that requires someone to commit and then reset
+  mid-validate.
+- **A submodule passed as `--worktree`.** The receipt is keyed on the
+  submodule's sha and filed in the superproject's lane, where the superproject's
+  merge step will not find a sha it recognises. Fail-closed for the parent, so
+  it is noise rather than a hole.
+
 ## One project per run
 
 The lane is resolved from the caller's cwd and the checkout from `--worktree`,
@@ -103,6 +132,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 from lane_config import load_config, shared_root, worktree_root
 
@@ -405,6 +435,51 @@ def _worktree_branch(worktree: str) -> str | None:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
+def _worktree_dirt(worktree: str) -> str | None:
+    """Tracked changes absent from HEAD, or None when the tree matches it.
+
+    **`-uno`: untracked files are excluded deliberately, and this is the line to
+    read before widening it.** A scratch file, an editor backup, a build artifact
+    nobody tracks — none of them is part of any commit's state, so none of them
+    makes the receipt's claim false. Count them and the lane starts refusing on
+    noise, and a guard that fires on noise is a guard someone switches off.
+
+    Returns the porcelain text rather than a bool so the refusal can NAME what
+    was dirty; a session told only "the tree is dirty" has to go and look. A
+    checkout that is not a repository answers None here — clean — because the
+    sha probe already refuses that case, and duplicating the refusal would mean
+    two messages for one cause.
+    """
+    out = subprocess.run(["git", "-C", worktree, "status", "--porcelain", "-uno"],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+class _Checkout(NamedTuple):
+    """What the worktree was when the run began.
+
+    A triple rather than a bare sha because "which commit" is not the whole
+    question. The receipt claims `validate` ran against the STATE of a commit,
+    and both of the other fields are ways that claim goes false while the sha
+    stays put: `dirt` is the tree not matching HEAD, and `branch` is a label
+    recorded at validation time rather than at write time, because a run can
+    switch branches without moving.
+    """
+
+    sha: str | None
+    branch: str | None
+    dirt: str | None
+
+
+def _capture(worktree: str) -> _Checkout:
+    """Read the checkout's state. Called BEFORE the first step — see `_cmd_run`."""
+    return _Checkout(sha=_worktree_sha(worktree),
+                     branch=_worktree_branch(worktree),
+                     dirt=_worktree_dirt(worktree))
+
+
 def _project_of(worktree: str) -> Path | None:
     """The project a checkout belongs to, or None if it is in no repository.
 
@@ -417,33 +492,49 @@ def _project_of(worktree: str) -> Path | None:
     return shared_root(Path(worktree)) if probe.returncode == 0 else None
 
 
-def _record_receipt(session: str, worktree: str, sha_before: str | None,
+def _record_receipt(session: str, worktree: str, before: _Checkout,
                     command: str) -> None:
     """Record the commit a SUCCESSFUL, UNDISTURBED `validate` covered.
 
     One caller, `_cmd_run`, which calls this only after `validate` ran and
     exited 0 and while it still holds the lane. Those two preconditions are the
     caller's to enforce — this function cannot tell a skipped step from a
-    passing one and must never be given the chance to guess. The third, that
-    HEAD did not move under the run, is enforced here, because it is the only
-    one that needs a value read before the steps began.
+    passing one and must never be given the chance to guess. The rest are
+    enforced here, because each of them needs a value read before the steps
+    began: `before` is that reading.
     """
     sha_after = _worktree_sha(worktree)
-    if sha_before is None or sha_after is None:
+    if before.sha is None or sha_after is None:
         # Fail closed, and loudly. No receipt means the merge step refuses,
         # which is the safe direction; silence would leave the next session
         # hunting for a file that nothing ever wrote and no line ever mentioned.
         print(f"[lane] validate passed, but {worktree} has no resolvable HEAD — "
               "no receipt written")
         return
-    if sha_before != sha_after:
+    if before.dirt is not None:
+        # HEAD never moved, and the receipt would still be a lie: `validate` ran
+        # against tracked content that is in no commit, so certifying `before.sha`
+        # certifies a state `validate` was never given — and would have failed on,
+        # in the case that matters. The same argument as the moved head, reached
+        # without anything moving.
+        print(f"[lane] {worktree} had uncommitted changes to tracked files "
+              "when the run began:")
+        for line in before.dirt.splitlines():
+            print(f"[lane]   {line}")
+        print(f"[lane] validate ran against a tree that is not {before.sha} — "
+              "no receipt written. Commit or stash, then re-run.")
+        return
+    if before.sha != sha_after:
         # Neither sha is written, and that is deliberate. `validate` began at
         # one commit and ended at another, so it observed a state that is
         # neither: certifying the earlier one approves code that was replaced
         # mid-run, and certifying the later one approves code that was never
         # validated — the exact failure this file exists to prevent. There is no
         # honest fallback, so refuse and make the session re-run.
-        print(f"[lane] HEAD moved during the run: {sha_before} -> {sha_after}")
+        #
+        # Compared in FULL. Short prefixes collide, and two commits that differ
+        # only past the seventh character would compare equal.
+        print(f"[lane] HEAD moved during the run: {before.sha} -> {sha_after}")
         print("[lane] validate covered neither commit — no receipt written. "
               "Re-run the lane on a worktree nothing is committing to.")
         return
@@ -453,7 +544,10 @@ def _record_receipt(session: str, worktree: str, sha_before: str | None,
     # partial file left in the directory is noise nobody can account for later.
     _write_json(path, {
         "sha": sha_after,
-        "branch": _worktree_branch(worktree),
+        # The branch as it was at VALIDATION time, not at write time. A run can
+        # switch branches without moving the sha, and a field describing when
+        # validation happened must not be read after the fact.
+        "branch": before.branch,
         "session": session,
         "worktree": worktree,
         "validate_command": command,
@@ -514,11 +608,19 @@ def _cmd_run(session: str, worktree: str) -> int:
 
     rc = 0
     validated = False
-    # BEFORE the first step, not after the last one. `bringup` builds from the
-    # working tree too, so the whole run has to sit on one commit for the receipt
-    # to mean anything; capturing after `validate` would certify whatever HEAD
-    # happened to be by then.
-    sha_before = _worktree_sha(worktree)
+    # BEFORE the first step, not after the last one, and not between them.
+    # `bringup` builds from the working tree too, so the whole run has to sit on
+    # one commit for the receipt to mean anything; capturing after `validate`
+    # would certify whatever HEAD happened to be by then, and capturing between
+    # the two would miss a commit landing during the bring-up.
+    before = _capture(worktree)
+    if before.dirt is not None:
+        # Said now as well as at the end: the run is still worth doing — a
+        # session may well want to test a dirty tree — but it cannot produce
+        # evidence, and learning that after a ten-minute bring-up is learning it
+        # too late to act on.
+        print(f"[lane] WARNING: {worktree} has uncommitted changes to tracked "
+              "files; this run cannot produce a receipt")
     try:
         for label in ("bringup", "validate"):
             command = cfg.get(label)
@@ -539,7 +641,21 @@ def _cmd_run(session: str, worktree: str) -> int:
         if validated:
             # Inside the try, so it happens while the lane is still held: nothing
             # else can be mid-bringup against this checkout as the sha is read.
-            _record_receipt(session, worktree, sha_before, cfg["validate"])
+            try:
+                _record_receipt(session, worktree, before, cfg["validate"])
+            except Exception as exc:
+                # Deliberately broad, and deliberately not re-raised. `release()`
+                # in the `finally` below has ALREADY popped the next waiter off
+                # the queue by the time anything here could throw, so an escaping
+                # exception skips the hand-off print — and that print is the only
+                # thing that wakes that session. It would then wait forever, on a
+                # free lane, with nothing anywhere reporting the loss. **A lost
+                # receipt costs one re-run; a lost waiter costs a session.** The
+                # failure is loud and fail-closed either way: no receipt means the
+                # merge step refuses.
+                print(f"[lane] receipt could not be written: {exc!r}")
+                print("[lane] the run itself PASSED; re-run the lane to produce "
+                      "the receipt the merge step needs.")
     finally:
         nxt = held.release()
 

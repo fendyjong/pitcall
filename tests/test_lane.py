@@ -954,6 +954,160 @@ def test_a_checkout_in_another_project_is_refused_before_the_lane_is_taken(
     assert not (elsewhere / ".pitcall").exists()
 
 
+def test_an_uncommitted_change_to_a_tracked_file_leaves_no_receipt(
+        tmp_path, monkeypatch, capsys):
+    """A commit is a state, not a name.
+
+    Nothing moves here: HEAD is the same commit before and after, the lane is
+    held throughout, and every other guard passes. The tree simply is not what
+    the commit says it is — so `validate` runs against content no commit
+    contains, passes, and the receipt certifies a commit `validate` was never
+    given and would have FAILED on. The file is committed saying one thing and
+    edited to say another, which is the shape that makes the lie observable:
+    the run's verdict inverts depending on which state you believe it read.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true",
+                                validate='test "$(cat marker.txt)" = pass')
+    (project / "marker.txt").write_text("fail\n")
+    _git("add", "marker.txt", cwd=project)
+    _git("commit", "-q", "-m", "the committed state, which validate rejects", cwd=project)
+    # The uncommitted edit that makes validate pass.
+    (project / "marker.txt").write_text("pass\n")
+
+    monkeypatch.chdir(project)
+    sha = _git("rev-parse", "HEAD", cwd=project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0, \
+        "validate passed — on a state that is in no commit"
+    assert _git("rev-parse", "HEAD", cwd=project) == sha, \
+        "HEAD must NOT move — the other guards would mask what this one tests"
+
+    assert _receipts(project) == []
+    assert not (project / ".pitcall" / "receipts" / f"{sha}.json").exists()
+    out = capsys.readouterr().out
+    assert "uncommitted changes to tracked files" in out
+    assert "marker.txt" in out, "a session told only 'dirty' has to go and look"
+
+
+def test_an_untracked_file_does_not_block_a_receipt(tmp_path, monkeypatch):
+    """The other side of the same decision, pinned so it is not widened by
+    accident.
+
+    `-uno`. A scratch file, an editor backup, a build artifact nobody tracks —
+    none is part of any commit's state, so none makes the receipt's claim false.
+    A guard that fires on noise is a guard someone switches off, and the next
+    reader tempted to drop the flag should fail this test rather than discover
+    the consequence in a lane that refuses every run.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    (project / "scratch.log").write_text("noise nobody tracks\n")
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    assert _receipts(project) == [f"{sha}.json"]
+
+
+def test_a_commit_landing_during_bringup_leaves_no_receipt(tmp_path, monkeypatch):
+    """Which side of `bringup` the capture happens on.
+
+    `bringup` builds from the working tree too, so the whole run has to sit on
+    one commit. Capture between the steps instead of before them and this is
+    certified: the sha read would be the post-bringup one, matching itself
+    afterwards, with `validate` having tested a bring-up made from the earlier
+    commit. Nothing else in the suite distinguishes the two positions, which is
+    why the docstring's claim needs this test and not just the wording.
+    """
+    project = _repo_with_config(tmp_path / "project",
+                                bringup=_COMMIT_DURING_VALIDATE, validate="true")
+    monkeypatch.chdir(project)
+    before = _git("rev-parse", "HEAD", cwd=project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0
+    after = _git("rev-parse", "HEAD", cwd=project)
+    assert before != after, "bringup did not commit — this test proves nothing"
+
+    assert _receipts(project) == []
+
+
+def test_shas_are_compared_in_full_not_by_a_short_prefix(tmp_path, monkeypatch):
+    """Two commits sharing a seven-character prefix are not constructible in a
+    test — a collision needs commits by the ten thousand — so the comparison is
+    exercised directly with the pair a real repository cannot cheaply provide.
+
+    Mocked at the git boundary and nowhere deeper: `_worktree_sha` is the client
+    call, and what is under test is the comparison, not git's answer.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    monkeypatch.chdir(project)
+
+    before = "abc1234" + "a" * 33
+    after = "abc1234" + "b" * 33
+    assert before[:7] == after[:7] and before != after and len(before) == len(after) == 40
+
+    monkeypatch.setattr(lane, "_worktree_sha", lambda worktree: after)
+    lane._record_receipt("sess-a", str(project),
+                         lane._Checkout(sha=before, branch="main", dirt=None), "true")
+
+    assert _receipts(project) == [], "compared by prefix, these two look like one commit"
+
+
+def test_the_branch_recorded_is_the_one_validation_ran_on(tmp_path, monkeypatch):
+    """`branch` is documented as the branch at VALIDATION time.
+
+    A run can switch branches without moving the sha, so a branch read when the
+    receipt is written describes the checkout afterwards rather than the one
+    that was validated. Nothing keys on the field, which is exactly why it would
+    have gone on being wrong unnoticed.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true",
+                                validate="git checkout -q other")
+    _git("branch", "other", cwd=project)     # same commit, different name
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0
+    assert _git("symbolic-ref", "--short", "HEAD", cwd=project) == "other", \
+        "the run did not switch branches — this test proves nothing"
+
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
+    assert body["branch"] == "main"
+
+
+def test_a_receipt_that_cannot_be_written_still_hands_the_lane_off(
+        tmp_path, monkeypatch, capsys):
+    """A lost receipt costs one re-run; a lost waiter costs a session.
+
+    `release()` pops the next waiter off the queue in the `finally`, and the
+    print naming it is the only thing that wakes that session. An exception
+    escaping the receipt write skips that print, so the waiter is gone from the
+    queue AND never told — waiting forever on a lane that is free, with nothing
+    anywhere reporting the loss. The receipt write is new code on that path,
+    which is what makes this reachable.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("running as root: file permissions do not deny the write")
+
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    monkeypatch.chdir(project)
+    receipts = lane.receipts_dir()
+    # A waiter that must be handed off to no matter what happens above it.
+    lane._write_json(lane.lane_dir() / lane.QUEUE,
+                     [{"session": "sess-waiter", "worktree": "/wt/w", "queued_at": 0.0}])
+
+    receipts.chmod(0o500)
+    try:
+        assert lane._cmd_run("sess-a", str(project)) == 0
+    finally:
+        receipts.chmod(0o700)   # or pytest cannot clean the directory up
+
+    out = capsys.readouterr().out
+    assert "receipt could not be written" in out
+    assert "HAND OFF TO: sess-waiter" in out, "the waiter was dropped in silence"
+    assert _receipts(project) == [], "fail closed: no receipt means the merge refuses"
+    assert lane.status()["holder"] is None, "the lane must still be released"
+
+
 # --- Real concurrency ----------------------------------------------------
 #
 # Everything above is single-process: monkeypatching lane_dir and calling
