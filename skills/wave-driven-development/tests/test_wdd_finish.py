@@ -7,6 +7,7 @@ failure mode nothing downstream would notice.
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -39,7 +40,21 @@ def commit(cwd, msg):
     git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", msg, cwd=cwd)
 
 
-def finish(cwd, *args):
+def commit_path(cwd, rel, msg):
+    """Commit ONE path. Not `add -A`, and the difference is not stylistic.
+
+    These fixtures nest a worktree inside a checkout, so `add -A` in the outer
+    one stages the inner worktree as a GITLINK — after which
+    `rev-parse --show-superproject-working-tree` answers from inside the
+    worktree, `worktree_root()` climbs out to the outer checkout, and the
+    config is read from a directory that has none. The test then fails on a
+    missing config while claiming to be about something else entirely.
+    """
+    git("add", "--", rel, cwd=cwd)
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", msg, cwd=cwd)
+
+
+def finish(cwd, *args, env=None):
     """Run the real script from its real place in the plugin.
 
     Not a copy into the fixture repo: `wdd-finish` resolves its siblings
@@ -47,10 +62,13 @@ def finish(cwd, *args):
     levels up from itself. A copy flattens that layout, so the copy would pass
     while the shipped arrangement failed — the one difference a test of a
     script's own path resolution must not introduce.
+
+    `env` is how the `merge` tests put a stubbed `gh` on PATH. Passing None
+    inherits this process's environment, which is what every other test wants.
     """
     return subprocess.run(
         ["bash", str(WDD_FINISH), *args],
-        cwd=cwd, capture_output=True, text=True,
+        cwd=cwd, capture_output=True, text=True, env=env,
     )
 
 
@@ -254,3 +272,315 @@ def test_check_counts_every_task_branch(run):
                  f"refs/heads/{SLUG}-t*", cwd=run["main"]).splitlines()
     assert len(listed) == 3
     assert "task branches: 3" in r.stdout, r.stdout
+
+
+# ---------------------------------------------------------------------------
+# `merge` — landing the PR on evidence rather than on attention.
+#
+# Every test below stubs `gh` on PATH and asserts on the STUB'S CALL LOG, not
+# on the exit status alone. "It refused" and "it refused for the right reason"
+# are different claims, and a test that cannot tell them apart passes when the
+# code refuses for a reason nobody wanted -- a missing binary, a typo in a
+# subcommand, an unrelated guard firing first.
+#
+# The negative cases here were written RED against a deliberately over-eager
+# implementation -- one that merged whenever the check was green and never
+# looked for a receipt -- because a plain RED run proves nothing about a test
+# asserting that something does NOT happen: it passes before the feature exists
+# and after, for the same reason.
+# ---------------------------------------------------------------------------
+
+GH_STUB = r"""#!/usr/bin/env bash
+# A stub `gh`: records every call, answers from canned files, never talks to
+# GitHub. `pr merge` really pushes the plan branch to the fixture's origin, so
+# the fast-forward that follows has something to do and can be asserted on
+# rather than assumed.
+printf '%s\n' "$*" >> "$GH_LOG"
+case "$*" in
+  "pr view "*"--json number"*)
+    cat "$GH_DIR/pr.json"
+    ;;
+  "pr view "*"--json statusCheckRollup"*)
+    # Per-call answers, so a test can make a check finish mid-wait: the Nth
+    # poll reads checks-N.json when it exists and the default otherwise.
+    n=$(cat "$GH_DIR/rollup_n" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    printf '%s' "$n" > "$GH_DIR/rollup_n"
+    if [ -f "$GH_DIR/checks-$n.json" ]; then
+      cat "$GH_DIR/checks-$n.json"
+    else
+      cat "$GH_DIR/checks.json"
+    fi
+    ;;
+  "pr merge"*)
+    if [ -f "$GH_DIR/merge_refuses" ]; then
+      echo "gh: pull request is not mergeable" >&2
+      exit 1
+    fi
+    git -C "$GH_PLAN_WT" push -q origin "planbranch:$GH_BASE"
+    ;;
+  *)
+    echo "gh stub: unexpected call: $*" >&2
+    exit 1
+    ;;
+esac
+"""
+
+
+def rollup(*checks):
+    """A `statusCheckRollup` payload in the shape `gh pr view --json` returns.
+
+    Each item is a (name, status, conclusion) triple. Real JSON rather than a
+    canned verdict word: the classification of QUEUED / COMPLETED+SUCCESS /
+    COMPLETED+FAILURE is our logic, so a test that fed it a pre-digested answer
+    would assert nothing about the part that can be wrong.
+    """
+    return json.dumps({
+        "statusCheckRollup": [
+            {"__typename": "CheckRun", "name": n, "status": s, "conclusion": c}
+            for n, s, c in checks
+        ]
+    })
+
+
+def receipt_body(sha, plan_wt):
+    return {
+        "sha": sha,
+        "branch": "planbranch",
+        "session": "session_01test",
+        "worktree": str(plan_wt),
+        "validate_command": "true",
+        "validated_at": 1756400000.0,
+    }
+
+
+def write_receipt(run, sha, raw=None):
+    """Put a lane receipt where `lane run` would have put it.
+
+    `shared_root()/.pitcall/receipts/<sha>.json` — the SHARED root, so every
+    worktree of the project reads one set. For this fixture that is the main
+    checkout, not the plan worktree the merge runs from, which is exactly the
+    arrangement that would silently pass if the merge step re-derived the path
+    from its own worktree instead.
+    """
+    d = run["main"] / ".pitcall" / "receipts"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{sha}.json"
+    p.write_text(raw if raw is not None
+                 else json.dumps(receipt_body(sha, run["plan_wt"])))
+    return p
+
+
+@pytest.fixture
+def gh(tmp_path, run):
+    """A stubbed `gh` on PATH plus the environment `merge` reads."""
+    d = tmp_path / "gh"
+    d.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "gh"
+    stub.write_text(GH_STUB)
+    stub.chmod(0o755)
+
+    head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
+    (d / "pr.json").write_text(
+        json.dumps({"number": 7, "state": "OPEN", "headRefOid": head}))
+    (d / "checks.json").write_text(rollup(("ci", "COMPLETED", "SUCCESS")))
+
+    return {
+        "dir": d,
+        "head": head,
+        "log": d / "calls.log",
+        "env": {
+            **os.environ,
+            "PATH": f"{bindir}:{os.environ['PATH']}",
+            "GH_DIR": str(d),
+            "GH_LOG": str(d / "calls.log"),
+            "GH_PLAN_WT": str(run["plan_wt"]),
+            "GH_BASE": "master",
+            # One poll, then the bound is spent. No test waits on wall time.
+            "WDD_CHECK_TIMEOUT": "0",
+            "WDD_CHECK_POLL": "0",
+        },
+    }
+
+
+def calls(gh, prefix=""):
+    log = Path(gh["log"])
+    lines = log.read_text().splitlines() if log.exists() else []
+    return [c for c in lines if c.startswith(prefix)]
+
+
+def test_merge_lands_the_pr_and_then_fast_forwards_the_main_checkout(run, gh):
+    write_receipt(run, gh["head"])
+    before = git("rev-parse", "HEAD", cwd=run["main"])
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    assert calls(gh, "pr merge"), "the PR was never merged"
+    # The merge is the first half; the checkout going level with it is the
+    # other, and it is read back rather than inferred from the absence of an
+    # error.
+    after = git("rev-parse", "HEAD", cwd=run["main"])
+    assert after != before
+    assert after == git("rev-parse", "origin/master", cwd=run["main"])
+    assert after == git("rev-parse", "planbranch", cwd=run["main"])
+
+
+def test_merge_refuses_without_a_receipt_and_never_calls_gh_pr_merge(run, gh):
+    """The gate, observed in the direction where it holds.
+
+    Checks are GREEN here, so nothing but the missing receipt can be doing the
+    refusing — and the check was never even polled, which is the ordering the
+    step promises: refusing early costs nothing, refusing after a ten-minute
+    wait means having waited for checks on a branch that could never merge.
+    """
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no lane receipt" in r.stderr
+    assert calls(gh, "pr merge") == []
+    assert calls(gh, "pr view") and not [
+        c for c in calls(gh) if "statusCheckRollup" in c
+    ], "the receipt must be checked BEFORE waiting on checks"
+
+
+def test_merge_refuses_a_receipt_that_names_a_different_commit(run, gh):
+    """The review-fix case: validation ran, and then another commit landed.
+
+    A branch-scoped receipt would permit exactly this, which is why the receipt
+    is filed under a sha. The earlier commit really was validated; the one the
+    PR would merge was not, and approval does not carry forward.
+    """
+    validated = git("rev-parse", "HEAD~1", cwd=run["plan_wt"])
+    assert validated != gh["head"]
+    write_receipt(run, validated)
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no lane receipt" in r.stderr
+    assert "other commit" in r.stderr, "say WHY there is a receipt directory but no match"
+    assert calls(gh, "pr merge") == []
+
+
+def test_a_corrupt_receipt_is_treated_as_absent(run, gh):
+    """Unreadable must never widen into permitted.
+
+    The file exists at the exact path, so a step that took existence alone as
+    the verdict without ever opening it would merge here. Parsing is for the
+    message; a body that will not parse is evidence of nothing.
+    """
+    write_receipt(run, gh["head"], raw="{this is not json")
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "will not parse" in r.stderr
+    assert calls(gh, "pr merge") == []
+
+
+def test_merge_reports_not_merged_when_the_check_is_still_running(run, gh):
+    write_receipt(run, gh["head"])
+    (gh["dir"] / "checks.json").write_text(rollup(("ci", "IN_PROGRESS", None)))
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "NOT MERGED" in r.stderr
+    assert "still running" in r.stderr
+    assert calls(gh, "pr merge") == []
+    assert git("rev-parse", "HEAD", cwd=run["main"]) == git(
+        "rev-parse", "master", cwd=run["main"])
+
+
+def test_merge_refuses_when_the_required_check_is_red(run, gh):
+    write_receipt(run, gh["head"])
+    (gh["dir"] / "checks.json").write_text(rollup(("ci", "COMPLETED", "FAILURE")))
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "not green" in r.stderr.lower()
+    assert calls(gh, "pr merge") == []
+
+
+def test_merge_waits_for_a_check_that_finishes_mid_wait(run, gh):
+    """The bound is a bound, not a single glance.
+
+    A step that polled once and gave up would exit 3 here, and a step that
+    never polled at all would merge on the first answer. Two pending answers
+    then a green one distinguishes both.
+    """
+    write_receipt(run, gh["head"])
+    pending = rollup(("ci", "QUEUED", None))
+    (gh["dir"] / "checks-1.json").write_text(pending)
+    (gh["dir"] / "checks-2.json").write_text(pending)
+    env = {**gh["env"], "WDD_CHECK_TIMEOUT": "30"}
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert len([c for c in calls(gh) if "statusCheckRollup" in c]) == 3
+    assert calls(gh, "pr merge")
+
+
+def test_merge_gates_on_the_check_named_by_the_config_not_a_hardcoded_one(run, gh):
+    """A hardcoded check name is a gate on someone else's project.
+
+    The rollup here is green on `ci` — the name a plugin would most plausibly
+    have baked in — and red on the one this project actually configured. A
+    merge is the wrong answer, and it is the answer a hardcoded name gives.
+    """
+    write_config(run["plan_wt"], required_check="gate-x")
+    commit_path(run["plan_wt"], "pitcall.config.json",
+                "this project's required check is gate-x")
+    head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
+    (gh["dir"] / "pr.json").write_text(
+        json.dumps({"number": 7, "state": "OPEN", "headRefOid": head}))
+    write_receipt(run, head)
+    (gh["dir"] / "checks.json").write_text(
+        rollup(("ci", "COMPLETED", "SUCCESS"), ("gate-x", "COMPLETED", "FAILURE")))
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "gate-x" in r.stderr
+    assert calls(gh, "pr merge") == []
+
+
+def test_a_diverged_main_checkout_is_reported_and_not_repaired(run, gh):
+    """The refusal is the interesting half of `--ff-only`.
+
+    A local commit in a checkout nobody authors in IS the bug, so repairing it
+    with a merge would mint one more commit and erase the evidence of the thing
+    that was supposed to be impossible. The PR merge itself is not in question
+    here — it was gated on a receipt and a green check and it stands; the sync
+    is the half that failed, and the exit code has to say which.
+    """
+    (run["main"] / "stray.txt").write_text("committed in the shared checkout\n")
+    commit_path(run["main"], "stray.txt", "a local commit nobody meant to make")
+    diverged = git("rev-parse", "HEAD", cwd=run["main"])
+    write_receipt(run, gh["head"])
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 4, r.stdout + r.stderr
+
+    out = r.stdout + r.stderr
+    assert "would NOT fast-forward" in out
+    assert "a local commit nobody meant to make" in out, "name what diverged"
+    # Merged, and then left alone: no repair, no second merge commit.
+    assert calls(gh, "pr merge")
+    assert git("rev-parse", "HEAD", cwd=run["main"]) == diverged
+
+
+def test_a_failing_refresh_does_not_unwind_the_merge(run, gh):
+    """Best-effort means the merge stands. It has already happened."""
+    write_config(run["plan_wt"], refresh_commands=["exit 3"])
+    commit_path(run["plan_wt"], "pitcall.config.json",
+                "this project regenerates something after a pull")
+    head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
+    (gh["dir"] / "pr.json").write_text(
+        json.dumps({"number": 7, "state": "OPEN", "headRefOid": head}))
+    write_receipt(run, head)
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "refresh FAILED" in r.stdout
+    assert git("rev-parse", "HEAD", cwd=run["main"]) == git(
+        "rev-parse", "origin/master", cwd=run["main"])
