@@ -1,11 +1,11 @@
 # Configuration reference — `pitcall.config.json`
 
 This is the one artifact that describes the plugin's configuration surface. It has
-two readers: a human deciding whether to adopt the tool, and `/pitcall:init`, which
-**executes this file** — it reads each key's entry below and proposes a value from
-it, rather than restating the meanings in its own prompt. There is no second copy;
-if this file and `init`'s behaviour ever disagree, this file is the one to trust and
-`init` is the one that is wrong.
+two readers: a human deciding whether to adopt the tool, and this plugin's `init`
+command, which **executes this file** — it reads each key's entry below and
+proposes a value from it, rather than restating the meanings in its own prompt.
+There is no second copy; if this file and `init`'s behaviour ever disagree, this
+file is the one to trust and `init` is the one that is wrong.
 
 **Where the config lives.** `.pitcall/config.json`, tracked. A legacy root-level
 `pitcall.config.json` still resolves, with a deprecation warning, for one release;
