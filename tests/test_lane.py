@@ -836,6 +836,124 @@ def test_two_runs_at_different_commits_leave_two_receipts(tmp_path, monkeypatch)
     assert json.loads((receipts / f"{after}.json").read_text())["sha"] == after
 
 
+# A commit made from inside the `validate` step itself. Identity is passed in
+# the environment and signing is disabled per-command, so this builds on a
+# machine with no global git config — the same reason `_GIT_ID` exists.
+_COMMIT_DURING_VALIDATE = (
+    "GIT_AUTHOR_NAME='lane tests' GIT_AUTHOR_EMAIL=lane@example.invalid "
+    "GIT_COMMITTER_NAME='lane tests' GIT_COMMITTER_EMAIL=lane@example.invalid "
+    "git -c commit.gpgsign=false commit -q --allow-empty "
+    "-m 'a fix landing while validate was still running'"
+)
+
+
+def test_a_commit_landing_during_the_run_leaves_no_receipt(
+        tmp_path, monkeypatch, capsys):
+    """The window the lock does not close.
+
+    The lane excludes other SESSIONS; it says nothing about the holder's own
+    worktree changing underneath it. Read the sha after `validate` returns and a
+    commit made while it ran is certified — approval inherited by a change
+    nothing checked, which is the one failure this receipt exists to prevent,
+    arriving by the back door.
+
+    Neither commit may be written. `validate` began at one and ended at another,
+    so it observed a state that is neither: the earlier sha approves code that
+    was replaced mid-run, and the later one approves code that was never
+    validated. There is no honest fallback, which is why the assertion below
+    names BOTH shas rather than settling for "some receipt is wrong".
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true",
+                                validate=_COMMIT_DURING_VALIDATE)
+    monkeypatch.chdir(project)
+    before = _git("rev-parse", "HEAD", cwd=project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0, \
+        "validate itself succeeded — the run is not a failure, it is unattestable"
+
+    after = _git("rev-parse", "HEAD", cwd=project)
+    assert before != after, \
+        "HEAD did not move during the run — this test proves nothing"
+
+    assert _receipts(project) == []
+    receipts = project / ".pitcall" / "receipts"
+    assert not (receipts / f"{before}.json").exists(), "certified the pre-run commit"
+    assert not (receipts / f"{after}.json").exists(), "certified a commit never validated"
+    assert "HEAD moved during the run" in capsys.readouterr().out, \
+        "refusing silently leaves a session hunting for a file nothing wrote"
+
+
+def test_the_receipt_body_is_the_shape_the_merge_step_reads(tmp_path, monkeypatch):
+    """The body is a contract shared with the step that reads it, so it is
+    pinned whole rather than field by field: a spelling that drifts before the
+    second consumer exists is a contract nobody will trust afterwards."""
+    project = _repo_with_config(tmp_path / "project",
+                                bringup="true", validate="true")
+    monkeypatch.chdir(project)
+    assert lane._cmd_run("sess-a", str(project)) == 0
+
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
+
+    assert set(body) == {"sha", "branch", "session", "worktree",
+                         "validate_command", "validated_at"}
+    assert body["sha"] == sha
+    assert body["branch"] == "main"
+    assert body["session"] == "sess-a"
+    assert body["worktree"] == str(project)
+    assert body["validate_command"] == "true"
+    assert isinstance(body["validated_at"], float)
+
+
+def test_a_detached_head_records_a_null_branch_rather_than_the_word_head(
+        tmp_path, monkeypatch):
+    """`rev-parse --abbrev-ref HEAD` answers the literal string "HEAD" when the
+    head is detached, and a receipt recording that as a branch name is a
+    plausible-looking lie. Detached is a real state for a checkout under
+    validation, so the honest answer is no branch at all."""
+    project = _repo_with_config(tmp_path / "project",
+                                bringup="true", validate="true")
+    _git("checkout", "-q", "--detach", cwd=project)
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
+    assert body["branch"] is None
+    assert body["sha"] == sha, "a detached head is still a perfectly good commit"
+
+
+def test_a_checkout_in_another_project_is_refused_before_the_lane_is_taken(
+        tmp_path, monkeypatch):
+    """The lane comes from the caller's cwd and the checkout from `--worktree`,
+    which is what lets a session in the main checkout validate a linked
+    worktree. Nothing stopped that pair naming two different PROJECTS: holding
+    one project's lane while validating another, and filing the receipt where
+    the second project's merge step will never look.
+
+    Refused before the lane is taken, not after — taking it and then refusing
+    would block every other session in the caller's project for as long as it
+    took to notice.
+    """
+    here = _repo_with_config(tmp_path / "here", bringup="true", validate="true")
+    elsewhere = _repo_with_config(tmp_path / "elsewhere", bringup="true", validate="true")
+    assert here != elsewhere, "the two projects must differ, or this proves nothing"
+
+    monkeypatch.chdir(here)
+    assert lane._cmd_run("sess-a", str(elsewhere)) == lane.EXIT_WRONG_PROJECT
+
+    # No receipt anywhere: not in the lane we hold, not in the project we would
+    # have validated.
+    assert _receipts(here) == []
+    assert _receipts(elsewhere) == []
+    # The lane was never taken, so nobody in `here` is blocked and no waiter was
+    # enqueued behind a run that never started.
+    assert lane.status()["holder"] is None
+    assert lane.status()["waiting"] == []
+    # And the other project was left entirely alone.
+    assert not (elsewhere / ".pitcall").exists()
+
+
 # --- Real concurrency ----------------------------------------------------
 #
 # Everything above is single-process: monkeypatching lane_dir and calling
