@@ -26,6 +26,15 @@ Subagent (general-purpose):
     Read both. The spec is the authority the plan argues from; where the two
     disagree, the spec wins and the plan is what needs fixing.
 
+    ## You Do Not Dispatch Subagents
+
+    Do all of this review yourself. Never spawn a subagent to review part
+    of the plan, and never spawn another reviewer for a second opinion.
+    This process already provides every review seat the work gets; a
+    reviewer you spawn duplicates one of them at full cost, and its
+    verdict counts for nothing. If the plan feels too large for one
+    pass, review it in passes yourself and say so in your report.
+
     ## What to Check
 
     | Category | What to Look For |

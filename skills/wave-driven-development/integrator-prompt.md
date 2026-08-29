@@ -20,6 +20,16 @@ Subagent (general-purpose):
     [PLAN_WORKTREE_PATH] — the plan worktree, on branch [PLAN_BRANCH].
     Do not enter or modify any task worktree.
 
+    ## You Do Not Dispatch Subagents
+
+    Do all of this integration yourself. Never spawn a subagent to merge a
+    branch, to run the verification, or to review the merged tree — and
+    above all never spawn one to resolve a conflict. Every branch you merge
+    was reviewed before it reached you, so a reviewer you spawn duplicates
+    that at full cost and its verdict counts for nothing. The escalations
+    below are the whole of your authority: when something surprises you,
+    report BLOCKED rather than delegating your way past it.
+
     ## What to merge
 
     [list: branch name, the task number it implements, and the brief path]

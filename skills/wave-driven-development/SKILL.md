@@ -204,7 +204,7 @@ failures** — never write them:
   code steps)
 - References to types, functions, or methods not defined in any task
 - A migration filename with an unassigned number (`00xx_add_positions.sql`) —
-  see step 4 below for why this one is invisible to the validator
+  see step 3 below for why this one is invisible to the validator
 
 ### Building the waves
 
@@ -1228,7 +1228,10 @@ which invalidates the receipt along with it.
 on `origin`; before that, deleting a task branch would destroy the only copy of
 its work. It removes the task branches, their worktrees, and this plan's
 workspace — sibling workspace directories belong to other plans and are left
-alone.
+alone. Its `git worktree remove --force` is safe for that same reason and only
+for that reason: past the ancestor gate every task branch's commits are already
+on `origin`, so the only thing `--force` can still discard is uncommitted
+scratch in a task worktree — work no review ever saw and no merge ever took.
 
 ### Why the ship step is a script, not a menu
 
