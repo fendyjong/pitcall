@@ -45,7 +45,7 @@ override it:
 - **Architectural** — new projects, new subsystems, changes that
   restructure how components fit together or alter interfaces others
   depend on. Follow the full process: questions, approaches, sectioned
-  design, written spec, then the writing-plans skill.
+  design, isolated workspace, written spec, then the writing-plans skill.
 
 When in doubt between two paths, take the heavier one. The ratchet is
 one-way: hidden complexity discovered mid-task upgrades the path —
@@ -97,10 +97,11 @@ your path and complete them in order.
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
 4. **Propose 2-3 approaches** — with trade-offs and your recommendation
 5. **Present design** — in sections scaled to their complexity, get user approval after each section
-6. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
-7. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
-8. **User reviews written spec** — ask user to review the spec file before proceeding
-9. **Transition to implementation** — invoke writing-plans skill to create implementation plan
+6. **Create the isolated workspace** — the spec is the first file this process writes; make (or confirm) the worktree it belongs in before writing it. See Create the Workspace below.
+7. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
+8. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
+9. **User reviews written spec** — ask user to review the spec file before proceeding
+10. **Transition to implementation** — invoke writing-plans skill to create implementation plan
 
 ## Process Flow
 
@@ -118,6 +119,7 @@ digraph brainstorming {
     "Propose 2-3 approaches" [shape=box];
     "Present design sections" [shape=box];
     "User approves design?" [shape=diamond];
+    "Create isolated workspace" [shape=box];
     "Write design doc" [shape=box];
     "Spec self-review\n(fix inline)" [shape=box];
     "User reviews spec?" [shape=diamond];
@@ -138,7 +140,8 @@ digraph brainstorming {
     "Propose 2-3 approaches" -> "Present design sections";
     "Present design sections" -> "User approves design?";
     "User approves design?" -> "Present design sections" [label="no, revise"];
-    "User approves design?" -> "Write design doc" [label="yes"];
+    "User approves design?" -> "Create isolated workspace" [label="yes"];
+    "Create isolated workspace" -> "Write design doc";
     "Write design doc" -> "Spec self-review\n(fix inline)";
     "Spec self-review\n(fix inline)" -> "User reviews spec?";
     "User reviews spec?" -> "Write design doc" [label="changes requested"];
@@ -200,6 +203,56 @@ is the whole process.
 - Don't propose unrelated refactoring. Stay focused on what serves the current goal.
 
 ## After the Design (architectural path)
+
+**Create the Workspace:**
+
+The spec is the first file this process writes. Make (or confirm) the isolated
+workspace it belongs in before writing it — not after, and not appended once
+implementation starts.
+
+- **Check whether you're already isolated** before creating anything:
+  ```bash
+  GIT_DIR=$(cd "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)
+  GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P)
+  ```
+  `GIT_DIR != GIT_COMMON` means you're already in a linked worktree — *unless*
+  `git rev-parse --show-superproject-working-tree` also returns a path, which
+  means you're inside a submodule, not a worktree, and the check does not
+  apply. If already isolated, skip straight to writing the spec.
+- **Ask consent** if you're not already isolated and the user hasn't stated a
+  preference: "Would you like me to set up an isolated worktree for this? It
+  protects your current branch from changes." Honor a declared preference
+  without asking; if they decline, write the spec in place.
+- **Prefer a native worktree tool** — one named like `EnterWorktree`,
+  `WorktreeCreate`, or a `--worktree` flag — over hand-rolled git. It owns
+  placement, branching, and cleanup; a hand-rolled `git worktree add` used
+  alongside one creates phantom state the harness can't see or manage.
+- **No native tool? Fall back to git — and always name the base ref
+  explicitly:**
+  ```bash
+  git fetch --no-tags origin <default-branch>
+  git worktree add <path> -b <branch> origin/<default-branch>
+  cd <path>
+  ```
+  `git worktree add <path> -b <branch>` with **no base ref** starts the new
+  branch at whatever HEAD the shared checkout happens to be on. That checkout
+  is shared by every concurrent session, so it is routinely ahead of
+  `origin/<default-branch>` by commits another session hasn't pushed yet.
+  Omitting the base ref silently forks your new branch off that unpushed
+  work — and pushing your branch later publishes someone else's
+  work-in-progress under your name. This has already happened, not merely a
+  theoretical risk: name the base explicitly every time, never a bare `-b`.
+  `git fetch` only writes refs and is always safe to run against a shared
+  checkout; `git pull` and `git checkout` there are not — they move HEAD out
+  from under whatever else is running against it.
+  - Pick `<path>` inside `.worktrees/` at the project root — the project's
+    established worktree home. Before creating anything there, confirm it's
+    git-ignored (`git check-ignore -q .worktrees`); if it isn't, add it to
+    `.gitignore` and commit that first, or the whole worktree's contents get
+    committed into the repo.
+  - If `git worktree add` fails on a permission error (a sandboxed
+    environment refusing it), tell the user the sandbox blocked worktree
+    creation and continue in the current directory instead.
 
 **Documentation:**
 
