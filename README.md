@@ -22,7 +22,10 @@ It is read from the checkout you are standing in, so a linked worktree reads the
 copy on its own branch: a branch that changes its validate command is tested with
 that command, and the change is visible in its own diff.
 
-Copy `pitcall.config.example.json` into place and edit it. If you ever see
+Copy `pitcall.config.example.json` into place and edit it, or run `/pitcall:init` to have
+the plugin propose it for you — the command reads
+[`docs/configuration.md`](docs/configuration.md) itself and executes it, key by key,
+rather than restating it. If you ever see
 
 ```
 lane: no .pitcall/config.json or pitcall.config.json in <checkout> — that is the
