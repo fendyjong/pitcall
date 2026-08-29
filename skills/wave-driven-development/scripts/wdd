@@ -122,6 +122,26 @@ require_check_name() {
   fi
 }
 
+# The task-worktree directory, READ FROM THE PROJECT CONFIG for the same
+# reason as the base branch and the check name: `wave-worktree` resolves
+# `worktree_dir` from config rather than assuming `.worktrees`, and `cleanup`
+# removes what that create left behind -- so both sides resolving the SAME
+# key from the SAME place is what makes them unable to disagree. A stale
+# literal here would not fail loudly: `[ -d "$d" ]` is simply false for a
+# directory the project never uses, so the worktree removal below is skipped
+# while the branch is deleted anyway -- the worktree leaks silently, with
+# nothing to show for it.
+require_worktree_dir() {
+  if ! WT_DIR="$("$HERE/project-config" --scalar worktree_dir)"; then
+    echo "wdd: cannot read worktree_dir from the project config." >&2
+    echo "  Refusing rather than guessing: the wrong directory silently skips" >&2
+    echo "  every worktree removal below while the branch is deleted anyway," >&2
+    echo "  leaking the worktree with nothing left to point at it." >&2
+    exit 1
+  fi
+  WT_DIR="${WT_DIR%/}"          # tolerate a trailing slash in config
+}
+
 # Where `lane run` files what it validated.
 #
 # `lane.receipts_dir()` ITSELF, not a re-derivation of it. An earlier version
@@ -745,15 +765,18 @@ cleanup)
   # Refuse until the work is actually on the remote default branch. Deleting a
   # task branch whose work has not landed destroys the only copy.
   require_base_branch
+  require_worktree_dir
   git fetch --no-tags --quiet origin "$BASE"
   git merge-base --is-ancestor HEAD "origin/$BASE" 2>/dev/null || {
     echo "wdd: $BRANCH is not merged into origin/$BASE yet — nothing to clean up." >&2
     exit 1; }
 
   for b in $task_branches; do
-    # Same expression wave-worktree used to create it (`git rev-parse
-    # --show-toplevel` from the plan worktree), so the two cannot disagree.
-    d="$ROOT/.worktrees/$b"
+    # Same expression wave-worktree used to create it: both resolve
+    # worktree_dir from the project config (`git rev-parse --show-toplevel`
+    # for the root, `project-config --scalar worktree_dir` for the
+    # directory under it), which is what makes the two unable to disagree.
+    d="$ROOT/$WT_DIR/$b"
     [ -d "$d" ] && git worktree remove --force "$d" 2>/dev/null && note "worktree removed: $b"
     git branch -d "$b" >/dev/null 2>&1 && note "branch deleted:   $b" \
       || note "branch KEPT (not fully merged, -d refused): $b"
