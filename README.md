@@ -11,7 +11,7 @@ Add this repository as a plugin source in Claude Code and enable it, or clone it
 point Claude Code's plugin loader at the checkout. See the skills under `skills/` and
 the commands under `commands/` for what each piece does once installed.
 
-## Project configuration — `pitcall.config.json`
+## Project configuration
 
 The plugin is generic: it is installed once and drives many projects, so it cannot
 guess what brings your stack up or what your default branch is called. Each project
@@ -25,8 +25,8 @@ that command, and the change is visible in its own diff.
 Copy `pitcall.config.example.json` to your project root and edit it. If you ever see
 
 ```
-lane: no pitcall.config.json in <checkout> — that is the checkout resolved from the
-current directory
+lane: no .pitcall/config.json or pitcall.config.json in <checkout> — that is the
+checkout resolved from the current directory
 ```
 
 this file is what it is asking for, and `<checkout>` is where to put it.
