@@ -52,8 +52,12 @@ def base_sha(root):
 
 
 def touched_paths(root, base):
-    out = _git(root, "diff", "--name-only", f"{base}..HEAD").stdout
-    return [p for p in out.split("\n") if p.startswith(WATCHED)]
+    result = _git(root, "diff", "--name-only", f"{base}..HEAD")
+    if result.returncode != 0:
+        raise AssertionError(
+            f"git diff --name-only {base}..HEAD failed: {result.stderr.strip()}"
+        )
+    return [p for p in result.stdout.split("\n") if p.startswith(WATCHED)]
 
 
 def version_at(root, ref):
@@ -76,13 +80,18 @@ def problems(root):
     before, after = version_at(root, base), version_now(root)
     if before == after:
         return [
-            f"{len(touched)} file(s) under {'/, '.join(WATCHED)} changed while "
+            f"{len(touched)} file(s) under {', '.join(WATCHED)} changed while "
             f"version stayed at {after}: {', '.join(sorted(touched)[:5])}"
         ]
     return []
 
 
 def test_this_repository_satisfies_its_own_gate():
+    """Passes vacuously whenever nothing under WATCHED has changed since
+    base_sha — which is always true on `main`, where HEAD *is* the merge-base,
+    so this comparison never has anything to compare. The four fixture tests
+    below are what actually exercise the version comparison.
+    """
     assert problems(REPO_ROOT) == []
 
 
