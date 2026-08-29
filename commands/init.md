@@ -1,7 +1,7 @@
 ---
 description: Write .pitcall/config.json by executing docs/configuration.md's own guidance, proposing an evidence-backed value for each key this project justifies
 argument-hint: [--force]
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash(git rev-parse:*), Bash(git symbolic-ref:*)
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash(git rev-parse:*), Bash(git symbolic-ref:*), Bash(rm:*)
 ---
 
 Configure this project for the plugin by writing `.pitcall/config.json`. This command
