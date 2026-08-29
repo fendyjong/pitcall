@@ -18,13 +18,17 @@ WDD = SKILL / "scripts" / "wdd"
 SLUG = "2026-01-01-demo"
 PLAN = f"docs/superpowers/plans/{SLUG}.md"
 
-#: The four keys `load_config` requires of every project, plus the one this
-#: script reads. `default_branch` matches the fixture's remote branch.
+#: The four keys `load_config` requires of every project, plus the ones this
+#: script reads. `default_branch` matches the fixture's remote branch;
+#: `worktree_dir` matches the literal `.worktrees` the `run` fixture below
+#: builds its own task worktrees under directly (bypassing `wave-worktree`),
+#: so the two agree without either one driving the other.
 CONFIG = {
     "bringup": None,
     "validate": "true",
     "default_branch": "master",
     "required_check": "ci",
+    "worktree_dir": ".worktrees",
 }
 
 
@@ -250,6 +254,54 @@ def test_cleanup_refuses_when_the_config_cannot_answer(run):
     assert "Refusing rather than guessing" in r.stderr  # and why we stop here
     # Nothing was deleted on the way to refusing.
     assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) != ""
+
+
+def test_cleanup_removes_a_worktree_under_a_configured_worktree_dir_other_than_the_default(run):
+    """`cleanup` must resolve `worktree_dir` from the SAME config `wave-worktree`
+    used to create it -- not assume `.worktrees`.
+
+    Every other fixture in this file, including `run` itself, builds its task
+    worktrees directly under the literal `.worktrees`, which also happens to be
+    `worktree_dir`'s value in `CONFIG`. A suite that never configures anything
+    else cannot tell a `cleanup` that correctly reads `worktree_dir` from a
+    `cleanup` that still has `.worktrees` hardcoded: both give the same answer
+    for the same fixture. This test is the one that can, by configuring a
+    DIFFERENT directory and creating the worktree through the real
+    `wave-worktree` script -- the same script `cleanup` has to agree with.
+
+    Without the fix, `cleanup` looks for the worktree under the old literal,
+    finds nothing there (`[ -d "$d" ]` is false), skips the removal silently,
+    and deletes the branch anyway -- the worktree leaks with nothing left
+    pointing at it.
+    """
+    WAVE_WORKTREE = SKILL / "scripts" / "wave-worktree"
+
+    write_config(run["plan_wt"], worktree_dir="wt")
+    (run["plan_wt"] / ".gitignore").write_text("wt/\n")
+    commit(run["plan_wt"], "worktree_dir is wt, not .worktrees")
+
+    b = f"{SLUG}-t3"
+    head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
+    created = subprocess.run(
+        [str(WAVE_WORKTREE), "create", SLUG, "3", head],
+        cwd=run["plan_wt"], capture_output=True, text=True,
+    )
+    assert created.returncode == 0, created.stderr
+    wt = Path(created.stdout.strip())
+    assert wt == run["plan_wt"] / "wt" / b, "sanity: the worktree really landed under the configured dir"
+
+    (wt / "t3.txt").write_text("task 3\n")
+    commit(wt, "task 3")
+    git("merge", "-q", "--no-edit", b, cwd=run["plan_wt"])
+    git("push", "-q", "origin", "planbranch:master", cwd=run["plan_wt"])
+
+    assert wt.exists(), "sanity: the worktree exists before cleanup runs"
+
+    r = finish(run["plan_wt"], "cleanup", PLAN)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not wt.exists(), "the worktree under the configured worktree_dir was not removed"
+    assert git("branch", "--list", b, cwd=run["main"]) == ""
+    assert f"worktree removed: {b}" in r.stdout
 
 
 def test_check_counts_every_task_branch(run):
