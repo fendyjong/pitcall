@@ -119,7 +119,7 @@ def test_the_lock_is_shared_while_the_checkout_and_config_are_the_callers(
     assert lane.lane_dir() == project / ".pitcall"
 
     # The config is the one committed on THIS branch, in THIS checkout.
-    assert lane_config.config_path() == linked / lane_config.CONFIG_NAME
+    assert lane_config.config_path() == linked / ".pitcall" / "config.json"
 
     # And `lane run` defaults its worktree to the caller's own checkout. Asserted
     # through main() rather than by re-deriving it, because the wiring of the

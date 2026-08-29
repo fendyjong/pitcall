@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import NamedTuple
 
-CONFIG_NAME = "pitcall.config.json"
+CONFIG_NAME = "pitcall.config.json"          # legacy location, repo root
+CONFIG_DIR = ".pitcall"
+CONFIG_BASENAME = "config.json"
 
 #: Keys the workflow reads and cannot guess. Most are consumed by the skills
 #: rather than by this module; the check lives here because this is the one
@@ -195,6 +198,40 @@ def worktree_root(start: Path | None = None) -> Path:
     return Path(_rev_parse(settled.directory, "--show-toplevel"))
 
 
+def _resolve_config_in(root: Path) -> Path:
+    """Locate the config within one checkout root.
+
+    Both locations present is refused rather than ordered: a precedence rule
+    lets two configs disagree in silence, and the one that loses is invisible.
+    """
+    new = root / CONFIG_DIR / CONFIG_BASENAME
+    legacy = root / CONFIG_NAME
+    if new.exists() and legacy.exists():
+        raise RuntimeError(
+            f"lane: two configs in {root} — {CONFIG_DIR}/{CONFIG_BASENAME} and "
+            f"{CONFIG_NAME}. Delete the legacy one; having both means a silent "
+            f"disagreement about which is live."
+        )
+    if new.exists():
+        return new
+    if legacy.exists():
+        sys.stderr.write(
+            f"lane: {CONFIG_NAME} is deprecated — move it to "
+            f"{CONFIG_DIR}/{CONFIG_BASENAME} (and un-ignore that path).\n"
+        )
+        return legacy
+    return new
+
+
+def _checkout_root(checkout: Path | str | None) -> Path:
+    """The checkout `config_path()` and `load_config()` both resolve against.
+
+    Shared so the two never diverge on what "the checkout" means — including
+    when one of them reports it in an error message.
+    """
+    return Path(checkout) if checkout else worktree_root()
+
+
 def config_path(checkout: Path | str | None = None) -> Path:
     """The config in `checkout`, or in the caller's own — never the shared root.
 
@@ -207,7 +244,7 @@ def config_path(checkout: Path | str | None = None) -> Path:
     `lane run --worktree X` ran in X while reading the config from cwd's
     checkout — which is the same class of quiet mismatch as everything else here.
     """
-    return Path(checkout) / CONFIG_NAME if checkout else worktree_root() / CONFIG_NAME
+    return _resolve_config_in(_checkout_root(checkout))
 
 
 def load_config(checkout: Path | str | None = None) -> dict:
@@ -224,16 +261,20 @@ def load_config(checkout: Path | str | None = None) -> dict:
     configured that way. Treating that as missing would erase the distinction
     the check exists to draw.
     """
-    path = config_path(checkout)
+    root = _checkout_root(checkout)
+    path = _resolve_config_in(root)
     try:
         cfg = json.loads(path.read_text())
     except FileNotFoundError:
         # Name the checkout we resolved, not just the path we failed to open:
         # since the resolution follows the caller's cwd, "the wrong checkout" is
-        # now a reachable mistake and the path alone does not show it.
+        # now a reachable mistake and the path alone does not show it. `root` is
+        # the checkout itself; `path.parent` is NOT — once neither location
+        # exists it is `.pitcall/`, a directory inside the checkout, and naming
+        # it here would be exactly the mistake this comment describes.
         raise RuntimeError(
-            f"lane: no {CONFIG_NAME} in {path.parent} — that is the checkout "
-            f"resolved from the current directory"
+            f"lane: no {CONFIG_DIR}/{CONFIG_BASENAME} or {CONFIG_NAME} in {root} "
+            f"— that is the checkout resolved from the current directory"
         ) from None
     missing = [k for k in REQUIRED_KEYS if k not in cfg]
     if missing:
