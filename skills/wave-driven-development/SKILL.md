@@ -624,8 +624,11 @@ not re-derive them:
 
 ## Automation boundary
 
-The human owns the spec. From an approved spec to a green branch the skill runs unattended; the
-human merges. Within that, it **interrupts only when human input is genuinely needed**.
+The human owns the spec, and the human owns the lane run that validates the branch. From an
+approved spec the skill runs unattended through to a **merged** PR — `wdd-finish merge`, whose
+bound is a lane receipt for the exact commit rather than a human's attention (Phase 3). What is
+automated is *landing already-validated code*; authorising the validation is not. Within that, it
+**interrupts only when human input is genuinely needed**.
 
 **Resolve autonomously, record the ruling:**
 - A reviewer finding backed by a **working reproduction**, including one that contradicts the plan's
@@ -682,7 +685,7 @@ Run `scripts/wdd-finish`, from the **plan worktree**:
 ```bash
 scripts/wdd-finish check   PLAN_FILE   # verify only, no side effects
 scripts/wdd-finish ship    PLAN_FILE   # check, push, open PR
-# ... human merges the PR ...
+scripts/wdd-finish merge   PLAN_FILE   # receipt + green -> merge, then sync main
 scripts/wdd-finish cleanup PLAN_FILE   # task branches, worktrees, workspace
 ```
 
@@ -700,13 +703,107 @@ and is absent entirely from an `init`+`fetch` checkout. `cleanup` gates branch
 deletion on that ref, so a stale name that is still a live branch would decide
 the fate of the only copy of a task's work. Both refuse rather than guess.
 
-`ship` pushes and opens the PR. It deliberately **does not merge**: that stays
-a human decision, as everywhere else here. Before merging, re-check the branch
-against the base — the project config's `required_check` green **on a branch
-that is up to date with the base**, plus whatever pre-merge gate the project
-provides. A green check alone is not enough: CI proved the branch clean against
-the base *as of when it ran*, and two branches can each add a differently-named
+`ship` pushes and opens the PR, and stops there. `merge` is what lands it, and
+what it replaces is a human remembering that the branch was validated. That
+bound holds until the first time it does not, and nothing observes the failure
+— so `merge` is gated on **evidence** instead.
+
+**The evidence is a lane receipt.** `lane run` writes
+`.pitcall/receipts/<sha>.json` when — and only when — `validate` passed against
+that exact commit, in a tree with no uncommitted changes to tracked files, with
+HEAD unmoved for the duration. **Its existence at that path is the verdict**;
+the body is read only to tell you when and by whom, and a receipt that will not
+parse is corrupt, which means *absent*, never *permitted*. The body is checked
+for one thing beyond the message — that it names the commit it is filed under,
+which catches a receipt copied or symlinked onto another commit's name. That
+check is **one-directional**: it can turn a pass into a refusal, never a
+refusal into a pass, so existence remains the only thing that permits
+anything.
+
+Pinning to the sha rather than to the branch is the whole point. A receipt for
+`branch@<a>` says nothing about `branch@<b>`, so **a review fix pushed after the
+lane ran cannot inherit the approval of the commit it replaced** — the likely
+failure, not an exotic one. The consequence for you: run the lane, then merge,
+and any push in between means running the lane again.
+
+`merge`, in order:
+
+1. resolves the PR for the branch and takes **the head sha GitHub reports now**
+   — not this checkout's HEAD, not a sha resolved earlier in the run. It
+   refuses if the PR targets a base other than the config's `default_branch`
+   (retargeting happens on GitHub, where nothing here can see it), and if this
+   checkout's `HEAD` is not the commit the PR would merge — everything `check`
+   verified was verified against local `HEAD`, so a merge landing something
+   else means that verification was about the wrong commit, and reporting
+   *merged* would describe work this run never examined;
+2. checks the receipt for that sha **before waiting on anything**. Refusing
+   early costs nothing; refusing after the wait means having spent ten minutes
+   on checks for a branch that could never have merged;
+3. waits for the config's `required_check` to go green, **bounded** — 30
+   minutes, polled every 20s, overridable in seconds with `WDD_CHECK_TIMEOUT`
+   and `WDD_CHECK_POLL`. A bound that expires reports *not merged, still
+   running* and exits 3, having changed nothing. Anything that is not an
+   outright success — failed, skipped, cancelled, or a check that never appears
+   — is not a pass. Where the name appears **more than once** in the rollup, an
+   external app's commit status colliding with a workflow job's name or two
+   workflow files each defining one, **every match is judged and the worst
+   wins**: a green entry listed first cannot carry a red or still-running one;
+4. merges with `gh pr merge --merge --match-head-commit <sha>`,
+   **server-side**. A local `git merge` runs zero checks and moves HEAD in a
+   checkout other sessions are reading. Not a squash: that mints a new commit,
+   so what lands is a sha nothing validated, and it also makes `cleanup`'s
+   ancestry test permanently false. **The head pin is the other half of the
+   receipt** — see below;
+5. fast-forwards the main checkout, then runs the project's optional
+   `refresh_commands` there **best-effort** — the merge has already happened
+   and a regeneration failing must not unwind it.
+
+**The head sha is read once, and the wait can run for half an hour.** Pushing a
+review fix while checks run is the ordinary way of working, not an exotic
+sequence — and `statusCheckRollup` reports checks for the *current* head, so a
+push mid-wait produces a green signal about a commit no receipt covers. Every
+signal agrees that merging is fine; only the sha dissents. `--match-head-commit`
+closes that **server-side**: GitHub refuses if the head has moved. Re-reading
+the head just before merging would only narrow the window, and a narrower race
+is the kind nobody reproduces afterwards. A `gh` too old for the flag (it
+arrived in 2.96) makes `merge` refuse rather than merge unguarded — a guard
+that is silently absent looks exactly like a guard that passed.
+
+**A PR that is `BEHIND` its base, or that has conflicts (`DIRTY`), is
+refused** — checked before the wait and again on every poll. Merging a `BEHIND`
+one produces a merge commit combining two states nothing validated, the
+migration-number hazard described below; a `DIRTY` one GitHub will not merge at
+all, so waiting on it only spends the bound to arrive at the same answer.
+`DIRTY` is the commoner of the two — measured 16 to 4 across 20 open PRs.
+Either remedy changes the head sha, so the lane has to run again: the receipt
+does not carry across.
+
+**That guard is best-effort, and the reason is GitHub's rather than this
+script's.** `mergeStateStatus` is computed lazily, and the first view of a PR is
+the request that *triggers* the computation: measured, one batch over 20 open
+PRs answered `UNKNOWN` for all 20, while the identical query moments later
+returned real values. `merge` therefore re-reads once, after a short pause, when
+the first answer is `UNKNOWN` — but **a PR whose checks are already green can
+still be merged with neither read having seen a computed value**, because the
+poll loop may run only once and see `UNKNOWN` too. Branch protection is what
+makes this airtight. This step narrows the window; it does not replace it, and
+nothing here can observe whether a project has that protection enabled.
+
+The fast-forward is the one place any of this touches the shared checkout, and
+it is safe by construction rather than by care: `git merge --ff-only` cannot
+create a commit — it advances a pointer or it refuses. **A refusal means the
+checkout has diverged**, which is the condition that should be impossible in a
+tree nobody authors in, so `merge` names the local commits and stops (exit 4).
+It does not repair: a merge there would mint one more commit and erase the
+evidence of the thing that was supposed to be impossible.
+
+Branch protection stays upstream of all of this and is never routed around. A
+green check alone was never enough — CI proved the branch clean against the
+base *as of when it ran*, and two branches can each add a differently-named
 migration claiming the same number, which git merges cleanly and leaves broken.
+Requiring the branch to be **up to date with the base** is what closes that, and
+it also keeps the receipt honest: updating a stale branch changes its head sha,
+which invalidates the receipt along with it.
 
 `cleanup` runs only once the plan branch is an ancestor of the default branch
 on `origin`; before that, deleting a task branch would destroy the only copy of
@@ -723,7 +820,9 @@ that is a request, and requests lose: measured on the project this skill grew
 in, three separate written rules were argued past, silently skipped, or left
 unrun within one week. Each was fixed only by making the wrong thing
 mechanically unreachable. `wdd-finish` refuses to run outside a plan worktree,
-so the shared checkout is never in reach.
+so the shared checkout is never in reach — with one deliberate exception, the
+`--ff-only` sync at the end of `merge`, which cannot create a commit and
+reports rather than repairs when it will not apply.
 
 It also never covered cleanup. This document said task branches "persist until
 the final PR"; nothing then deleted them. Measured on one repository: 33 task

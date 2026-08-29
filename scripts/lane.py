@@ -42,6 +42,76 @@ acquisition.** `acquire()` therefore returns a `Held` whose kernel lock lives
 exactly as long as the object's file handle, and `lane run` (see `main`) is the
 entry point that holds it across `bringup` and `validate` in one process.
 
+## The receipt: what this run validated
+
+A successful `validate` leaves `.pitcall/receipts/<sha>.json`, naming the commit
+it covered. A later step merges a pull request once its checks are green, and
+what makes that safe is a rule that nothing merges without having passed a lane
+run — so the receipt turns that rule from something a session remembers into
+something a machine can check.
+
+It is keyed by SHA, never by branch: the ordinary failure is a review fix landing
+after validation and inheriting its approval, and a branch-keyed receipt says
+"this branch was fine" long after it stopped being the branch that was tested.
+
+**A receipt that attests to nothing is worse than no receipt**, because it reads
+exactly like one that does. Four ways to write one, all of which this codebase
+has shipped or nearly shipped: for a step that was SKIPPED (`validate` may be
+null, and the lane skips a step configured that way — the run still exits 0),
+for a step that FAILED, for the WRONG COMMIT (the sha is resolved from the
+validated worktree, never the caller's cwd; `lane run --worktree X` means those
+two are routinely different directories), and for a commit that arrived DURING
+the run. See `_cmd_run`.
+
+That last one is the subtle one, and it is the failure this whole file exists to
+prevent arriving through the one window the lock does not close. **The lock stops
+another SESSION interfering; it says nothing about the holder's own worktree
+changing underneath it.** Commit while `validate` is running and a sha read after
+`validate` returns names a commit that was never validated — approval inherited
+by a change nothing checked, which is precisely the thing being defended against.
+So the sha is captured BEFORE `bringup` and re-read after `validate`, and a run
+whose HEAD moved writes NO receipt: `validate` observed a state that is neither
+commit, so neither is an honest answer, and there is nothing to fall back to.
+
+## A commit is a state, not a name
+
+**The tree has to match HEAD, or the sha is a label on the wrong thing.** Edit a
+tracked file without committing and HEAD never moves at all, so every check above
+passes while `validate` runs against a state no commit contains — and the receipt
+then certifies a commit that `validate` was never given. Same dishonesty as the
+moving head, reached without anything moving. So the capture reads the worktree's
+DIRT as well as its sha, and a run that began with tracked modifications writes no
+receipt either.
+
+## What none of that catches
+
+Written down because silence here would read as coverage, and because each of
+these is cheap to mistake for a bug later:
+
+- **A tracked file changed BY the run.** The tree is only inspected at capture,
+  so a `bringup` or `validate` that rewrites a tracked file (a regenerated
+  lockfile, a snapshot) still gets a receipt. Deliberate: that dirt is a
+  CONSEQUENCE of validating, not an input to it, and refusing on it would make
+  the lane unusable for any project whose test run touches tracked state.
+- **HEAD moving and moving back** to the same sha inside one run. The comparison
+  sees equality and writes. Catching it needs a reflog watcher, which is a great
+  deal of machinery for a case that requires someone to commit and then reset
+  mid-validate.
+- **A submodule passed as `--worktree`.** The receipt is keyed on the
+  submodule's sha and filed in the superproject's lane, where the superproject's
+  merge step will not find a sha it recognises. Fail-closed for the parent, so
+  it is noise rather than a hole.
+
+## One project per run
+
+The lane is resolved from the caller's cwd and the checkout from `--worktree`,
+which is what lets a session in the main checkout validate a linked worktree.
+Nothing stopped that pair naming two DIFFERENT PROJECTS — holding project A's
+lane while validating project B, and filing the receipt in A where B's merge step
+will never look. Inherited from the lock, which has the same shape and for which
+it is arguably correct (the lane serialises per project). It is not a mode, it is
+a mistake, and `_cmd_run` refuses it before taking the lane.
+
 ## Clearing a stuck lane
 
 That leaves the owner one job: a live holder that is stuck. Clear it by **killing
@@ -62,6 +132,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 from lane_config import load_config, shared_root, worktree_root
 
@@ -80,6 +151,13 @@ EXIT_QUEUED = 75
 #: to wait for a wake-up that cannot come.
 EXIT_ALREADY_RUNNING = 76
 
+#: `lane run --worktree X` was issued from inside a DIFFERENT project, so the
+#: lane and the checkout name two projects. Not a failure of the run — the run
+#: never starts. 64 is the conventional status for "you invoked this wrongly"
+#: (EX_USAGE), which is what this is; it is deliberately not 1, so a caller
+#: cannot mistake it for a step that failed.
+EXIT_WRONG_PROJECT = 64
+
 
 def lane_dir() -> Path:
     """The one directory every caller working on this project must agree on.
@@ -92,6 +170,20 @@ def lane_dir() -> Path:
     excludes nobody.
     """
     d = shared_root() / ".pitcall"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def receipts_dir() -> Path:
+    """Where a validated commit is recorded, beside the lane it was run in.
+
+    Under `lane_dir()`, so every worktree of the project reads and writes ONE
+    set of receipts — the same reason the lock lives there. A worktree-scoped
+    directory would let the merge step consult a set of receipts that the
+    session which actually ran the lane never wrote to, and find nothing, and be
+    unable to tell that from a branch that was never validated.
+    """
+    d = lane_dir() / "receipts"
     d.mkdir(exist_ok=True)
     return d
 
@@ -313,10 +405,203 @@ def _step(label: str, command: str, cwd: Path) -> int:
     return subprocess.run(command, shell=True, cwd=cwd).returncode
 
 
+def _worktree_sha(worktree: str) -> str | None:
+    """HEAD of the checkout that was validated, or None if it has none.
+
+    `-C <worktree>`, never the process's own cwd. `lane run --worktree X` runs
+    the steps in X while the process stands wherever the caller invoked it, so a
+    receipt built from cwd would name a commit nothing was run against — and the
+    two roots are the same path in the main checkout, which is why that mistake
+    survives casual testing. This module has resolved the wrong one of that pair
+    twice already.
+    """
+    out = subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"],
+                         capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def _worktree_branch(worktree: str) -> str | None:
+    """The branch checked out in `worktree`, or None when HEAD is detached.
+
+    Recorded for a human reading a directory of receipts. **Nothing keys on it**
+    — the receipt is filed under the sha precisely because a branch label
+    outlives the commit it was attached to, which is the failure being defended
+    against. `symbolic-ref` rather than `rev-parse --abbrev-ref`, which answers
+    the literal string "HEAD" on a detached head and would record that as a
+    branch name.
+    """
+    out = subprocess.run(["git", "-C", worktree, "symbolic-ref", "--short", "HEAD"],
+                         capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+#: Marks a `_worktree_dirt` answer that means "could not look" rather than
+#: "looked and found changes". Both refuse, and they must not print the same
+#: sentence: one names files a session can go and commit, the other names a
+#: checkout that is broken.
+DIRT_UNREADABLE = "git status could not read the tree: "
+
+
+def _worktree_dirt(worktree: str) -> str | None:
+    """Tracked changes absent from HEAD, or None when the tree matches it.
+
+    **`-uno`: untracked files are excluded deliberately, and this is the line to
+    read before widening it.** A scratch file, an editor backup, a build artifact
+    nobody tracks — none of them is part of any commit's state, so none of them
+    makes the receipt's claim false. Count them and the lane starts refusing on
+    noise, and a guard that fires on noise is a guard someone switches off.
+
+    Returns the porcelain text rather than a bool so the refusal can NAME what
+    was dirty; a session told only "the tree is dirty" has to go and look.
+
+    **A failed `git status` is NOT clean.** This used to return None there, on
+    the argument that the sha probe already refuses that case — true only for
+    *not a repository*. A corrupt index is the counterexample: `status` fails
+    while `rev-parse HEAD` answers normally, so the run reached the receipt
+    with this guard never having looked at anything and certified a tree state
+    nothing had checked. The sha probe still fires first where it applies, so
+    a non-repository is diagnosed once, not twice. **"I could not look" must
+    never resolve to "nothing to see"** — the same rule the merge step applies
+    to an unreadable receipt, in the place the guarantee is actually created.
+    """
+    out = subprocess.run(["git", "-C", worktree, "status", "--porcelain", "-uno"],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        detail = out.stderr.strip().splitlines()
+        return DIRT_UNREADABLE + (detail[0] if detail else f"exit {out.returncode}")
+    return out.stdout.strip() or None
+
+
+class _Checkout(NamedTuple):
+    """What the worktree was when the run began.
+
+    A triple rather than a bare sha because "which commit" is not the whole
+    question. The receipt claims `validate` ran against the STATE of a commit,
+    and both of the other fields are ways that claim goes false while the sha
+    stays put: `dirt` is the tree not matching HEAD, and `branch` is a label
+    recorded at validation time rather than at write time, because a run can
+    switch branches without moving.
+    """
+
+    sha: str | None
+    branch: str | None
+    dirt: str | None
+
+
+def _capture(worktree: str) -> _Checkout:
+    """Read the checkout's state. Called BEFORE the first step — see `_cmd_run`."""
+    return _Checkout(sha=_worktree_sha(worktree),
+                     branch=_worktree_branch(worktree),
+                     dirt=_worktree_dirt(worktree))
+
+
+def _project_of(worktree: str) -> Path | None:
+    """The project a checkout belongs to, or None if it is in no repository.
+
+    Probes first rather than catching `RuntimeError` around `shared_root()`:
+    that would also swallow the cycle error `_climb_to_the_project` raises
+    deliberately, and a hang is the one failure this module must not have.
+    """
+    probe = subprocess.run(["git", "-C", worktree, "rev-parse", "--git-dir"],
+                           capture_output=True, text=True)
+    return shared_root(Path(worktree)) if probe.returncode == 0 else None
+
+
+def _record_receipt(session: str, worktree: str, before: _Checkout,
+                    command: str) -> None:
+    """Record the commit a SUCCESSFUL, UNDISTURBED `validate` covered.
+
+    One caller, `_cmd_run`, which calls this only after `validate` ran and
+    exited 0 and while it still holds the lane. Those two preconditions are the
+    caller's to enforce — this function cannot tell a skipped step from a
+    passing one and must never be given the chance to guess. The rest are
+    enforced here, because each of them needs a value read before the steps
+    began: `before` is that reading.
+    """
+    sha_after = _worktree_sha(worktree)
+    if before.sha is None or sha_after is None:
+        # Fail closed, and loudly. No receipt means the merge step refuses,
+        # which is the safe direction; silence would leave the next session
+        # hunting for a file that nothing ever wrote and no line ever mentioned.
+        print(f"[lane] validate passed, but {worktree} has no resolvable HEAD — "
+              "no receipt written")
+        return
+    if before.dirt is not None:
+        # HEAD never moved, and the receipt would still be a lie: `validate` ran
+        # against tracked content that is in no commit, so certifying `before.sha`
+        # certifies a state `validate` was never given — and would have failed on,
+        # in the case that matters. The same argument as the moved head, reached
+        # without anything moving.
+        if before.dirt.startswith(DIRT_UNREADABLE):
+            # A different fact, so a different sentence. Telling a session its
+            # tree is dirty when the truth is that git cannot read the tree
+            # sends it looking for a file to commit that does not exist.
+            print(f"[lane] could not read the working tree at {worktree}:")
+            print(f"[lane]   {before.dirt}")
+            print(f"[lane] nothing confirmed that {before.sha} is what validate "
+                  "ran against — no receipt written. Repair the checkout, then "
+                  "re-run.")
+            return
+        print(f"[lane] {worktree} had uncommitted changes to tracked files "
+              "when the run began:")
+        for line in before.dirt.splitlines():
+            print(f"[lane]   {line}")
+        print(f"[lane] validate ran against a tree that is not {before.sha} — "
+              "no receipt written. Commit or stash, then re-run.")
+        return
+    if before.sha != sha_after:
+        # Neither sha is written, and that is deliberate. `validate` began at
+        # one commit and ended at another, so it observed a state that is
+        # neither: certifying the earlier one approves code that was replaced
+        # mid-run, and certifying the later one approves code that was never
+        # validated — the exact failure this file exists to prevent. There is no
+        # honest fallback, so refuse and make the session re-run.
+        #
+        # Compared in FULL. Short prefixes collide, and two commits that differ
+        # only past the seventh character would compare equal.
+        print(f"[lane] HEAD moved during the run: {before.sha} -> {sha_after}")
+        print("[lane] validate covered neither commit — no receipt written. "
+              "Re-run the lane on a worktree nothing is committing to.")
+        return
+    path = receipts_dir() / f"{sha_after}.json"
+    # Temp-then-rename, like the queue: a reader that catches a half-written
+    # receipt must see no receipt (safe) rather than a truncated one, and a
+    # partial file left in the directory is noise nobody can account for later.
+    _write_json(path, {
+        "sha": sha_after,
+        # The branch as it was at VALIDATION time, not at write time. A run can
+        # switch branches without moving the sha, and a field describing when
+        # validation happened must not be read after the fact.
+        "branch": before.branch,
+        "session": session,
+        "worktree": worktree,
+        "validate_command": command,
+        "validated_at": time.time(),
+    })
+    print(f"[lane] receipt: {path}")
+
+
 def _cmd_run(session: str, worktree: str) -> int:
     # The config comes from the checkout the bring-up will run in — one answer to
     # "which checkout", not two that can disagree.
     cfg = load_config(worktree)
+
+    # Refuse a run whose lane and checkout belong to different projects. Checked
+    # BEFORE `acquire()`: taking project A's lane and then refusing would block
+    # every other session in A for as long as it took to notice. None means the
+    # checkout is in no repository at all — nothing to compare against, and such
+    # a run already ends without a receipt because its sha cannot be resolved
+    # either, so there is no incoherent state left to guard.
+    project = _project_of(worktree)
+    lane_here = lane_dir()
+    if project is not None and project / ".pitcall" != lane_here:
+        print(f"[lane] --worktree {worktree} is in project {project}")
+        print(f"[lane] but this directory resolves the lane at {lane_here}")
+        print("[lane] REFUSING: that would hold one project's lane while "
+              "validating another, and file the receipt where nothing looks for it.")
+        print("[lane] Run from inside the project you are validating.")
+        return EXIT_WRONG_PROJECT
+
     held = acquire(session, worktree)
     if held is None:
         st = status()
@@ -347,6 +632,28 @@ def _cmd_run(session: str, worktree: str) -> int:
         return EXIT_ALREADY_RUNNING
 
     rc = 0
+    validated = False
+    # BEFORE the first step, not after the last one, and not between them.
+    # `bringup` builds from the working tree too, so the whole run has to sit on
+    # one commit for the receipt to mean anything; capturing after `validate`
+    # would certify whatever HEAD happened to be by then, and capturing between
+    # the two would miss a commit landing during the bring-up.
+    before = _capture(worktree)
+    if before.dirt is not None:
+        # Said now as well as at the end: the run is still worth doing — a
+        # session may well want to test a dirty tree — but it cannot produce
+        # evidence, and learning that after a ten-minute bring-up is learning it
+        # too late to act on.
+        # Two causes, two sentences. Widening `dirt` to cover "could not
+        # look" made the single message wrong for half its cases, and
+        # "uncommitted changes" sends a session hunting for a file to commit
+        # that does not exist.
+        if before.dirt.startswith(DIRT_UNREADABLE):
+            print(f"[lane] WARNING: {worktree} cannot be read by git "
+                  f"({before.dirt}); this run cannot produce a receipt")
+        else:
+            print(f"[lane] WARNING: {worktree} has uncommitted changes to tracked "
+                  "files; this run cannot produce a receipt")
     try:
         for label in ("bringup", "validate"):
             command = cfg.get(label)
@@ -357,6 +664,31 @@ def _cmd_run(session: str, worktree: str) -> int:
             if rc != 0:
                 print(f"[lane] {label} FAILED (exit {rc})")
                 break
+            if label == "validate":
+                # Set HERE and nowhere else. The obvious alternative — write the
+                # receipt when the loop finishes with rc == 0 — is wrong twice
+                # over: a run whose `validate` is null skips the step and still
+                # leaves rc at 0 from the bringup, and a run with no steps at all
+                # never touches rc. Both would be certified as validated.
+                validated = True
+        if validated:
+            # Inside the try, so it happens while the lane is still held: nothing
+            # else can be mid-bringup against this checkout as the sha is read.
+            try:
+                _record_receipt(session, worktree, before, cfg["validate"])
+            except Exception as exc:
+                # Deliberately broad, and deliberately not re-raised. `release()`
+                # in the `finally` below has ALREADY popped the next waiter off
+                # the queue by the time anything here could throw, so an escaping
+                # exception skips the hand-off print — and that print is the only
+                # thing that wakes that session. It would then wait forever, on a
+                # free lane, with nothing anywhere reporting the loss. **A lost
+                # receipt costs one re-run; a lost waiter costs a session.** The
+                # failure is loud and fail-closed either way: no receipt means the
+                # merge step refuses.
+                print(f"[lane] receipt could not be written: {exc!r}")
+                print("[lane] the run itself PASSED; re-run the lane to produce "
+                      "the receipt the merge step needs.")
     finally:
         nxt = held.release()
 

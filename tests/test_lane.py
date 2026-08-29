@@ -683,6 +683,431 @@ def test_lane_run_reports_failure_but_still_releases(tmp_path, monkeypatch):
     assert lane.status()["holder"] is None
 
 
+# --- Receipts: evidence that a commit was validated ----------------------
+#
+# A later step merges a pull request once its checks are green, and what makes
+# that safe is a rule that nothing merges without having passed a lane run
+# first. The receipt is the evidence for that rule, which is why a receipt that
+# attests to nothing is worse than no receipt at all: it reads exactly like one
+# that does. Three shapes of meaningless receipt are pinned below — one for a
+# validation that was skipped, one for a validation that failed, and one naming
+# a commit nothing ran against.
+#
+# Real repositories throughout. The property under test is that the receipt
+# names a commit that exists in the checkout that was validated, so a stubbed
+# sha would assert only that the stub was written correctly.
+
+
+def _repo_with_config(path: Path, **steps) -> Path:
+    """A real repository carrying a committed config the lane will read."""
+    repo = _new_repo(path)
+    cfg = {"bringup": None, "validate": None,
+           "default_branch": "main", "required_check": "ci"}
+    cfg.update(steps)
+    (repo / lane_config.CONFIG_NAME).write_text(json.dumps(cfg))
+    _git("add", lane_config.CONFIG_NAME, cwd=repo)
+    _git("commit", "-q", "-m", "configure the lane", cwd=repo)
+    return repo
+
+
+def _receipts(project: Path) -> list[str]:
+    """Every receipt on disk, read WITHOUT creating the directory.
+
+    Deliberately not routed through `lane.receipts_dir()`, which creates what
+    it returns: a negative assertion made through it cannot tell "nothing was
+    written" from "the directory did not exist until this assertion made it".
+    The literal layout is spelled out rather than derived for the same reason
+    the merge step will read it literally — it is the contract, not an
+    implementation detail.
+    """
+    return sorted(p.name for p in (project / ".pitcall" / "receipts").glob("*.json"))
+
+
+def test_a_passing_validate_records_the_commit_of_the_checkout_it_ran_in(
+        tmp_path, monkeypatch):
+    """The receipt is pinned to the sha `validate` actually ran against.
+
+    The caller's cwd and the checkout under test are different directories —
+    `lane run --worktree X` is the ordinary case, not the exotic one — and this
+    module has twice resolved the wrong one of that pair. So the run is issued
+    from the main checkout while the worktree under test sits on a later commit,
+    and the receipt must name the worktree's HEAD while saying nothing whatever
+    about the caller's.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    linked = tmp_path / "linked"
+    _git("worktree", "add", "-q", str(linked), "-b", "side", cwd=project)
+    linked = linked.resolve()
+    (linked / "fix.txt").write_text("a review fix, landed after validation\n")
+    _git("add", "fix.txt", cwd=linked)
+    _git("commit", "-q", "-m", "a later commit", cwd=linked)
+
+    callers_head = _git("rev-parse", "HEAD", cwd=project)
+    validated_head = _git("rev-parse", "HEAD", cwd=linked)
+    assert callers_head != validated_head, \
+        "the two checkouts must sit on different commits, or this proves nothing"
+
+    monkeypatch.chdir(project)
+    assert lane._cmd_run("sess-a", str(linked)) == 0
+
+    # Exactly one receipt, and it is the validated worktree's commit. Naming
+    # the absent one too: "a receipt exists" would pass on the wrong sha.
+    assert _receipts(project) == [f"{validated_head}.json"]
+    assert not (project / ".pitcall" / "receipts" / f"{callers_head}.json").exists()
+
+    receipt = project / ".pitcall" / "receipts" / f"{validated_head}.json"
+    assert json.loads(receipt.read_text())["sha"] == validated_head
+
+    # One set of receipts per project, for the same reason there is one lock:
+    # a merge step consulting a per-worktree directory would be consulting
+    # receipts nobody else ever wrote to.
+    assert lane.receipts_dir() == project / ".pitcall" / "receipts"
+    monkeypatch.chdir(linked)
+    assert lane.receipts_dir() == project / ".pitcall" / "receipts"
+
+
+def test_a_failing_validate_leaves_no_receipt(tmp_path, monkeypatch):
+    """A receipt for a validation that FAILED reads identically to one for a
+    validation that passed, and the merge it would authorise is a merge of code
+    that is known not to work."""
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="false")
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 1
+    assert _receipts(project) == []
+
+
+def test_a_failed_bringup_leaves_no_receipt_because_validate_never_ran(
+        tmp_path, monkeypatch):
+    """The lane stops at the first failing step, so `validate` is never
+    reached — and a receipt written anyway would attest to a step that did not
+    execute at all."""
+    marker = tmp_path / "validate-ran"
+    project = _repo_with_config(tmp_path / "project",
+                                bringup="false", validate=f"touch {marker}")
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 1
+    assert not marker.exists(), \
+        "validate ran after a failed bringup — this test is not testing what it says"
+    assert _receipts(project) == []
+
+
+def test_an_unconfigured_validate_leaves_no_receipt(tmp_path, monkeypatch):
+    """The skipped-step case, and the one an implementation is likeliest to get
+    wrong.
+
+    `validate` may be null — a project saying "there is no such step" — and the
+    lane already skips a step configured that way. The run therefore exits 0
+    having validated nothing, so a receipt keyed on the run's exit status is
+    written here, is indistinguishable from a real one, and authorises a merge
+    nothing ever checked.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate=None)
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0, \
+        "a skipped step is not a failure — the run still succeeds"
+    assert _receipts(project) == []
+
+
+def test_two_runs_at_different_commits_leave_two_receipts(tmp_path, monkeypatch):
+    """The ordinary failure the sha-keyed name prevents: validation runs, a
+    review fix lands, and the fix inherits the earlier approval without ever
+    having been validated. Each commit carries its own receipt and neither run
+    overwrites the other's."""
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0
+    before = _git("rev-parse", "HEAD", cwd=project)
+
+    (project / "fix.txt").write_text("a review fix\n")
+    _git("add", "fix.txt", cwd=project)
+    _git("commit", "-q", "-m", "the review fix", cwd=project)
+    after = _git("rev-parse", "HEAD", cwd=project)
+    assert before != after, "the second run must be at a different commit"
+
+    assert lane._cmd_run("sess-b", str(project)) == 0
+
+    assert _receipts(project) == sorted([f"{before}.json", f"{after}.json"])
+    receipts = project / ".pitcall" / "receipts"
+    assert json.loads((receipts / f"{before}.json").read_text())["sha"] == before
+    assert json.loads((receipts / f"{after}.json").read_text())["sha"] == after
+
+
+# A commit made from inside the `validate` step itself. Identity is passed in
+# the environment and signing is disabled per-command, so this builds on a
+# machine with no global git config — the same reason `_GIT_ID` exists.
+_COMMIT_DURING_VALIDATE = (
+    "GIT_AUTHOR_NAME='lane tests' GIT_AUTHOR_EMAIL=lane@example.invalid "
+    "GIT_COMMITTER_NAME='lane tests' GIT_COMMITTER_EMAIL=lane@example.invalid "
+    "git -c commit.gpgsign=false commit -q --allow-empty "
+    "-m 'a fix landing while validate was still running'"
+)
+
+
+def test_a_commit_landing_during_the_run_leaves_no_receipt(
+        tmp_path, monkeypatch, capsys):
+    """The window the lock does not close.
+
+    The lane excludes other SESSIONS; it says nothing about the holder's own
+    worktree changing underneath it. Read the sha after `validate` returns and a
+    commit made while it ran is certified — approval inherited by a change
+    nothing checked, which is the one failure this receipt exists to prevent,
+    arriving by the back door.
+
+    Neither commit may be written. `validate` began at one and ended at another,
+    so it observed a state that is neither: the earlier sha approves code that
+    was replaced mid-run, and the later one approves code that was never
+    validated. There is no honest fallback, which is why the assertion below
+    names BOTH shas rather than settling for "some receipt is wrong".
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true",
+                                validate=_COMMIT_DURING_VALIDATE)
+    monkeypatch.chdir(project)
+    before = _git("rev-parse", "HEAD", cwd=project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0, \
+        "validate itself succeeded — the run is not a failure, it is unattestable"
+
+    after = _git("rev-parse", "HEAD", cwd=project)
+    assert before != after, \
+        "HEAD did not move during the run — this test proves nothing"
+
+    assert _receipts(project) == []
+    receipts = project / ".pitcall" / "receipts"
+    assert not (receipts / f"{before}.json").exists(), "certified the pre-run commit"
+    assert not (receipts / f"{after}.json").exists(), "certified a commit never validated"
+    assert "HEAD moved during the run" in capsys.readouterr().out, \
+        "refusing silently leaves a session hunting for a file nothing wrote"
+
+
+def test_the_receipt_body_is_the_shape_the_merge_step_reads(tmp_path, monkeypatch):
+    """The body is a contract shared with the step that reads it, so it is
+    pinned whole rather than field by field: a spelling that drifts before the
+    second consumer exists is a contract nobody will trust afterwards."""
+    project = _repo_with_config(tmp_path / "project",
+                                bringup="true", validate="true")
+    monkeypatch.chdir(project)
+    assert lane._cmd_run("sess-a", str(project)) == 0
+
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
+
+    assert set(body) == {"sha", "branch", "session", "worktree",
+                         "validate_command", "validated_at"}
+    assert body["sha"] == sha
+    assert body["branch"] == "main"
+    assert body["session"] == "sess-a"
+    assert body["worktree"] == str(project)
+    assert body["validate_command"] == "true"
+    assert isinstance(body["validated_at"], float)
+
+
+def test_a_detached_head_records_a_null_branch_rather_than_the_word_head(
+        tmp_path, monkeypatch):
+    """`rev-parse --abbrev-ref HEAD` answers the literal string "HEAD" when the
+    head is detached, and a receipt recording that as a branch name is a
+    plausible-looking lie. Detached is a real state for a checkout under
+    validation, so the honest answer is no branch at all."""
+    project = _repo_with_config(tmp_path / "project",
+                                bringup="true", validate="true")
+    _git("checkout", "-q", "--detach", cwd=project)
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
+    assert body["branch"] is None
+    assert body["sha"] == sha, "a detached head is still a perfectly good commit"
+
+
+def test_a_checkout_in_another_project_is_refused_before_the_lane_is_taken(
+        tmp_path, monkeypatch):
+    """The lane comes from the caller's cwd and the checkout from `--worktree`,
+    which is what lets a session in the main checkout validate a linked
+    worktree. Nothing stopped that pair naming two different PROJECTS: holding
+    one project's lane while validating another, and filing the receipt where
+    the second project's merge step will never look.
+
+    Refused before the lane is taken, not after — taking it and then refusing
+    would block every other session in the caller's project for as long as it
+    took to notice.
+    """
+    here = _repo_with_config(tmp_path / "here", bringup="true", validate="true")
+    elsewhere = _repo_with_config(tmp_path / "elsewhere", bringup="true", validate="true")
+    assert here != elsewhere, "the two projects must differ, or this proves nothing"
+
+    monkeypatch.chdir(here)
+    assert lane._cmd_run("sess-a", str(elsewhere)) == lane.EXIT_WRONG_PROJECT
+
+    # No receipt anywhere: not in the lane we hold, not in the project we would
+    # have validated.
+    assert _receipts(here) == []
+    assert _receipts(elsewhere) == []
+    # The lane was never taken, so nobody in `here` is blocked and no waiter was
+    # enqueued behind a run that never started.
+    assert lane.status()["holder"] is None
+    assert lane.status()["waiting"] == []
+    # And the other project was left entirely alone.
+    assert not (elsewhere / ".pitcall").exists()
+
+
+def test_an_uncommitted_change_to_a_tracked_file_leaves_no_receipt(
+        tmp_path, monkeypatch, capsys):
+    """A commit is a state, not a name.
+
+    Nothing moves here: HEAD is the same commit before and after, the lane is
+    held throughout, and every other guard passes. The tree simply is not what
+    the commit says it is — so `validate` runs against content no commit
+    contains, passes, and the receipt certifies a commit `validate` was never
+    given and would have FAILED on. The file is committed saying one thing and
+    edited to say another, which is the shape that makes the lie observable:
+    the run's verdict inverts depending on which state you believe it read.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true",
+                                validate='test "$(cat marker.txt)" = pass')
+    (project / "marker.txt").write_text("fail\n")
+    _git("add", "marker.txt", cwd=project)
+    _git("commit", "-q", "-m", "the committed state, which validate rejects", cwd=project)
+    # The uncommitted edit that makes validate pass.
+    (project / "marker.txt").write_text("pass\n")
+
+    monkeypatch.chdir(project)
+    sha = _git("rev-parse", "HEAD", cwd=project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0, \
+        "validate passed — on a state that is in no commit"
+    assert _git("rev-parse", "HEAD", cwd=project) == sha, \
+        "HEAD must NOT move — the other guards would mask what this one tests"
+
+    assert _receipts(project) == []
+    assert not (project / ".pitcall" / "receipts" / f"{sha}.json").exists()
+    out = capsys.readouterr().out
+    assert "uncommitted changes to tracked files" in out
+    assert "marker.txt" in out, "a session told only 'dirty' has to go and look"
+
+
+def test_an_untracked_file_does_not_block_a_receipt(tmp_path, monkeypatch):
+    """The other side of the same decision, pinned so it is not widened by
+    accident.
+
+    `-uno`. A scratch file, an editor backup, a build artifact nobody tracks —
+    none is part of any commit's state, so none makes the receipt's claim false.
+    A guard that fires on noise is a guard someone switches off, and the next
+    reader tempted to drop the flag should fail this test rather than discover
+    the consequence in a lane that refuses every run.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    (project / "scratch.log").write_text("noise nobody tracks\n")
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    assert _receipts(project) == [f"{sha}.json"]
+
+
+def test_a_commit_landing_during_bringup_leaves_no_receipt(tmp_path, monkeypatch):
+    """Which side of `bringup` the capture happens on.
+
+    `bringup` builds from the working tree too, so the whole run has to sit on
+    one commit. Capture between the steps instead of before them and this is
+    certified: the sha read would be the post-bringup one, matching itself
+    afterwards, with `validate` having tested a bring-up made from the earlier
+    commit. Nothing else in the suite distinguishes the two positions, which is
+    why the docstring's claim needs this test and not just the wording.
+    """
+    project = _repo_with_config(tmp_path / "project",
+                                bringup=_COMMIT_DURING_VALIDATE, validate="true")
+    monkeypatch.chdir(project)
+    before = _git("rev-parse", "HEAD", cwd=project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0
+    after = _git("rev-parse", "HEAD", cwd=project)
+    assert before != after, "bringup did not commit — this test proves nothing"
+
+    assert _receipts(project) == []
+
+
+def test_shas_are_compared_in_full_not_by_a_short_prefix(tmp_path, monkeypatch):
+    """Two commits sharing a seven-character prefix are not constructible in a
+    test — a collision needs commits by the ten thousand — so the comparison is
+    exercised directly with the pair a real repository cannot cheaply provide.
+
+    Mocked at the git boundary and nowhere deeper: `_worktree_sha` is the client
+    call, and what is under test is the comparison, not git's answer.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    monkeypatch.chdir(project)
+
+    before = "abc1234" + "a" * 33
+    after = "abc1234" + "b" * 33
+    assert before[:7] == after[:7] and before != after and len(before) == len(after) == 40
+
+    monkeypatch.setattr(lane, "_worktree_sha", lambda worktree: after)
+    lane._record_receipt("sess-a", str(project),
+                         lane._Checkout(sha=before, branch="main", dirt=None), "true")
+
+    assert _receipts(project) == [], "compared by prefix, these two look like one commit"
+
+
+def test_the_branch_recorded_is_the_one_validation_ran_on(tmp_path, monkeypatch):
+    """`branch` is documented as the branch at VALIDATION time.
+
+    A run can switch branches without moving the sha, so a branch read when the
+    receipt is written describes the checkout afterwards rather than the one
+    that was validated. Nothing keys on the field, which is exactly why it would
+    have gone on being wrong unnoticed.
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true",
+                                validate="git checkout -q other")
+    _git("branch", "other", cwd=project)     # same commit, different name
+    monkeypatch.chdir(project)
+
+    assert lane._cmd_run("sess-a", str(project)) == 0
+    assert _git("symbolic-ref", "--short", "HEAD", cwd=project) == "other", \
+        "the run did not switch branches — this test proves nothing"
+
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
+    assert body["branch"] == "main"
+
+
+def test_a_receipt_that_cannot_be_written_still_hands_the_lane_off(
+        tmp_path, monkeypatch, capsys):
+    """A lost receipt costs one re-run; a lost waiter costs a session.
+
+    `release()` pops the next waiter off the queue in the `finally`, and the
+    print naming it is the only thing that wakes that session. An exception
+    escaping the receipt write skips that print, so the waiter is gone from the
+    queue AND never told — waiting forever on a lane that is free, with nothing
+    anywhere reporting the loss. The receipt write is new code on that path,
+    which is what makes this reachable.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("running as root: file permissions do not deny the write")
+
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    monkeypatch.chdir(project)
+    receipts = lane.receipts_dir()
+    # A waiter that must be handed off to no matter what happens above it.
+    lane._write_json(lane.lane_dir() / lane.QUEUE,
+                     [{"session": "sess-waiter", "worktree": "/wt/w", "queued_at": 0.0}])
+
+    receipts.chmod(0o500)
+    try:
+        assert lane._cmd_run("sess-a", str(project)) == 0
+    finally:
+        receipts.chmod(0o700)   # or pytest cannot clean the directory up
+
+    out = capsys.readouterr().out
+    assert "receipt could not be written" in out
+    assert "HAND OFF TO: sess-waiter" in out, "the waiter was dropped in silence"
+    assert _receipts(project) == [], "fail closed: no receipt means the merge refuses"
+    assert lane.status()["holder"] is None, "the lane must still be released"
+
+
 # --- Real concurrency ----------------------------------------------------
 #
 # Everything above is single-process: monkeypatching lane_dir and calling
@@ -832,3 +1257,35 @@ def test_concurrent_enqueue_behind_held_lane_all_entries_survive(tmp_path, monke
         want = {f"sess-{i}" for i in range(n)}
         assert got == want, f"round {round_}: lost entries — got {got}, want {want}"
         holder.release()
+
+
+def test_a_worktree_whose_status_cannot_be_read_leaves_no_receipt(
+        tmp_path, monkeypatch, capsys):
+    """The dirt probe must fail CLOSED, like the sha probe beside it.
+
+    `_worktree_dirt` used to answer None — clean — whenever `git status`
+    exited non-zero, justified by "the sha probe already refuses that case".
+    That is true only for *not a repository*. A corrupt index is the
+    counterexample: `status` fails while `rev-parse HEAD` succeeds, so the run
+    reached the receipt with the dirt guard never having looked at anything,
+    and wrote a receipt asserting a tree state nothing had checked.
+
+    No ordinary trigger for it was found, so this is about direction rather
+    than likelihood: it is the wrong failure direction in the one place the
+    whole guarantee rests. A guard that cannot see must not report "clean".
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    # The asymmetry, constructed: status cannot read this, rev-parse never
+    # touches it.
+    (project / ".git" / "index").write_bytes(b"GARBAGE-NOT-AN-INDEX")
+    assert _git("rev-parse", "HEAD", cwd=project) == sha, \
+        "rev-parse must still answer, or this tests the sha guard instead"
+
+    monkeypatch.chdir(project)
+    assert lane._cmd_run("sess-a", str(project)) == 0
+
+    assert _receipts(project) == []
+    out = capsys.readouterr().out
+    assert "could not read" in out.lower(), \
+        "say the tree could not be READ, not that it was dirty — they are different facts"

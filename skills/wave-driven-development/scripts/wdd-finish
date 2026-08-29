@@ -18,20 +18,31 @@
 # "persist until the final PR"; nothing then deleted them. Measured on one
 # repository: 33 task branches on disk, 20 of them already merged.
 #
-# It does NOT merge the PR. That stays a human decision, as it is everywhere
-# else in this workflow.
+# `ship` does NOT merge. `merge` is a separate invocation, and it lands a PR on
+# EVIDENCE rather than on attention: it refuses unless the lane left a receipt
+# for the exact commit the PR is about to merge. What it replaces is a human
+# remembering that the branch was validated -- a bound that holds until the
+# first time it does not, with nothing observing the failure.
 #
 # Usage:
 #   wdd-finish check   PLAN_FILE   # verify only, no side effects
 #   wdd-finish ship    PLAN_FILE   # check, push, open PR
+#   wdd-finish merge   PLAN_FILE   # require a lane receipt for the PR's head
+#                                  # sha, wait for green, merge server-side,
+#                                  # fast-forward the main checkout
 #   wdd-finish cleanup PLAN_FILE   # AFTER the PR merges: branches + worktrees + workspace
 #
-# Exit: 0 ok | 1 verification failed | 2 usage or wrong location
+# Exit: 0 ok | 1 verification failed, or merge refused (nothing landed)
+#       2 usage or wrong location
+#       3 the required check did not conclude within the bound; nothing landed
+#       4 MERGED, but the main checkout could not be fast-forwarded -- the sync
+#         is the half that failed, and a caller must be able to tell which
+
 set -Eeuo pipefail
 
 CMD="${1:-}"; PLAN="${2:-}"
-case "$CMD" in check|ship|cleanup) ;; *)
-  sed -n '/^# Usage:/,/^# Exit:/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+case "$CMD" in check|ship|merge|cleanup) ;; *)
+  sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
 [ -n "$PLAN" ] || { echo "wdd-finish: PLAN_FILE required" >&2; exit 2; }
 
@@ -87,6 +98,54 @@ require_base_branch() {
     echo "  task branches -- the only copy of their work -- on it." >&2
     exit 1
   fi
+}
+
+# The name of the check that gates a merge, READ FROM THE PROJECT CONFIG for
+# the same reason as the base branch: this plugin is generic and a check name
+# it invented is a check that never appears in any rollup. That failure is
+# quiet in the worst way -- "never created" and "still running" are the same
+# observation from outside, so a guessed name does not refuse, it waits, and
+# then reports slow CI.
+require_check_name() {
+  if ! CHECK="$("$HERE/project-config" --scalar required_check)"; then
+    echo "wdd-finish: cannot read required_check from the project config." >&2
+    echo "  Refusing rather than guessing: a name nobody configured names a" >&2
+    echo "  check that never appears, and an absent check is indistinguishable" >&2
+    echo "  from a slow one -- so the guess would end in a timeout that reads" >&2
+    echo "  like CI being slow rather than like a misconfiguration." >&2
+    exit 1
+  fi
+}
+
+# Where `lane run` files what it validated.
+#
+# `lane.receipts_dir()` ITSELF, not a re-derivation of it. An earlier version
+# imported `shared_root()` and re-appended `.pitcall/receipts` by hand, with a
+# comment saying to keep the two in step -- but nothing enforced that comment,
+# and the drift it invited fails in the silent-safe direction: a reader looking
+# in a directory nothing writes to finds no receipt and reports every commit as
+# unvalidated. Nobody debugs a tool that is merely refusing too much.
+#
+# The same reasoning one level down is why the lane's own resolution is used at
+# all rather than `dirname <git-common-dir>`: in a worktree of a submodule that
+# local answer lands INSIDE the superproject's git directory, while the lane
+# climbs out and files beside the superproject itself.
+#
+# Calling it CREATES the directory when absent, which `lane_dir()` has always
+# done. Harmless on this path -- the lane creates it on first run anyway, and
+# `.pitcall/` is machine-local -- but it is a write, so it is named here rather
+# than discovered.
+#
+# The path arithmetic is the SECOND copy of this plugin's layout in this
+# directory; `project-config` holds the first, one level deeper because it
+# starts from a file rather than from this directory. Move one, move both.
+receipts_dir() {
+  python3 - "$HERE" <<'PY'
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).resolve().parents[2] / "scripts"))
+import lane
+print(lane.receipts_dir())
+PY
 }
 
 fail=0
@@ -154,8 +213,527 @@ ship)
   note "IT RAN, and two branches can each add a differently-named migration claiming"
   note "the same number, which git merges cleanly and leaves broken. Require the"
   note "check green on a branch that is UP TO DATE with the base, plus whatever"
-  note "pre-merge gate the project provides."
-  note "Then merge on GitHub. This script never merges for you."
+  note "pre-merge gate the project provides -- branch protection is upstream of"
+  note "this script and is never routed around."
+  note "Then: run the lane on this exact commit, and 'wdd-finish merge $PLAN'."
+  note "The merge refuses without a receipt for the sha it is about to land, so"
+  note "any push after the lane run means running the lane again."
+  ;;
+
+merge)
+  require_base_branch
+  require_check_name
+  command -v gh >/dev/null 2>&1 || {
+    echo "wdd-finish: gh is not on PATH." >&2
+    echo "  This step merges SERVER-SIDE and has no local fallback: a local" >&2
+    echo "  'git merge' runs zero checks and moves HEAD in a checkout other" >&2
+    echo "  sessions are reading." >&2
+    exit 1; }
+
+  # The head guard has to exist before anything else is attempted. Without it
+  # this step merges whatever the head is at merge time, which is a different
+  # commit whenever anything was pushed during the wait -- and a SILENT
+  # fallback to that is strictly worse than refusing to run, because the guard
+  # being absent looks identical from outside to the guard passing.
+  #
+  # Probed by capability rather than by version number: the question is whether
+  # THIS binary takes the flag, and a version comparison answers a different
+  # one that happens to correlate.
+  #
+  # Captured and then matched, never piped into `grep -q`. `grep -q` exits at
+  # the first match, which SIGPIPEs the writer as soon as the help no longer
+  # fits the pipe buffer -- and under `pipefail` that failure is the
+  # pipeline's. Inert at today's 1916 bytes, and the day a `gh` ships longer
+  # help it would refuse on EVERY binary while reporting "yours is too old"
+  # about one that is not. A false negative that accuses the user's tooling is
+  # the worst shape a probe can fail in.
+  #
+  # UNCLOSABLE RESIDUAL: a gh that advertises the flag and ignores it merges
+  # unguarded, and no probe can detect a lying binary.
+  gh_help="$(gh pr merge --help 2>/dev/null || true)"
+  case "$gh_help" in
+    *--match-head-commit*) ;;
+    *)
+      echo "wdd-finish: this gh cannot pin a merge to a commit." >&2
+      echo "  'gh pr merge --match-head-commit' is required here and arrived in" >&2
+      echo "  gh 2.96. Refusing rather than merging without it: the flag is what" >&2
+      echo "  makes the receipt's guarantee survive the wait for checks, and a" >&2
+      echo "  merge that silently lost it is indistinguishable from a safe one." >&2
+      echo "  Upgrade gh, or merge on GitHub after re-running the lane." >&2
+      exit 1 ;;
+  esac
+
+  # -- 1. Which commit is actually going to land ---------------------------
+  # The PR's head as GitHub reports it NOW: not this checkout's HEAD, and not a
+  # sha resolved earlier in the run. They differ in exactly the case the gate
+  # below exists for -- a review fix pushed after the lane ran.
+  # gh's stderr is left to flow through rather than folded into the capture:
+  # its diagnosis is the useful part of a failure, and merging it into stdout
+  # would put a warning line inside the text about to be parsed as JSON.
+  if ! pr_json="$(gh pr view "$BRANCH" --json number,state,headRefOid,mergeStateStatus,baseRefName)"; then
+    echo "wdd-finish: no PR found for $BRANCH -- run 'ship' first." >&2
+    exit 1
+  fi
+  if ! pr_fields="$(python3 - "$pr_json" <<'PY'
+import json, re, sys
+
+# Every field is VALIDATED before it is printed, not merely checked for
+# truthiness. The caller reads these four lines with four `read`s, and a value
+# containing a newline would shift every later line by one -- while a value
+# that is only whitespace vanishes entirely, because `$( )` strips trailing
+# newlines and the caller's `read` then hits EOF and ends the run under
+# `set -e` with nothing said. Structure, not luck: what is printed here cannot
+# carry a newline because it is rebuilt from a restricted alphabet.
+try:
+    pr = json.loads(sys.argv[1])
+except ValueError:
+    sys.exit("wdd-finish: gh did not answer with JSON")
+if not isinstance(pr, dict):
+    sys.exit("wdd-finish: gh did not answer with a PR object")
+
+number = str(pr.get("number") or "")
+if not number.isdigit():
+    sys.exit(f"wdd-finish: gh reported no usable PR number ({number!r})")
+
+# 40 hex, checked rather than assumed: this value is interpolated into the
+# receipt's PATH, and it is also what gets pinned into the merge.
+sha = pr.get("headRefOid")
+if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+    sys.exit(f"wdd-finish: gh reported no usable head sha ({sha!r})")
+
+
+def enum(value):
+    """A GraphQL enum, or UNKNOWN. Rebuilt from [A-Z_] so it cannot be a
+    newline, an empty string, or anything else that would desynchronise the
+    caller's line-by-line read."""
+    return re.sub(r"[^A-Z_]", "", str(value or "").upper()) or "UNKNOWN"
+
+
+def refname(value):
+    """A branch name as one printable line, or UNKNOWN.
+
+    Control characters are stripped rather than tolerated: a git refname
+    cannot legally contain one, and a value that did would shift every later
+    line of this protocol. Anything left empty becomes UNKNOWN, which cannot
+    equal the configured base and therefore refuses.
+    """
+    text = "".join(ch for ch in str(value or "") if ch.isprintable())
+    return text.strip() or "UNKNOWN"
+
+
+print(number)
+print(sha)
+print(enum(pr.get("state")))
+print(enum(pr.get("mergeStateStatus")))
+print(refname(pr.get("baseRefName")))
+PY
+)"; then exit 1; fi
+  # Five reads against five lines. The guarantee that there ARE five, each
+  # single-line and non-empty, lives in the producer above and nowhere else --
+  # a short answer here would end the run under `set -e` with nothing said.
+  { read -r PR_NUM; read -r PR_SHA; read -r PR_STATE
+    read -r PR_MERGE_STATE; read -r PR_BASE; } <<< "$pr_fields"
+  [ "$PR_STATE" = "OPEN" ] || {
+    echo "wdd-finish: PR #$PR_NUM is $PR_STATE, not OPEN -- nothing to merge." >&2
+    exit 1; }
+  note "PR #$PR_NUM, head $PR_SHA, base $PR_BASE"
+
+  # The PR's own base, against the one every other step here uses. Retargeting
+  # happens on GitHub, where nothing in this checkout can observe it -- and the
+  # merge would land in one branch while step 5 fast-forwards the main checkout
+  # to another and prints "merged into $BASE", which is simply false about the
+  # branch a human is most likely to trust the sentence on.
+  if [ "$PR_BASE" != "$BASE" ]; then
+    echo "wdd-finish: PR #$PR_NUM targets '$PR_BASE', but this project's base is '$BASE'." >&2
+    echo "  Refusing: every other step here -- the fast-forward, the cleanup" >&2
+    echo "  ancestry test, the freshness argument -- is about '$BASE', and none" >&2
+    echo "  of them would be true of a merge into '$PR_BASE'." >&2
+    echo "  Retarget the PR, or fix default_branch in the project config." >&2
+    exit 1
+  fi
+
+  # Local HEAD against the commit that will actually land.
+  #
+  # Everything ABOVE this point -- every wave integrated, every task branch an
+  # ancestor of the plan branch -- was asserted against local HEAD. The merge
+  # lands $PR_SHA. A fix committed here and never pushed makes those different
+  # commits, and then the verification was about one commit while the report
+  # ("MERGED", exit 0) is about another. Nothing unvalidated lands, because the
+  # receipt still covers what GitHub merged -- but the operator is told the
+  # wrong thing, and `cleanup` refuses later for reasons that do not obviously
+  # lead back here.
+  LOCAL_HEAD="$(git rev-parse HEAD)"
+  if [ "$LOCAL_HEAD" != "$PR_SHA" ]; then
+    echo "wdd-finish: this checkout is not on the commit the PR would merge." >&2
+    echo "  here (verified above): $LOCAL_HEAD" >&2
+    echo "  the PR would merge:    $PR_SHA" >&2
+    echo "  Refusing: the checks above ran against the first and the merge" >&2
+    echo "  lands the second, so reporting MERGED would describe work this run" >&2
+    echo "  never examined." >&2
+    echo "  Push (or fetch) so the two agree, re-run the lane on that commit," >&2
+    echo "  then re-run this step." >&2
+    exit 1
+  fi
+
+  # -- 2. The receipt, BEFORE waiting on anything --------------------------
+  # Refusing here costs nothing. Refusing after the wait means having spent ten
+  # minutes on checks for a branch that could never have merged, so the order
+  # is part of the behaviour and not an implementation detail.
+  #
+  # EXISTENCE AT THE EXACT PATH IS THE VERDICT. The body is read below only to
+  # say something useful to a human; nothing about the decision depends on it.
+  if ! RECEIPTS="$(receipts_dir)"; then
+    echo "wdd-finish: cannot resolve the lane's receipts directory." >&2
+    exit 1
+  fi
+  RECEIPT="$RECEIPTS/$PR_SHA.json"
+  if [ ! -f "$RECEIPT" ]; then
+    echo "wdd-finish: no lane receipt for $PR_SHA -- refusing to merge." >&2
+    echo "  expected: $RECEIPT" >&2
+    others="$(ls -1 "$RECEIPTS" 2>/dev/null | grep -c '\.json$' || true)"
+    if [ "${others:-0}" != 0 ]; then
+      echo "  The lane has receipts for $others other commit(s) here, and none" >&2
+      echo "  of them is this one. That is the ordinary shape of it: validation" >&2
+      echo "  ran, and then another commit landed. A commit pushed after a lane" >&2
+      echo "  run does not inherit that run's approval -- which is the entire" >&2
+      echo "  reason a receipt is filed under a sha rather than under a branch." >&2
+    fi
+    echo "  A receipt is written only by a lane run whose validate PASSED" >&2
+    echo "  against this exact commit, in a clean tree, with HEAD unmoved. Run" >&2
+    echo "  the lane on the commit the PR will merge, then re-run this step." >&2
+    exit 1
+  fi
+  # The body, read for the message -- and checked for ONE thing beyond it: that
+  # it names the commit it is filed under.
+  #
+  # This does not move the verdict into the body, and the asymmetry is what
+  # keeps the contract intact: the check is ONE-DIRECTIONAL. It can turn a pass
+  # into a refusal; it can never turn a refusal into a pass. Existence at the
+  # path remains the only thing that permits anything.
+  #
+  # What it costs is a `cp` of one receipt onto another's name, or a symlink
+  # (`-f` follows one, so the path test alone reads that as present) -- and the
+  # realistic author of either is a session that has been refused twice and is
+  # looking for a way through, not an attacker.
+  #
+  # NOTHING FROM THE BODY CROSSES BACK INTO THIS SHELL. The only thing returned
+  # is an exit status, which is an integer and therefore cannot carry a
+  # newline; every message about the receipt is written by the reader that
+  # already holds the value. An earlier version returned a two-line
+  # status/detail protocol and guaranteed both lines non-empty *by value* --
+  # which `{"sha": "\n"}` disproved: the detail printed as a bare newline, `$( )`
+  # stripped it, the second `read` hit EOF, and `set -e` ended the run with an
+  # empty stderr. The refusal survived, but a refusal nobody can diagnose is
+  # the wrong shape for a gate whose entire subject is an untrusted file.
+  receipt_rc=0
+  python3 - "$RECEIPT" "$PR_SHA" <<'PY' || receipt_rc=$?
+import datetime, json, sys
+
+RECEIPT, WANTED = sys.argv[1], sys.argv[2]
+
+try:
+    receipt = json.loads(open(RECEIPT).read())
+    if not isinstance(receipt, dict):
+        raise ValueError("a receipt is a JSON object")
+except Exception as exc:
+    sys.stderr.write(
+        f"wdd-finish: the receipt at {RECEIPT} will not parse -- refusing to merge.\n"
+        f"  {type(exc).__name__}: {exc}\n"
+        "  A corrupt receipt is treated as an ABSENT one. It attests to\n"
+        "  nothing, and a file nobody can read must never be the thing that\n"
+        "  permits a merge.\n")
+    raise SystemExit(4)
+
+claimed = receipt.get("sha")
+if claimed != WANTED:
+    # !r, so a value made of whitespace is visible as one rather than
+    # silently rearranging the message it appears in.
+    sys.stderr.write(
+        f"wdd-finish: the receipt at {RECEIPT} names a different commit -- refusing to merge.\n"
+        f"  filed under: {WANTED}\n"
+        f"  body claims: {claimed!r}\n"
+        "  A receipt copied or symlinked onto another commit's name attests\n"
+        "  to the commit it was WRITTEN for, never to the one it was filed\n"
+        "  under. Run the lane on the commit the PR will merge.\n")
+    raise SystemExit(3)
+
+when = receipt.get("validated_at")
+try:
+    when = datetime.datetime.fromtimestamp(float(when)).isoformat(timespec="seconds")
+except (TypeError, ValueError):
+    when = "an unrecorded time"
+print("  receipt: validated at {} by session {!r} -- {!r}".format(
+    when, receipt.get("session"), receipt.get("validate_command")))
+PY
+  # 3 and 4 already explained themselves above; anything else is the reader
+  # failing rather than the receipt, and must not pass for a receipt that is
+  # merely absent.
+  case "$receipt_rc" in
+    0) ;;
+    3|4) exit 1 ;;
+    *) echo "wdd-finish: could not read the receipt at $RECEIPT (status $receipt_rc) -- refusing to merge." >&2
+       exit 1 ;;
+  esac
+
+  # -- 2b. Cannot merge at all -----------------------------------------------
+  # BEHIND and DIRTY only. `mergeStateStatus` is computed lazily, so UNKNOWN is
+  # ordinary, and BLOCKED merely means the checks this step is about to wait
+  # for have not passed yet -- refusing on either would refuse on nothing.
+  refuse_if_unmergeable() {
+    case "${1:-}" in
+      BEHIND)
+        echo "wdd-finish: PR #$PR_NUM is BEHIND $BASE -- refusing to merge." >&2
+        echo "  Merging now produces a merge commit combining two states that" >&2
+        echo "  were never validated together: the branch passed against the" >&2
+        echo "  base AS OF WHEN IT RAN, and two branches can each add a" >&2
+        echo "  differently-named migration claiming the same number, which git" >&2
+        echo "  merges cleanly and leaves broken." >&2
+        echo "  'require branches to be up to date' in branch protection covers" >&2
+        echo "  this, but NOTHING HERE CAN OBSERVE WHETHER IT IS ENABLED, so" >&2
+        echo "  this step does not assume it." >&2
+        echo "  Update the branch from $BASE. That changes its head sha, so" >&2
+        echo "  re-run the lane afterwards -- the receipt does not carry across." >&2
+        exit 1 ;;
+      DIRTY)
+        # The COMMON case, not the exotic one: measured 16 DIRTY to 4 BEHIND
+        # across 20 open PRs. Unguarded, a conflicting PR waited the full bound
+        # and then attempted a merge GitHub was always going to refuse -- half
+        # an hour spent to arrive at an inaccurate message.
+        echo "wdd-finish: PR #$PR_NUM has conflicts with $BASE -- refusing to merge." >&2
+        echo "  GitHub will not merge it in this state, so waiting for checks" >&2
+        echo "  would only spend the bound to arrive at the same answer." >&2
+        echo "  Resolve the conflict. That changes the head sha, so re-run the" >&2
+        echo "  lane afterwards -- the receipt does not carry across." >&2
+        exit 1 ;;
+    esac
+  }
+
+  # Read again once when the answer is UNKNOWN, because the FIRST view of a PR
+  # is the request that triggers the computation and is therefore the one least
+  # likely to know: measured, one batch over 20 open PRs answered UNKNOWN
+  # 20/20, and the identical query moments later returned 16 DIRTY and 4
+  # BEHIND. A guard that only ever reads the triggering request is frequently a
+  # no-op. This is still BEST EFFORT and is documented as such -- see SKILL.md;
+  # branch protection is what makes it airtight.
+  if [ "$PR_MERGE_STATE" = "UNKNOWN" ]; then
+    sleep "${WDD_MERGE_STATE_RETRY:-2}"
+    if reread="$(gh pr view "$BRANCH" --json mergeStateStatus)"; then
+      PR_MERGE_STATE="$(python3 - "$reread" <<'PY'
+import json, re, sys
+try:
+    data = json.loads(sys.argv[1])
+except ValueError:
+    data = {}
+value = data.get("mergeStateStatus") if isinstance(data, dict) else None
+# One token from a restricted alphabet, so nothing read here can desynchronise
+# or empty the caller's variable.
+print(re.sub(r"[^A-Z_]", "", str(value or "").upper()) or "UNKNOWN")
+PY
+)"
+    fi
+  fi
+  refuse_if_unmergeable "$PR_MERGE_STATE"
+
+  # -- 3. Wait for the required check, bounded -----------------------------
+  # Bounded because an unbounded wait is a session that never ends, and a
+  # timeout that reports "not merged" is recoverable by re-running while a
+  # merge on a check that never finished is not.
+  TIMEOUT="${WDD_CHECK_TIMEOUT:-1800}"
+  POLL="${WDD_CHECK_POLL:-20}"
+  deadline=$(( $(date +%s) + TIMEOUT ))
+  note "waiting for '$CHECK' (bound ${TIMEOUT}s, polling every ${POLL}s)"
+  while :; do
+    # An unreadable rollup is treated as PENDING, so a poll that fails keeps
+    # the wait going rather than merging or refusing on a transport error. Its
+    # stderr is deliberately NOT suppressed: a `gh` that is failing every poll
+    # would otherwise surface only as a timeout reading "the check is still
+    # running", which is the one explanation that is definitely wrong.
+    if ! rollup="$(gh pr view "$BRANCH" --json statusCheckRollup,mergeStateStatus)"; then
+      rollup=""
+    fi
+    poll="$(python3 - "$CHECK" "$rollup" <<'PY'
+import json, sys
+
+name = sys.argv[1]
+raw = sys.argv[2].strip()
+try:
+    data = json.loads(raw) if raw else {}
+except ValueError:
+    data = {}
+checks = data.get("statusCheckRollup") if isinstance(data, dict) else None
+
+def one(c):
+    """This entry's verdict, on its own."""
+    status = (c.get("status") or "").upper()
+    if status and status != "COMPLETED":
+        return "pending"
+    # Fail-closed on everything that is not an outright SUCCESS. SKIPPED,
+    # NEUTRAL, CANCELLED and TIMED_OUT all mean "did not pass", and a gate
+    # that reads any of them as permission is a gate in name only.
+    outcome = (c.get("conclusion") or c.get("state") or "").upper()
+    if outcome == "SUCCESS":
+        return "pass"
+    if outcome in ("", "PENDING", "EXPECTED"):
+        return "pending"
+    return "fail"
+
+
+# EVERY entry with this name, and the WORST of them wins. There is deliberately
+# no `break`.
+#
+# A name is not unique in a rollup: an external app's commit status can share a
+# workflow job's name, and two workflow files can each define a job called it.
+# Taking the first match made the verdict depend on ARRAY ORDER -- green listed
+# first and the run merged over a red or still-running check, unattended,
+# exit 0. Red-first was always correct, which is what let it survive testing:
+# the configuration that fails is a naming coincidence rather than a mistake
+# anyone would notice making, and this ships to arbitrary repositories.
+#
+# ABSENT from the rollup is PENDING, never a pass. A check that has not been
+# created yet and one that will never exist are the same observation from
+# here, and only the bound can tell them apart -- so wait, and never merge on
+# silence. An empty match set lands on the same answer for the same reason.
+seen = [one(c) for c in (checks or [])
+        if isinstance(c, dict) and (c.get("name") or c.get("context")) == name]
+if "fail" in seen:
+    verdict = "fail"
+elif "pending" in seen or not seen:
+    verdict = "pending"
+else:
+    verdict = "pass"
+
+# The base can move under a branch during a thirty-minute wait, and the head
+# guard cannot see that: the head has not moved. It rides on this call because
+# the call is already being made, and it outranks the check verdict -- a PR
+# that cannot merge should not keep being waited on.
+state = str((data.get("mergeStateStatus") or "") if isinstance(data, dict) else "").upper()
+if state in ("BEHIND", "DIRTY"):
+    verdict = state.lower()
+
+# EXACTLY ONE token, chosen from a closed vocabulary rather than derived from
+# the payload. The caller cases on this string, so anything shaped by untrusted
+# input would be untrusted input steering control flow -- and a value that is
+# empty or multi-line is how that goes wrong quietly rather than loudly.
+print(verdict if verdict in ("pass", "fail", "pending", "behind", "dirty") else "pending")
+PY
+)"
+    case "$poll" in
+      behind) refuse_if_unmergeable BEHIND ;;
+      dirty)  refuse_if_unmergeable DIRTY ;;
+      pass)   note "$CHECK: green"; break ;;
+      fail)
+        echo "wdd-finish: '$CHECK' is not green on PR #$PR_NUM -- refusing to merge." >&2
+        echo "  Nothing was merged. Fix the branch, re-run the lane against the" >&2
+        echo "  new commit -- the receipt is pinned to a sha and does not carry" >&2
+        echo "  forward -- and then re-run this step." >&2
+        exit 1 ;;
+    esac
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "wdd-finish: NOT MERGED -- '$CHECK' was still running when the ${TIMEOUT}s bound expired." >&2
+      echo "  Nothing was merged and nothing was changed. Re-run this step once" >&2
+      echo "  the check finishes." >&2
+      exit 3
+    fi
+    sleep "$POLL"
+  done
+
+  # -- 4. Merge, server-side ------------------------------------------------
+  # `--merge`, and the method is not a preference:
+  #   * squash and rebase MINT A NEW COMMIT, so what lands on the base is a sha
+  #     nothing ever validated -- the receipt's guarantee would stop at the PR
+  #     boundary, which is the one place it has to hold;
+  #   * `cleanup` gates task-branch DELETION on `--is-ancestor HEAD origin/BASE`,
+  #     and a new sha makes that permanently false, so every task branch would
+  #     be kept forever with no indication why.
+  #
+  # `--match-head-commit "$PR_SHA"` is the other half of the receipt, and it is
+  # not a nicety. The head sha was read before the wait; the wait can run for
+  # half an hour; and "checks are running, let me push the fix now" is the
+  # ordinary way of working, not an exotic sequence. Worse, the rollup reports
+  # checks for the CURRENT head, so a push mid-wait produces a green signal
+  # about a commit no receipt covers -- every signal agrees, and only the sha
+  # dissents. GitHub refuses the merge server-side if the head has moved.
+  #
+  # Re-reading `headRefOid` here instead would only NARROW the window, and a
+  # narrower race is the kind nobody reproduces afterwards.
+  note "merging PR #$PR_NUM server-side (--merge, pinned to $PR_SHA)"
+  if ! gh pr merge "$PR_NUM" --merge --match-head-commit "$PR_SHA"; then
+    echo "wdd-finish: gh refused the merge -- nothing landed." >&2
+    echo "  If it says the head branch was modified, that is this step working:" >&2
+    echo "  something was pushed while the checks ran, and the receipt covers" >&2
+    echo "  $PR_SHA rather than whatever is on the PR now. Re-run the lane on" >&2
+    echo "  the new commit, then re-run this step." >&2
+    echo "  Otherwise: branch protection sits upstream of this script and is" >&2
+    echo "  not routed around; whatever it objected to is settled on GitHub." >&2
+    exit 1
+  fi
+  note "MERGED: PR #$PR_NUM into $BASE"
+
+  # -- 5. Bring the main checkout level -------------------------------------
+  # The one place this script touches the shared checkout, and it is safe by
+  # construction rather than by care: `fetch` writes refs only, and `--ff-only`
+  # CANNOT create a commit -- it advances a pointer or it refuses. The refusal
+  # is the interesting half, and it is deliberately not repaired.
+  MAIN="$(git worktree list --porcelain | awk 'NR==1 && /^worktree /{print substr($0, 10)}')"
+  if [ -z "$MAIN" ] || [ ! -d "$MAIN" ]; then
+    echo "wdd-finish: MERGED, but the main checkout could not be located." >&2
+    exit 4
+  fi
+  main_branch="$(git -C "$MAIN" symbolic-ref --short HEAD 2>/dev/null || true)"
+  if [ "$main_branch" != "$BASE" ]; then
+    echo "wdd-finish: MERGED, but the main checkout is on '${main_branch:-a detached HEAD}', not '$BASE'." >&2
+    echo "  Left untouched: fast-forwarding whatever branch happens to be" >&2
+    echo "  checked out there would move a branch nobody asked about." >&2
+    exit 4
+  fi
+  if ! git -C "$MAIN" fetch --no-tags --quiet origin "$BASE"; then
+    # Explicit rather than letting `set -e` end the run silently: the merge has
+    # already happened, and a bare non-zero exit here reads like it did not.
+    echo "wdd-finish: MERGED, but 'git fetch origin $BASE' failed in $MAIN." >&2
+    echo "  The checkout is behind, not broken. Fetch and fast-forward it by hand." >&2
+    exit 4
+  fi
+  if git -C "$MAIN" merge --ff-only "origin/$BASE" >/dev/null 2>&1; then
+    note "main checkout fast-forwarded to origin/$BASE ($(git -C "$MAIN" rev-parse --short HEAD))"
+  else
+    echo "wdd-finish: MERGED, but the main checkout would NOT fast-forward." >&2
+    local_commits="$(git -C "$MAIN" log --oneline "origin/$BASE..$BASE" || true)"
+    if [ -n "$local_commits" ]; then
+      echo "  Local commits on $BASE that are not on origin/$BASE:" >&2
+      printf '%s\n' "$local_commits" | sed 's/^/    /' >&2
+    fi
+    dirt="$(git -C "$MAIN" status --porcelain -uno || true)"
+    if [ -n "$dirt" ]; then
+      echo "  Uncommitted changes to tracked files there:" >&2
+      printf '%s\n' "$dirt" | sed 's/^/    /' >&2
+    fi
+    echo "  NOT repaired, deliberately. This checkout is shared by every" >&2
+    echo "  session and authored in by none, so a local commit in it is itself" >&2
+    echo "  the bug -- and a merge here would mint one more and erase the" >&2
+    echo "  evidence of the thing that was supposed to be impossible." >&2
+    exit 4
+  fi
+
+  # -- 6. The project's refresh, best-effort --------------------------------
+  # Non-fatal by construction: the merge has already happened and a
+  # regeneration step failing cannot unwind it, so a failure here is reported
+  # and the run still succeeds. Read as a LIST, so "this project has none" is
+  # answered by the loop running zero times rather than by remembering to
+  # branch on it.
+  refresh="$("$HERE/project-config" refresh_commands || true)"
+  if [ -n "$refresh" ]; then
+    while IFS= read -r cmd; do
+      [ -n "$cmd" ] || continue
+      note "refresh: $cmd"
+      if ! ( cd "$MAIN" && bash -c "$cmd" ); then
+        note "refresh FAILED (non-fatal -- the merge stands): $cmd"
+      fi
+    done <<< "$refresh"
+  fi
+
+  echo ""
+  note "PR #$PR_NUM merged; $MAIN is level with origin/$BASE."
+  note "Then: wdd-finish cleanup $PLAN"
   ;;
 
 cleanup)
