@@ -729,7 +729,13 @@ and any push in between means running the lane again.
 `merge`, in order:
 
 1. resolves the PR for the branch and takes **the head sha GitHub reports now**
-   — not this checkout's HEAD, not a sha resolved earlier in the run;
+   — not this checkout's HEAD, not a sha resolved earlier in the run. It
+   refuses if the PR targets a base other than the config's `default_branch`
+   (retargeting happens on GitHub, where nothing here can see it), and if this
+   checkout's `HEAD` is not the commit the PR would merge — everything `check`
+   verified was verified against local `HEAD`, so a merge landing something
+   else means that verification was about the wrong commit, and reporting
+   *merged* would describe work this run never examined;
 2. checks the receipt for that sha **before waiting on anything**. Refusing
    early costs nothing; refusing after the wait means having spent ten minutes
    on checks for a branch that could never have merged;
@@ -738,7 +744,10 @@ and any push in between means running the lane again.
    and `WDD_CHECK_POLL`. A bound that expires reports *not merged, still
    running* and exits 3, having changed nothing. Anything that is not an
    outright success — failed, skipped, cancelled, or a check that never appears
-   — is not a pass;
+   — is not a pass. Where the name appears **more than once** in the rollup, an
+   external app's commit status colliding with a workflow job's name or two
+   workflow files each defining one, **every match is judged and the worst
+   wins**: a green entry listed first cannot carry a red or still-running one;
 4. merges with `gh pr merge --merge --match-head-commit <sha>`,
    **server-side**. A local `git merge` runs zero checks and moves HEAD in a
    checkout other sessions are reading. Not a squash: that mints a new commit,

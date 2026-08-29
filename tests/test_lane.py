@@ -1257,3 +1257,35 @@ def test_concurrent_enqueue_behind_held_lane_all_entries_survive(tmp_path, monke
         want = {f"sess-{i}" for i in range(n)}
         assert got == want, f"round {round_}: lost entries — got {got}, want {want}"
         holder.release()
+
+
+def test_a_worktree_whose_status_cannot_be_read_leaves_no_receipt(
+        tmp_path, monkeypatch, capsys):
+    """The dirt probe must fail CLOSED, like the sha probe beside it.
+
+    `_worktree_dirt` used to answer None — clean — whenever `git status`
+    exited non-zero, justified by "the sha probe already refuses that case".
+    That is true only for *not a repository*. A corrupt index is the
+    counterexample: `status` fails while `rev-parse HEAD` succeeds, so the run
+    reached the receipt with the dirt guard never having looked at anything,
+    and wrote a receipt asserting a tree state nothing had checked.
+
+    No ordinary trigger for it was found, so this is about direction rather
+    than likelihood: it is the wrong failure direction in the one place the
+    whole guarantee rests. A guard that cannot see must not report "clean".
+    """
+    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    sha = _git("rev-parse", "HEAD", cwd=project)
+    # The asymmetry, constructed: status cannot read this, rev-parse never
+    # touches it.
+    (project / ".git" / "index").write_bytes(b"GARBAGE-NOT-AN-INDEX")
+    assert _git("rev-parse", "HEAD", cwd=project) == sha, \
+        "rev-parse must still answer, or this tests the sha guard instead"
+
+    monkeypatch.chdir(project)
+    assert lane._cmd_run("sess-a", str(project)) == 0
+
+    assert _receipts(project) == []
+    out = capsys.readouterr().out
+    assert "could not read" in out.lower(), \
+        "say the tree could not be READ, not that it was dirty — they are different facts"

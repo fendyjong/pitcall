@@ -433,7 +433,7 @@ def gh(tmp_path, run):
     head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
     (d / "pr.json").write_text(json.dumps(
         {"number": 7, "state": "OPEN", "headRefOid": head,
-         "mergeStateStatus": "CLEAN"}))
+         "mergeStateStatus": "CLEAN", "baseRefName": "master"}))
     (d / "checks.json").write_text(rollup(("ci", "COMPLETED", "SUCCESS")))
     # What the PR's head is on the server right now. A test moves it to
     # simulate a push landing mid-wait.
@@ -457,7 +457,7 @@ def gh(tmp_path, run):
     }
 
 
-def set_pr_head(gh, sha, merge_state="CLEAN"):
+def set_pr_head(gh, sha, merge_state="CLEAN", base="master"):
     """Point the PR at `sha` — in BOTH places the stub reads.
 
     `pr.json` is what `gh pr view` answers; `current_head` is what the server
@@ -467,7 +467,7 @@ def set_pr_head(gh, sha, merge_state="CLEAN"):
     """
     (gh["dir"] / "pr.json").write_text(json.dumps(
         {"number": 7, "state": "OPEN", "headRefOid": sha,
-         "mergeStateStatus": merge_state}))
+         "mergeStateStatus": merge_state, "baseRefName": base}))
     (gh["dir"] / "current_head").write_text(sha)
 
 
@@ -685,10 +685,20 @@ def test_a_head_that_moves_during_the_wait_is_refused_not_merged(run, gh):
     kind nobody reproduces afterwards.
     """
     write_receipt(run, gh["head"])
+    # The fix is pushed from ELSEWHERE — another worktree, the web UI, a
+    # teammate — so this checkout's HEAD does not move. That is load-bearing
+    # rather than incidental: a fix committed *here* is caught earlier and more
+    # cheaply by the local-HEAD guard, and if this test let local HEAD move it
+    # would exercise that guard instead and stop saying anything at all about
+    # the head pin. Kept on a ref so the commit stays reachable.
     (run["plan_wt"] / "fix.txt").write_text("a review fix, never validated\n")
     commit_path(run["plan_wt"], "fix.txt", "UNVALIDATED review fix")
     moved = git("rev-parse", "HEAD", cwd=run["plan_wt"])
+    git("branch", "pushed-from-elsewhere", moved, cwd=run["plan_wt"])
+    git("reset", "-q", "--hard", "HEAD~1", cwd=run["plan_wt"])
     assert moved != gh["head"]
+    assert git("rev-parse", "HEAD", cwd=run["plan_wt"]) == gh["head"], \
+        "local HEAD must stay put, or this tests the wrong guard"
 
     # Pushed while the check was still running: pending, then the new head,
     # then green about it.
@@ -888,3 +898,81 @@ def test_an_unknown_merge_state_is_read_again_before_the_wait(run, gh):
     assert "behind" in r.stderr.lower()
     assert merges(gh) == []
     assert not [c for c in calls(gh) if "statusCheckRollup" in c]
+
+
+# ---------------------------------------------------------------------------
+# Final round. One fail-open, and three places the step reported something
+# other than what it did.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("checks,rc,expect", [
+    ((("ci", "COMPLETED", "SUCCESS"), ("ci", "COMPLETED", "FAILURE")), 1, "not green"),
+    ((("ci", "COMPLETED", "FAILURE"), ("ci", "COMPLETED", "SUCCESS")), 1, "not green"),
+    ((("ci", "COMPLETED", "SUCCESS"), ("ci", "IN_PROGRESS", None)), 3, "still running"),
+], ids=["green-then-red", "red-then-green", "green-then-running"])
+def test_a_duplicated_check_name_is_judged_by_its_worst_result(
+        run, gh, checks, rc, expect):
+    """A verdict that depended on ARRAY ORDER, and merged on the lucky one.
+
+    The parser took the first entry whose name matched and stopped, so a
+    repository where `required_check`'s name appears twice — an external app's
+    commit status colliding with a workflow job, or two workflow files each
+    with a job of that name — merged over a red or still-running check
+    whenever the green one happened to be listed first.
+
+    Red-first was always correct, which is exactly why this survives casual
+    testing: the configuration that fails is a naming coincidence, not a
+    mistake anyone would notice making. Both orders are asserted here for that
+    reason — one of them passing proves nothing about the other.
+    """
+    write_receipt(run, gh["head"])
+    (gh["dir"] / "checks.json").write_text(rollup(*checks))
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == rc, r.stdout + r.stderr
+    assert expect in r.stderr.lower()
+    assert merges(gh) == []
+
+
+def test_a_local_head_ahead_of_the_pr_is_refused_naming_both(run, gh):
+    """The verification above ran against a commit the merge will not land.
+
+    Everything before this point — every wave integrated, every task branch an
+    ancestor — is asserted against local `HEAD`. The merge lands `PR_SHA`. A
+    review fix committed locally and not pushed makes those different commits,
+    and the run would report MERGED, exit 0, and not contain the fix. Nothing
+    unvalidated lands, because the receipt still covers what GitHub merged —
+    but the operator is told the wrong thing, and `cleanup` refuses later for
+    reasons that do not obviously connect back to here.
+    """
+    write_receipt(run, gh["head"])
+    (run["plan_wt"] / "unpushed.txt").write_text("committed here, never pushed\n")
+    commit_path(run["plan_wt"], "unpushed.txt", "a fix that never left this checkout")
+    local = git("rev-parse", "HEAD", cwd=run["plan_wt"])
+    assert local != gh["head"]
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    out = r.stdout + r.stderr
+    assert local in out and gh["head"] in out, "name both, or the reader cannot act"
+    assert merges(gh) == []
+    assert not [c for c in calls(gh) if "statusCheckRollup" in c]
+
+
+def test_a_pr_retargeted_to_another_base_is_refused(run, gh):
+    """The base is read from the config; the PR carries its own.
+
+    Retargeting happens on GitHub, where nothing in this checkout can see it.
+    The merge would land in one branch while step 5 fast-forwarded the main
+    checkout to another and printed `merged into <the config's base>` — a
+    sentence that is simply false, about the branch a human is most likely to
+    trust it on.
+    """
+    write_receipt(run, gh["head"])
+    set_pr_head(gh, gh["head"], base="release-2")
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "release-2" in r.stderr and "master" in r.stderr
+    assert merges(gh) == []

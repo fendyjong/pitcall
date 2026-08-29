@@ -435,6 +435,13 @@ def _worktree_branch(worktree: str) -> str | None:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
+#: Marks a `_worktree_dirt` answer that means "could not look" rather than
+#: "looked and found changes". Both refuse, and they must not print the same
+#: sentence: one names files a session can go and commit, the other names a
+#: checkout that is broken.
+DIRT_UNREADABLE = "git status could not read the tree: "
+
+
 def _worktree_dirt(worktree: str) -> str | None:
     """Tracked changes absent from HEAD, or None when the tree matches it.
 
@@ -445,15 +452,23 @@ def _worktree_dirt(worktree: str) -> str | None:
     noise, and a guard that fires on noise is a guard someone switches off.
 
     Returns the porcelain text rather than a bool so the refusal can NAME what
-    was dirty; a session told only "the tree is dirty" has to go and look. A
-    checkout that is not a repository answers None here — clean — because the
-    sha probe already refuses that case, and duplicating the refusal would mean
-    two messages for one cause.
+    was dirty; a session told only "the tree is dirty" has to go and look.
+
+    **A failed `git status` is NOT clean.** This used to return None there, on
+    the argument that the sha probe already refuses that case — true only for
+    *not a repository*. A corrupt index is the counterexample: `status` fails
+    while `rev-parse HEAD` answers normally, so the run reached the receipt
+    with this guard never having looked at anything and certified a tree state
+    nothing had checked. The sha probe still fires first where it applies, so
+    a non-repository is diagnosed once, not twice. **"I could not look" must
+    never resolve to "nothing to see"** — the same rule the merge step applies
+    to an unreadable receipt, in the place the guarantee is actually created.
     """
     out = subprocess.run(["git", "-C", worktree, "status", "--porcelain", "-uno"],
                          capture_output=True, text=True)
     if out.returncode != 0:
-        return None
+        detail = out.stderr.strip().splitlines()
+        return DIRT_UNREADABLE + (detail[0] if detail else f"exit {out.returncode}")
     return out.stdout.strip() or None
 
 
@@ -517,6 +532,16 @@ def _record_receipt(session: str, worktree: str, before: _Checkout,
         # certifies a state `validate` was never given — and would have failed on,
         # in the case that matters. The same argument as the moved head, reached
         # without anything moving.
+        if before.dirt.startswith(DIRT_UNREADABLE):
+            # A different fact, so a different sentence. Telling a session its
+            # tree is dirty when the truth is that git cannot read the tree
+            # sends it looking for a file to commit that does not exist.
+            print(f"[lane] could not read the working tree at {worktree}:")
+            print(f"[lane]   {before.dirt}")
+            print(f"[lane] nothing confirmed that {before.sha} is what validate "
+                  "ran against — no receipt written. Repair the checkout, then "
+                  "re-run.")
+            return
         print(f"[lane] {worktree} had uncommitted changes to tracked files "
               "when the run began:")
         for line in before.dirt.splitlines():
@@ -619,8 +644,16 @@ def _cmd_run(session: str, worktree: str) -> int:
         # session may well want to test a dirty tree — but it cannot produce
         # evidence, and learning that after a ten-minute bring-up is learning it
         # too late to act on.
-        print(f"[lane] WARNING: {worktree} has uncommitted changes to tracked "
-              "files; this run cannot produce a receipt")
+        # Two causes, two sentences. Widening `dirt` to cover "could not
+        # look" made the single message wrong for half its cases, and
+        # "uncommitted changes" sends a session hunting for a file to commit
+        # that does not exist.
+        if before.dirt.startswith(DIRT_UNREADABLE):
+            print(f"[lane] WARNING: {worktree} cannot be read by git "
+                  f"({before.dirt}); this run cannot produce a receipt")
+        else:
+            print(f"[lane] WARNING: {worktree} has uncommitted changes to tracked "
+                  "files; this run cannot produce a receipt")
     try:
         for label in ("bringup", "validate"):
             command = cfg.get(label)

@@ -270,7 +270,7 @@ merge)
   # gh's stderr is left to flow through rather than folded into the capture:
   # its diagnosis is the useful part of a failure, and merging it into stdout
   # would put a warning line inside the text about to be parsed as JSON.
-  if ! pr_json="$(gh pr view "$BRANCH" --json number,state,headRefOid,mergeStateStatus)"; then
+  if ! pr_json="$(gh pr view "$BRANCH" --json number,state,headRefOid,mergeStateStatus,baseRefName)"; then
     echo "wdd-finish: no PR found for $BRANCH -- run 'ship' first." >&2
     exit 1
   fi
@@ -309,20 +309,71 @@ def enum(value):
     return re.sub(r"[^A-Z_]", "", str(value or "").upper()) or "UNKNOWN"
 
 
+def refname(value):
+    """A branch name as one printable line, or UNKNOWN.
+
+    Control characters are stripped rather than tolerated: a git refname
+    cannot legally contain one, and a value that did would shift every later
+    line of this protocol. Anything left empty becomes UNKNOWN, which cannot
+    equal the configured base and therefore refuses.
+    """
+    text = "".join(ch for ch in str(value or "") if ch.isprintable())
+    return text.strip() or "UNKNOWN"
+
+
 print(number)
 print(sha)
 print(enum(pr.get("state")))
 print(enum(pr.get("mergeStateStatus")))
+print(refname(pr.get("baseRefName")))
 PY
 )"; then exit 1; fi
-  # Four reads against four lines. The guarantee that there ARE four, each
+  # Five reads against five lines. The guarantee that there ARE five, each
   # single-line and non-empty, lives in the producer above and nowhere else --
   # a short answer here would end the run under `set -e` with nothing said.
-  { read -r PR_NUM; read -r PR_SHA; read -r PR_STATE; read -r PR_MERGE_STATE; } <<< "$pr_fields"
+  { read -r PR_NUM; read -r PR_SHA; read -r PR_STATE
+    read -r PR_MERGE_STATE; read -r PR_BASE; } <<< "$pr_fields"
   [ "$PR_STATE" = "OPEN" ] || {
     echo "wdd-finish: PR #$PR_NUM is $PR_STATE, not OPEN -- nothing to merge." >&2
     exit 1; }
-  note "PR #$PR_NUM, head $PR_SHA"
+  note "PR #$PR_NUM, head $PR_SHA, base $PR_BASE"
+
+  # The PR's own base, against the one every other step here uses. Retargeting
+  # happens on GitHub, where nothing in this checkout can observe it -- and the
+  # merge would land in one branch while step 5 fast-forwards the main checkout
+  # to another and prints "merged into $BASE", which is simply false about the
+  # branch a human is most likely to trust the sentence on.
+  if [ "$PR_BASE" != "$BASE" ]; then
+    echo "wdd-finish: PR #$PR_NUM targets '$PR_BASE', but this project's base is '$BASE'." >&2
+    echo "  Refusing: every other step here -- the fast-forward, the cleanup" >&2
+    echo "  ancestry test, the freshness argument -- is about '$BASE', and none" >&2
+    echo "  of them would be true of a merge into '$PR_BASE'." >&2
+    echo "  Retarget the PR, or fix default_branch in the project config." >&2
+    exit 1
+  fi
+
+  # Local HEAD against the commit that will actually land.
+  #
+  # Everything ABOVE this point -- every wave integrated, every task branch an
+  # ancestor of the plan branch -- was asserted against local HEAD. The merge
+  # lands $PR_SHA. A fix committed here and never pushed makes those different
+  # commits, and then the verification was about one commit while the report
+  # ("MERGED", exit 0) is about another. Nothing unvalidated lands, because the
+  # receipt still covers what GitHub merged -- but the operator is told the
+  # wrong thing, and `cleanup` refuses later for reasons that do not obviously
+  # lead back here.
+  LOCAL_HEAD="$(git rev-parse HEAD)"
+  if [ "$LOCAL_HEAD" != "$PR_SHA" ]; then
+    echo "wdd-finish: this checkout is not on the commit the PR would merge." >&2
+    echo "  here (verified above): $LOCAL_HEAD" >&2
+    echo "  the PR would merge:    $PR_SHA" >&2
+    echo "  Refusing: the checks above ran against the first and the merge" >&2
+    echo "  lands the second, so reporting MERGED would describe work this run" >&2
+    echo "  never examined." >&2
+    echo "  Push (or fetch) so the two agree, re-run the lane on that commit," >&2
+    echo "  then re-run this step." >&2
+    exit 1
+  fi
 
   # -- 2. The receipt, BEFORE waiting on anything --------------------------
   # Refusing here costs nothing. Refusing after the wait means having spent ten
@@ -511,31 +562,45 @@ except ValueError:
     data = {}
 checks = data.get("statusCheckRollup") if isinstance(data, dict) else None
 
+def one(c):
+    """This entry's verdict, on its own."""
+    status = (c.get("status") or "").upper()
+    if status and status != "COMPLETED":
+        return "pending"
+    # Fail-closed on everything that is not an outright SUCCESS. SKIPPED,
+    # NEUTRAL, CANCELLED and TIMED_OUT all mean "did not pass", and a gate
+    # that reads any of them as permission is a gate in name only.
+    outcome = (c.get("conclusion") or c.get("state") or "").upper()
+    if outcome == "SUCCESS":
+        return "pass"
+    if outcome in ("", "PENDING", "EXPECTED"):
+        return "pending"
+    return "fail"
+
+
+# EVERY entry with this name, and the WORST of them wins. There is deliberately
+# no `break`.
+#
+# A name is not unique in a rollup: an external app's commit status can share a
+# workflow job's name, and two workflow files can each define a job called it.
+# Taking the first match made the verdict depend on ARRAY ORDER -- green listed
+# first and the run merged over a red or still-running check, unattended,
+# exit 0. Red-first was always correct, which is what let it survive testing:
+# the configuration that fails is a naming coincidence rather than a mistake
+# anyone would notice making, and this ships to arbitrary repositories.
+#
 # ABSENT from the rollup is PENDING, never a pass. A check that has not been
 # created yet and one that will never exist are the same observation from
 # here, and only the bound can tell them apart -- so wait, and never merge on
-# silence.
-verdict = "pending"
-for c in checks or []:
-    if not isinstance(c, dict):
-        continue
-    if (c.get("name") or c.get("context")) != name:
-        continue
-    status = (c.get("status") or "").upper()
-    if status and status != "COMPLETED":
-        verdict = "pending"
-    else:
-        # Fail-closed on everything that is not an outright SUCCESS. SKIPPED,
-        # NEUTRAL, CANCELLED and TIMED_OUT all mean "did not pass", and a gate
-        # that reads any of them as permission is a gate in name only.
-        outcome = (c.get("conclusion") or c.get("state") or "").upper()
-        if outcome == "SUCCESS":
-            verdict = "pass"
-        elif outcome in ("", "PENDING", "EXPECTED"):
-            verdict = "pending"
-        else:
-            verdict = "fail"
-    break
+# silence. An empty match set lands on the same answer for the same reason.
+seen = [one(c) for c in (checks or [])
+        if isinstance(c, dict) and (c.get("name") or c.get("context")) == name]
+if "fail" in seen:
+    verdict = "fail"
+elif "pending" in seen or not seen:
+    verdict = "pending"
+else:
+    verdict = "pass"
 
 # The base can move under a branch during a thirty-minute wait, and the head
 # guard cannot see that: the head has not moved. It rides on this call because
