@@ -760,12 +760,25 @@ is the kind nobody reproduces afterwards. A `gh` too old for the flag (it
 arrived in 2.96) makes `merge` refuse rather than merge unguarded — a guard
 that is silently absent looks exactly like a guard that passed.
 
-**A PR that is `BEHIND` its base is refused**, before any waiting. Merging one
-produces a merge commit combining two states nothing validated — the
-migration-number hazard described below. `require branches to be up to date`
-covers it, but nothing here can observe whether a project enabled that, so this
-step does not assume it. The remedy is to update the branch, which changes its
-head sha, so the lane has to run again: the receipt does not carry across.
+**A PR that is `BEHIND` its base, or that has conflicts (`DIRTY`), is
+refused** — checked before the wait and again on every poll. Merging a `BEHIND`
+one produces a merge commit combining two states nothing validated, the
+migration-number hazard described below; a `DIRTY` one GitHub will not merge at
+all, so waiting on it only spends the bound to arrive at the same answer.
+`DIRTY` is the commoner of the two — measured 16 to 4 across 20 open PRs.
+Either remedy changes the head sha, so the lane has to run again: the receipt
+does not carry across.
+
+**That guard is best-effort, and the reason is GitHub's rather than this
+script's.** `mergeStateStatus` is computed lazily, and the first view of a PR is
+the request that *triggers* the computation: measured, one batch over 20 open
+PRs answered `UNKNOWN` for all 20, while the identical query moments later
+returned real values. `merge` therefore re-reads once, after a short pause, when
+the first answer is `UNKNOWN` — but **a PR whose checks are already green can
+still be merged with neither read having seen a computed value**, because the
+poll loop may run only once and see `UNKNOWN` too. Branch protection is what
+makes this airtight. This step narrows the window; it does not replace it, and
+nothing here can observe whether a project has that protection enabled.
 
 The fast-forward is the one place any of this touches the shared checkout, and
 it is safe by construction rather than by care: `git merge --ff-only` cannot

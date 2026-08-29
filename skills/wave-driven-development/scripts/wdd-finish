@@ -239,15 +239,29 @@ merge)
   # Probed by capability rather than by version number: the question is whether
   # THIS binary takes the flag, and a version comparison answers a different
   # one that happens to correlate.
-  if ! gh pr merge --help 2>/dev/null | grep -q -- "--match-head-commit"; then
-    echo "wdd-finish: this gh cannot pin a merge to a commit." >&2
-    echo "  'gh pr merge --match-head-commit' is required here and arrived in" >&2
-    echo "  gh 2.96. Refusing rather than merging without it: the flag is what" >&2
-    echo "  makes the receipt's guarantee survive the wait for checks, and a" >&2
-    echo "  merge that silently lost it is indistinguishable from a safe one." >&2
-    echo "  Upgrade gh, or merge on GitHub after re-running the lane." >&2
-    exit 1
-  fi
+  #
+  # Captured and then matched, never piped into `grep -q`. `grep -q` exits at
+  # the first match, which SIGPIPEs the writer as soon as the help no longer
+  # fits the pipe buffer -- and under `pipefail` that failure is the
+  # pipeline's. Inert at today's 1916 bytes, and the day a `gh` ships longer
+  # help it would refuse on EVERY binary while reporting "yours is too old"
+  # about one that is not. A false negative that accuses the user's tooling is
+  # the worst shape a probe can fail in.
+  #
+  # UNCLOSABLE RESIDUAL: a gh that advertises the flag and ignores it merges
+  # unguarded, and no probe can detect a lying binary.
+  gh_help="$(gh pr merge --help 2>/dev/null || true)"
+  case "$gh_help" in
+    *--match-head-commit*) ;;
+    *)
+      echo "wdd-finish: this gh cannot pin a merge to a commit." >&2
+      echo "  'gh pr merge --match-head-commit' is required here and arrived in" >&2
+      echo "  gh 2.96. Refusing rather than merging without it: the flag is what" >&2
+      echo "  makes the receipt's guarantee survive the wait for checks, and a" >&2
+      echo "  merge that silently lost it is indistinguishable from a safe one." >&2
+      echo "  Upgrade gh, or merge on GitHub after re-running the lane." >&2
+      exit 1 ;;
+  esac
 
   # -- 1. Which commit is actually going to land ---------------------------
   # The PR's head as GitHub reports it NOW: not this checkout's HEAD, and not a
@@ -261,19 +275,49 @@ merge)
     exit 1
   fi
   if ! pr_fields="$(python3 - "$pr_json" <<'PY'
-import json, sys
+import json, re, sys
+
+# Every field is VALIDATED before it is printed, not merely checked for
+# truthiness. The caller reads these four lines with four `read`s, and a value
+# containing a newline would shift every later line by one -- while a value
+# that is only whitespace vanishes entirely, because `$( )` strips trailing
+# newlines and the caller's `read` then hits EOF and ends the run under
+# `set -e` with nothing said. Structure, not luck: what is printed here cannot
+# carry a newline because it is rebuilt from a restricted alphabet.
 try:
     pr = json.loads(sys.argv[1])
 except ValueError:
     sys.exit("wdd-finish: gh did not answer with JSON")
-if not isinstance(pr, dict) or not pr.get("number") or not pr.get("headRefOid"):
-    sys.exit("wdd-finish: gh reported no PR number / head sha")
-print(pr["number"])
-print(pr["headRefOid"])
-print(pr.get("state") or "UNKNOWN")
-print(pr.get("mergeStateStatus") or "UNKNOWN")
+if not isinstance(pr, dict):
+    sys.exit("wdd-finish: gh did not answer with a PR object")
+
+number = str(pr.get("number") or "")
+if not number.isdigit():
+    sys.exit(f"wdd-finish: gh reported no usable PR number ({number!r})")
+
+# 40 hex, checked rather than assumed: this value is interpolated into the
+# receipt's PATH, and it is also what gets pinned into the merge.
+sha = pr.get("headRefOid")
+if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+    sys.exit(f"wdd-finish: gh reported no usable head sha ({sha!r})")
+
+
+def enum(value):
+    """A GraphQL enum, or UNKNOWN. Rebuilt from [A-Z_] so it cannot be a
+    newline, an empty string, or anything else that would desynchronise the
+    caller's line-by-line read."""
+    return re.sub(r"[^A-Z_]", "", str(value or "").upper()) or "UNKNOWN"
+
+
+print(number)
+print(sha)
+print(enum(pr.get("state")))
+print(enum(pr.get("mergeStateStatus")))
 PY
 )"; then exit 1; fi
+  # Four reads against four lines. The guarantee that there ARE four, each
+  # single-line and non-empty, lives in the producer above and nowhere else --
+  # a short answer here would end the run under `set -e` with nothing said.
   { read -r PR_NUM; read -r PR_SHA; read -r PR_STATE; read -r PR_MERGE_STATE; } <<< "$pr_fields"
   [ "$PR_STATE" = "OPEN" ] || {
     echo "wdd-finish: PR #$PR_NUM is $PR_STATE, not OPEN -- nothing to merge." >&2
@@ -321,85 +365,123 @@ PY
   # realistic author of either is a session that has been refused twice and is
   # looking for a way through, not an attacker.
   #
-  # A body that will not parse is a CORRUPT receipt, which means ABSENT. "I
-  # could not read it" must never widen into "permitted".
-  if ! receipt_read="$(python3 - "$RECEIPT" "$PR_SHA" <<'PY'
+  # NOTHING FROM THE BODY CROSSES BACK INTO THIS SHELL. The only thing returned
+  # is an exit status, which is an integer and therefore cannot carry a
+  # newline; every message about the receipt is written by the reader that
+  # already holds the value. An earlier version returned a two-line
+  # status/detail protocol and guaranteed both lines non-empty *by value* --
+  # which `{"sha": "\n"}` disproved: the detail printed as a bare newline, `$( )`
+  # stripped it, the second `read` hit EOF, and `set -e` ended the run with an
+  # empty stderr. The refusal survived, but a refusal nobody can diagnose is
+  # the wrong shape for a gate whose entire subject is an untrusted file.
+  receipt_rc=0
+  python3 - "$RECEIPT" "$PR_SHA" <<'PY' || receipt_rc=$?
 import datetime, json, sys
 
-# Two lines always, and BOTH MUST BE NON-EMPTY. `$( )` strips trailing
-# newlines, so a blank second line does not survive to the caller: its `read`
-# then hits EOF, returns non-zero, and `set -e` ends the run with no message
-# at all -- which is how a corrupt receipt briefly came to look like a clean
-# exit. Print a real detail on every path.
+RECEIPT, WANTED = sys.argv[1], sys.argv[2]
+
 try:
-    receipt = json.loads(open(sys.argv[1]).read())
+    receipt = json.loads(open(RECEIPT).read())
     if not isinstance(receipt, dict):
-        raise ValueError("a receipt is an object")
+        raise ValueError("a receipt is a JSON object")
 except Exception as exc:
-    print("corrupt")
-    print(f"{type(exc).__name__}: {exc}")
-    raise SystemExit(0)
+    sys.stderr.write(
+        f"wdd-finish: the receipt at {RECEIPT} will not parse -- refusing to merge.\n"
+        f"  {type(exc).__name__}: {exc}\n"
+        "  A corrupt receipt is treated as an ABSENT one. It attests to\n"
+        "  nothing, and a file nobody can read must never be the thing that\n"
+        "  permits a merge.\n")
+    raise SystemExit(4)
 
 claimed = receipt.get("sha")
-if claimed != sys.argv[2]:
-    print("mismatch")
-    print(claimed if isinstance(claimed, str) and claimed else "no sha field")
-    raise SystemExit(0)
+if claimed != WANTED:
+    # !r, so a value made of whitespace is visible as one rather than
+    # silently rearranging the message it appears in.
+    sys.stderr.write(
+        f"wdd-finish: the receipt at {RECEIPT} names a different commit -- refusing to merge.\n"
+        f"  filed under: {WANTED}\n"
+        f"  body claims: {claimed!r}\n"
+        "  A receipt copied or symlinked onto another commit's name attests\n"
+        "  to the commit it was WRITTEN for, never to the one it was filed\n"
+        "  under. Run the lane on the commit the PR will merge.\n")
+    raise SystemExit(3)
 
 when = receipt.get("validated_at")
 try:
     when = datetime.datetime.fromtimestamp(float(when)).isoformat(timespec="seconds")
 except (TypeError, ValueError):
     when = "an unrecorded time"
-print("ok")
-print("validated at {} by session {} -- {}".format(
+print("  receipt: validated at {} by session {!r} -- {!r}".format(
     when, receipt.get("session"), receipt.get("validate_command")))
 PY
-)"; then
-    echo "wdd-finish: could not read the receipt at $RECEIPT -- refusing to merge." >&2
-    exit 1
-  fi
-  { read -r receipt_status; read -r receipt_detail; } <<< "$receipt_read"
-  case "$receipt_status" in
-    ok) note "receipt: $receipt_detail" ;;
-    mismatch)
-      echo "wdd-finish: the receipt at $RECEIPT names a different commit -- refusing to merge." >&2
-      echo "  filed under: $PR_SHA" >&2
-      echo "  body claims: $receipt_detail" >&2
-      echo "  A receipt copied or symlinked onto another commit's name attests" >&2
-      echo "  to the commit it was WRITTEN for, never to the one it was filed" >&2
-      echo "  under. Run the lane on the commit the PR will merge." >&2
-      exit 1 ;;
-    *)
-      echo "wdd-finish: the receipt at $RECEIPT will not parse -- refusing to merge." >&2
-      echo "  $receipt_detail" >&2
-      echo "  A corrupt receipt is treated as an ABSENT one. It attests to" >&2
-      echo "  nothing, and a file nobody can read must never be the thing that" >&2
-      echo "  permits a merge." >&2
-      exit 1 ;;
+  # 3 and 4 already explained themselves above; anything else is the reader
+  # failing rather than the receipt, and must not pass for a receipt that is
+  # merely absent.
+  case "$receipt_rc" in
+    0) ;;
+    3|4) exit 1 ;;
+    *) echo "wdd-finish: could not read the receipt at $RECEIPT (status $receipt_rc) -- refusing to merge." >&2
+       exit 1 ;;
   esac
 
-  # -- 2b. Behind its base ---------------------------------------------------
-  # Only the exact string BEHIND. `mergeStateStatus` is computed lazily, so
-  # UNKNOWN is ordinary, and BLOCKED merely means the checks this step is about
-  # to wait for have not passed yet -- refusing on either would refuse on
-  # nothing at all.
-  refuse_if_behind() {
-    [ "${1:-}" = "BEHIND" ] || return 0
-    echo "wdd-finish: PR #$PR_NUM is BEHIND $BASE -- refusing to merge." >&2
-    echo "  Merging now produces a merge commit combining two states that were" >&2
-    echo "  never validated together: the branch passed against the base AS OF" >&2
-    echo "  WHEN IT RAN, and two branches can each add a differently-named" >&2
-    echo "  migration claiming the same number, which git merges cleanly and" >&2
-    echo "  leaves broken." >&2
-    echo "  'require branches to be up to date' in branch protection covers" >&2
-    echo "  this, but NOTHING HERE CAN OBSERVE WHETHER IT IS ENABLED, so this" >&2
-    echo "  step does not assume it." >&2
-    echo "  Update the branch from $BASE. That changes its head sha, so re-run" >&2
-    echo "  the lane afterwards -- the receipt does not carry across." >&2
-    exit 1
+  # -- 2b. Cannot merge at all -----------------------------------------------
+  # BEHIND and DIRTY only. `mergeStateStatus` is computed lazily, so UNKNOWN is
+  # ordinary, and BLOCKED merely means the checks this step is about to wait
+  # for have not passed yet -- refusing on either would refuse on nothing.
+  refuse_if_unmergeable() {
+    case "${1:-}" in
+      BEHIND)
+        echo "wdd-finish: PR #$PR_NUM is BEHIND $BASE -- refusing to merge." >&2
+        echo "  Merging now produces a merge commit combining two states that" >&2
+        echo "  were never validated together: the branch passed against the" >&2
+        echo "  base AS OF WHEN IT RAN, and two branches can each add a" >&2
+        echo "  differently-named migration claiming the same number, which git" >&2
+        echo "  merges cleanly and leaves broken." >&2
+        echo "  'require branches to be up to date' in branch protection covers" >&2
+        echo "  this, but NOTHING HERE CAN OBSERVE WHETHER IT IS ENABLED, so" >&2
+        echo "  this step does not assume it." >&2
+        echo "  Update the branch from $BASE. That changes its head sha, so" >&2
+        echo "  re-run the lane afterwards -- the receipt does not carry across." >&2
+        exit 1 ;;
+      DIRTY)
+        # The COMMON case, not the exotic one: measured 16 DIRTY to 4 BEHIND
+        # across 20 open PRs. Unguarded, a conflicting PR waited the full bound
+        # and then attempted a merge GitHub was always going to refuse -- half
+        # an hour spent to arrive at an inaccurate message.
+        echo "wdd-finish: PR #$PR_NUM has conflicts with $BASE -- refusing to merge." >&2
+        echo "  GitHub will not merge it in this state, so waiting for checks" >&2
+        echo "  would only spend the bound to arrive at the same answer." >&2
+        echo "  Resolve the conflict. That changes the head sha, so re-run the" >&2
+        echo "  lane afterwards -- the receipt does not carry across." >&2
+        exit 1 ;;
+    esac
   }
-  refuse_if_behind "$PR_MERGE_STATE"
+
+  # Read again once when the answer is UNKNOWN, because the FIRST view of a PR
+  # is the request that triggers the computation and is therefore the one least
+  # likely to know: measured, one batch over 20 open PRs answered UNKNOWN
+  # 20/20, and the identical query moments later returned 16 DIRTY and 4
+  # BEHIND. A guard that only ever reads the triggering request is frequently a
+  # no-op. This is still BEST EFFORT and is documented as such -- see SKILL.md;
+  # branch protection is what makes it airtight.
+  if [ "$PR_MERGE_STATE" = "UNKNOWN" ]; then
+    sleep "${WDD_MERGE_STATE_RETRY:-2}"
+    if reread="$(gh pr view "$BRANCH" --json mergeStateStatus)"; then
+      PR_MERGE_STATE="$(python3 - "$reread" <<'PY'
+import json, re, sys
+try:
+    data = json.loads(sys.argv[1])
+except ValueError:
+    data = {}
+value = data.get("mergeStateStatus") if isinstance(data, dict) else None
+# One token from a restricted alphabet, so nothing read here can desynchronise
+# or empty the caller's variable.
+print(re.sub(r"[^A-Z_]", "", str(value or "").upper()) or "UNKNOWN")
+PY
+)"
+    fi
+  fi
+  refuse_if_unmergeable "$PR_MERGE_STATE"
 
   # -- 3. Wait for the required check, bounded -----------------------------
   # Bounded because an unbounded wait is a session that never ends, and a
@@ -455,18 +537,25 @@ for c in checks or []:
             verdict = "fail"
     break
 
-# Two lines: the check verdict, then the merge state. The base can move under
-# a branch during a thirty-minute wait, and the head guard cannot see that --
-# the head has not moved. It rides on this call because it is already being
-# made; a window open for the length of the wait is not worth a second one.
-print(verdict)
-print((data.get("mergeStateStatus") or "UNKNOWN") if isinstance(data, dict) else "UNKNOWN")
+# The base can move under a branch during a thirty-minute wait, and the head
+# guard cannot see that: the head has not moved. It rides on this call because
+# the call is already being made, and it outranks the check verdict -- a PR
+# that cannot merge should not keep being waited on.
+state = str((data.get("mergeStateStatus") or "") if isinstance(data, dict) else "").upper()
+if state in ("BEHIND", "DIRTY"):
+    verdict = state.lower()
+
+# EXACTLY ONE token, chosen from a closed vocabulary rather than derived from
+# the payload. The caller cases on this string, so anything shaped by untrusted
+# input would be untrusted input steering control flow -- and a value that is
+# empty or multi-line is how that goes wrong quietly rather than loudly.
+print(verdict if verdict in ("pass", "fail", "pending", "behind", "dirty") else "pending")
 PY
 )"
-    { read -r verdict; read -r merge_state; } <<< "$poll"
-    refuse_if_behind "$merge_state"
-    case "$verdict" in
-      pass) note "$CHECK: green"; break ;;
+    case "$poll" in
+      behind) refuse_if_unmergeable BEHIND ;;
+      dirty)  refuse_if_unmergeable DIRTY ;;
+      pass)   note "$CHECK: green"; break ;;
       fail)
         echo "wdd-finish: '$CHECK' is not green on PR #$PR_NUM -- refusing to merge." >&2
         echo "  Nothing was merged. Fix the branch, re-run the lane against the" >&2

@@ -305,6 +305,25 @@ case "$*" in
     # `no_match_head_flag` is how a test builds one.
     echo "Merge a pull request"
     [ -f "$GH_DIR/no_match_head_flag" ] || echo "      --match-head-commit SHA   Commit SHA that pull request head must match"
+    # A future gh with longer help. The flag comes FIRST and the padding after,
+    # which is what makes an early-exiting reader SIGPIPE the writer.
+    # An `if`, not `[ ... ] && ...`: as the LAST command in a case branch the
+    # latter's failure becomes the stub's exit status, and a `gh` that exits
+    # non-zero on --help is a different test than this one.
+    if [ -f "$GH_DIR/big_help" ]; then
+      head -c 70000 /dev/zero | tr '\0' 'x'
+      echo
+    fi
+    ;;
+  "pr view "*"--json mergeStateStatus"*)
+    # The re-read. GitHub computes mergeStateStatus lazily, so the first view
+    # of a PR is the request that TRIGGERS the computation and is therefore
+    # likeliest to answer UNKNOWN.
+    if [ -f "$GH_DIR/mergestate_reread.json" ]; then
+      cat "$GH_DIR/mergestate_reread.json"
+    else
+      cat "$GH_DIR/pr.json"
+    fi
     ;;
   "pr view "*"--json statusCheckRollup"*)
     # Per-call answers, so a test can make a check finish mid-wait: the Nth
@@ -772,3 +791,100 @@ def test_a_base_that_moves_during_the_wait_is_refused_not_merged(run, gh):
     assert r.returncode == 1, r.stdout + r.stderr
     assert "behind" in r.stderr.lower()
     assert merges(gh) == []
+
+
+# ---------------------------------------------------------------------------
+# Fix round 2. Three of these are about a value the script does not control
+# steering the script, and one is about a guard that is quieter in production
+# than it looks in a test.
+# ---------------------------------------------------------------------------
+
+
+def test_a_receipt_sha_made_of_newlines_refuses_diagnosably(run, gh):
+    """"Non-empty by construction" was held by the VALUE, not the structure.
+
+    `{"sha": "\n"}` printed a line that `$( )` then stripped to nothing, the
+    caller's second `read` hit EOF, and `set -e` ended the run with an empty
+    stderr. The refusal survived, so this was never a hole — but F2 exists
+    precisely because the receipt body is untrustworthy, and this is that body
+    steering control flow.
+    """
+    write_receipt(run, gh["head"], raw=json.dumps({"sha": "\n"}))
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.stderr.strip(), "refused with no diagnosis at all"
+    assert "names a different commit" in r.stderr
+    assert merges(gh) == []
+
+
+def test_a_merge_state_of_whitespace_does_not_end_the_run_silently(run, gh):
+    """The same shape reachable through `mergeStateStatus`.
+
+    Uninterpretable is not BEHIND and not DIRTY, so the run proceeds — the head
+    pin and the check still gate it. What must not happen is the run ending
+    with nothing said.
+    """
+    write_receipt(run, gh["head"])
+    set_pr_head(gh, gh["head"], merge_state="\n")
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert merges(gh)
+
+
+def test_a_conflicted_pr_is_refused_immediately_not_after_the_bound(run, gh):
+    """DIRTY was the common case and it was unguarded.
+
+    Measured across 20 open PRs: 16 DIRTY to 4 BEHIND. Unguarded, a conflicting
+    PR waits the full bound and then attempts a merge GitHub was always going
+    to refuse — half an hour to arrive at an inaccurate message.
+    """
+    write_receipt(run, gh["head"])
+    set_pr_head(gh, gh["head"], merge_state="DIRTY")
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "conflict" in r.stderr.lower()
+    assert merges(gh) == []
+    assert not [c for c in calls(gh) if "statusCheckRollup" in c], \
+        "a PR that cannot merge should not be waited on"
+
+
+def test_a_gh_whose_help_exceeds_the_pipe_buffer_probes_as_capable(run, gh):
+    """`pipefail` + an early-exiting reader turns a CAPABLE gh into a refusal.
+
+    The old probe piped `--help` into `grep -q`, which exits at the match and
+    SIGPIPEs the writer once the output no longer fits the pipe buffer. Inert
+    at today's 1916 bytes; a future gh with longer help would make the probe
+    refuse on EVERY binary, reporting "your gh is too old" about one that is
+    not. The flag is emitted before the padding, which is the ordering that
+    makes an early exit possible.
+    """
+    write_receipt(run, gh["head"])
+    (gh["dir"] / "big_help").touch()
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert merges(gh)
+
+
+def test_an_unknown_merge_state_is_read_again_before_the_wait(run, gh):
+    """The pre-wait guard reads the request that triggers the computation.
+
+    Measured: one batch over 20 open PRs answered UNKNOWN 20/20, and the
+    identical query moments later returned 16 DIRTY and 4 BEHIND. So the first
+    read is the one least likely to know, and a guard that only ever reads it
+    is frequently a no-op.
+    """
+    write_receipt(run, gh["head"])
+    set_pr_head(gh, gh["head"], merge_state="UNKNOWN")
+    (gh["dir"] / "mergestate_reread.json").write_text(
+        json.dumps({"mergeStateStatus": "BEHIND"}))
+    env = {**gh["env"], "WDD_MERGE_STATE_RETRY": "0"}
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=env)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "behind" in r.stderr.lower()
+    assert merges(gh) == []
+    assert not [c for c in calls(gh) if "statusCheckRollup" in c]
