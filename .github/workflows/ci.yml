@@ -9,6 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The version gate diffs against origin/main. A shallow clone has no
+          # such ref, and the gate fails rather than skipping — so CI has to
+          # fetch enough history for the comparison to be possible at all.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
