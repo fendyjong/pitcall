@@ -300,12 +300,22 @@ case "$*" in
   "pr view "*"--json number"*)
     cat "$GH_DIR/pr.json"
     ;;
+  "pr merge --help"*)
+    # The capability probe. A gh too old to pin the head says so here, and
+    # `no_match_head_flag` is how a test builds one.
+    echo "Merge a pull request"
+    [ -f "$GH_DIR/no_match_head_flag" ] || echo "      --match-head-commit SHA   Commit SHA that pull request head must match"
+    ;;
   "pr view "*"--json statusCheckRollup"*)
     # Per-call answers, so a test can make a check finish mid-wait: the Nth
     # poll reads checks-N.json when it exists and the default otherwise.
     n=$(cat "$GH_DIR/rollup_n" 2>/dev/null || echo 0)
     n=$((n + 1))
     printf '%s' "$n" > "$GH_DIR/rollup_n"
+    # A push landing mid-wait: from poll N on, the PR's head is a new commit.
+    # The rollup answers about THAT commit, which is the trap -- a green
+    # signal describing a commit no receipt covers.
+    [ -f "$GH_DIR/head-at-$n" ] && cp "$GH_DIR/head-at-$n" "$GH_DIR/current_head"
     if [ -f "$GH_DIR/checks-$n.json" ]; then
       cat "$GH_DIR/checks-$n.json"
     else
@@ -315,6 +325,20 @@ case "$*" in
   "pr merge"*)
     if [ -f "$GH_DIR/merge_refuses" ]; then
       echo "gh: pull request is not mergeable" >&2
+      exit 1
+    fi
+    # GitHub's own behaviour, and the asymmetry is the point: WITH
+    # --match-head-commit a moved head is refused server-side; WITHOUT it the
+    # merge takes whatever the head is now. An unpinned merge here really does
+    # land the unvalidated commit, which is what makes the guard's test honest.
+    want=""; prev=""
+    for a in "$@"; do
+      [ "$prev" = "--match-head-commit" ] && want="$a"
+      prev="$a"
+    done
+    now="$(cat "$GH_DIR/current_head" 2>/dev/null || echo "")"
+    if [ -n "$want" ] && [ -n "$now" ] && [ "$want" != "$now" ]; then
+      echo "Pull request Head branch was modified. Review and try the merge again." >&2
       exit 1
     fi
     git -C "$GH_PLAN_WT" push -q origin "planbranch:$GH_BASE"
@@ -327,19 +351,24 @@ esac
 """
 
 
-def rollup(*checks):
-    """A `statusCheckRollup` payload in the shape `gh pr view --json` returns.
+def rollup(*checks, merge_state="CLEAN"):
+    """A poll payload in the shape `gh pr view --json` returns.
 
-    Each item is a (name, status, conclusion) triple. Real JSON rather than a
+    Each check is a (name, status, conclusion) triple. Real JSON rather than a
     canned verdict word: the classification of QUEUED / COMPLETED+SUCCESS /
     COMPLETED+FAILURE is our logic, so a test that fed it a pre-digested answer
     would assert nothing about the part that can be wrong.
+
+    `merge_state` rides along because the poll reads it from the same call --
+    the base can move under a branch during a thirty-minute wait, and the head
+    guard cannot see that: the head has not moved.
     """
     return json.dumps({
         "statusCheckRollup": [
             {"__typename": "CheckRun", "name": n, "status": s, "conclusion": c}
             for n, s, c in checks
-        ]
+        ],
+        "mergeStateStatus": merge_state,
     })
 
 
@@ -383,9 +412,13 @@ def gh(tmp_path, run):
     stub.chmod(0o755)
 
     head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
-    (d / "pr.json").write_text(
-        json.dumps({"number": 7, "state": "OPEN", "headRefOid": head}))
+    (d / "pr.json").write_text(json.dumps(
+        {"number": 7, "state": "OPEN", "headRefOid": head,
+         "mergeStateStatus": "CLEAN"}))
     (d / "checks.json").write_text(rollup(("ci", "COMPLETED", "SUCCESS")))
+    # What the PR's head is on the server right now. A test moves it to
+    # simulate a push landing mid-wait.
+    (d / "current_head").write_text(head)
 
     return {
         "dir": d,
@@ -405,10 +438,34 @@ def gh(tmp_path, run):
     }
 
 
+def set_pr_head(gh, sha, merge_state="CLEAN"):
+    """Point the PR at `sha` — in BOTH places the stub reads.
+
+    `pr.json` is what `gh pr view` answers; `current_head` is what the server
+    would refuse a mismatched `--match-head-commit` against. Updating only the
+    first models a state GitHub cannot be in, and the stub then refuses a merge
+    the test meant to allow.
+    """
+    (gh["dir"] / "pr.json").write_text(json.dumps(
+        {"number": 7, "state": "OPEN", "headRefOid": sha,
+         "mergeStateStatus": merge_state}))
+    (gh["dir"] / "current_head").write_text(sha)
+
+
 def calls(gh, prefix=""):
     log = Path(gh["log"])
     lines = log.read_text().splitlines() if log.exists() else []
     return [c for c in lines if c.startswith(prefix)]
+
+
+def merges(gh):
+    """Actual merge attempts.
+
+    The capability probe shares the verb (`gh pr merge --help`), so a bare
+    prefix match on "pr merge" counts it as a merge — which would quietly
+    invert every assertion in this file that nothing was merged.
+    """
+    return [c for c in calls(gh, "pr merge") if "--help" not in c]
 
 
 def test_merge_lands_the_pr_and_then_fast_forwards_the_main_checkout(run, gh):
@@ -418,7 +475,12 @@ def test_merge_lands_the_pr_and_then_fast_forwards_the_main_checkout(run, gh):
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
 
-    assert calls(gh, "pr merge"), "the PR was never merged"
+    attempts = merges(gh)
+    assert attempts, "the PR was never merged"
+    # Pinned to the sha the receipt covers. Without this the merge takes
+    # whatever the head is at merge time, which is a different commit whenever
+    # anything was pushed during the wait.
+    assert f"--match-head-commit {gh['head']}" in attempts[0], attempts
     # The merge is the first half; the checkout going level with it is the
     # other, and it is read back rather than inferred from the absence of an
     # error.
@@ -440,7 +502,7 @@ def test_merge_refuses_without_a_receipt_and_never_calls_gh_pr_merge(run, gh):
 
     assert r.returncode == 1, r.stdout + r.stderr
     assert "no lane receipt" in r.stderr
-    assert calls(gh, "pr merge") == []
+    assert merges(gh) == []
     assert calls(gh, "pr view") and not [
         c for c in calls(gh) if "statusCheckRollup" in c
     ], "the receipt must be checked BEFORE waiting on checks"
@@ -461,7 +523,7 @@ def test_merge_refuses_a_receipt_that_names_a_different_commit(run, gh):
     assert r.returncode == 1, r.stdout + r.stderr
     assert "no lane receipt" in r.stderr
     assert "other commit" in r.stderr, "say WHY there is a receipt directory but no match"
-    assert calls(gh, "pr merge") == []
+    assert merges(gh) == []
 
 
 def test_a_corrupt_receipt_is_treated_as_absent(run, gh):
@@ -476,7 +538,7 @@ def test_a_corrupt_receipt_is_treated_as_absent(run, gh):
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "will not parse" in r.stderr
-    assert calls(gh, "pr merge") == []
+    assert merges(gh) == []
 
 
 def test_merge_reports_not_merged_when_the_check_is_still_running(run, gh):
@@ -487,7 +549,7 @@ def test_merge_reports_not_merged_when_the_check_is_still_running(run, gh):
     assert r.returncode == 3, r.stdout + r.stderr
     assert "NOT MERGED" in r.stderr
     assert "still running" in r.stderr
-    assert calls(gh, "pr merge") == []
+    assert merges(gh) == []
     assert git("rev-parse", "HEAD", cwd=run["main"]) == git(
         "rev-parse", "master", cwd=run["main"])
 
@@ -499,7 +561,7 @@ def test_merge_refuses_when_the_required_check_is_red(run, gh):
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "not green" in r.stderr.lower()
-    assert calls(gh, "pr merge") == []
+    assert merges(gh) == []
 
 
 def test_merge_waits_for_a_check_that_finishes_mid_wait(run, gh):
@@ -518,7 +580,7 @@ def test_merge_waits_for_a_check_that_finishes_mid_wait(run, gh):
     r = finish(run["plan_wt"], "merge", PLAN, env=env)
     assert r.returncode == 0, r.stdout + r.stderr
     assert len([c for c in calls(gh) if "statusCheckRollup" in c]) == 3
-    assert calls(gh, "pr merge")
+    assert merges(gh)
 
 
 def test_merge_gates_on_the_check_named_by_the_config_not_a_hardcoded_one(run, gh):
@@ -532,8 +594,7 @@ def test_merge_gates_on_the_check_named_by_the_config_not_a_hardcoded_one(run, g
     commit_path(run["plan_wt"], "pitcall.config.json",
                 "this project's required check is gate-x")
     head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
-    (gh["dir"] / "pr.json").write_text(
-        json.dumps({"number": 7, "state": "OPEN", "headRefOid": head}))
+    set_pr_head(gh, head)
     write_receipt(run, head)
     (gh["dir"] / "checks.json").write_text(
         rollup(("ci", "COMPLETED", "SUCCESS"), ("gate-x", "COMPLETED", "FAILURE")))
@@ -541,7 +602,7 @@ def test_merge_gates_on_the_check_named_by_the_config_not_a_hardcoded_one(run, g
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "gate-x" in r.stderr
-    assert calls(gh, "pr merge") == []
+    assert merges(gh) == []
 
 
 def test_a_diverged_main_checkout_is_reported_and_not_repaired(run, gh):
@@ -565,7 +626,7 @@ def test_a_diverged_main_checkout_is_reported_and_not_repaired(run, gh):
     assert "would NOT fast-forward" in out
     assert "a local commit nobody meant to make" in out, "name what diverged"
     # Merged, and then left alone: no repair, no second merge commit.
-    assert calls(gh, "pr merge")
+    assert merges(gh)
     assert git("rev-parse", "HEAD", cwd=run["main"]) == diverged
 
 
@@ -575,8 +636,7 @@ def test_a_failing_refresh_does_not_unwind_the_merge(run, gh):
     commit_path(run["plan_wt"], "pitcall.config.json",
                 "this project regenerates something after a pull")
     head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
-    (gh["dir"] / "pr.json").write_text(
-        json.dumps({"number": 7, "state": "OPEN", "headRefOid": head}))
+    set_pr_head(gh, head)
     write_receipt(run, head)
 
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
@@ -584,3 +644,131 @@ def test_a_failing_refresh_does_not_unwind_the_merge(run, gh):
     assert "refresh FAILED" in r.stdout
     assert git("rev-parse", "HEAD", cwd=run["main"]) == git(
         "rev-parse", "origin/master", cwd=run["main"])
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1. Three windows the first version left open, each of which the
+# ordinary way of working walks straight into.
+# ---------------------------------------------------------------------------
+
+
+def test_a_head_that_moves_during_the_wait_is_refused_not_merged(run, gh):
+    """The gate, moved a few minutes later, is still the gate.
+
+    The head sha is read once, and the wait that follows can run for half an
+    hour. `checks are running, let me push the fix now` is not an exotic
+    sequence, it is the normal one — and `statusCheckRollup` then reports
+    GREEN about the new commit, so every signal the step reads agrees that
+    merging is fine. Only the sha disagrees.
+
+    Closed server-side with `--match-head-commit`, not by re-reading the head
+    before merging: re-reading narrows the window, and a narrower race is the
+    kind nobody reproduces afterwards.
+    """
+    write_receipt(run, gh["head"])
+    (run["plan_wt"] / "fix.txt").write_text("a review fix, never validated\n")
+    commit_path(run["plan_wt"], "fix.txt", "UNVALIDATED review fix")
+    moved = git("rev-parse", "HEAD", cwd=run["plan_wt"])
+    assert moved != gh["head"]
+
+    # Pushed while the check was still running: pending, then the new head,
+    # then green about it.
+    (gh["dir"] / "checks-1.json").write_text(rollup(("ci", "IN_PROGRESS", None)))
+    (gh["dir"] / "head-at-2").write_text(moved)
+    env = {**gh["env"], "WDD_CHECK_TIMEOUT": "30"}
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=env)
+    assert r.returncode != 0, r.stdout + r.stderr
+    # Pinned to the commit the RECEIPT covers, not to the one now on the PR.
+    assert f"--match-head-commit {gh['head']}" in merges(gh)[0]
+    # And the unvalidated commit did not land.
+    landed = git("log", "--format=%H", "origin/master", cwd=run["main"])
+    assert moved not in landed, "an unvalidated commit reached the base branch"
+
+
+def test_a_gh_that_cannot_pin_the_head_refuses_rather_than_merging_unguarded(run, gh):
+    """A silent fallback to an unguarded merge is worse than refusing to run.
+
+    The flag landed in gh 2.96. An older binary would otherwise merge exactly
+    as before — with the guard silently absent, which is the failure state
+    nobody can see from the outside.
+    """
+    write_receipt(run, gh["head"])
+    (gh["dir"] / "no_match_head_flag").touch()
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "--match-head-commit" in r.stderr
+    assert merges(gh) == []
+
+
+def test_a_receipt_whose_body_names_another_commit_is_refused(run, gh):
+    """Existence is the verdict — and a body that contradicts the path is not
+    a second verdict, it is a reason to refuse.
+
+    The check is one-directional and that is what keeps the contract intact: it
+    can turn a pass into a refusal, never a refusal into a pass. What it costs
+    a stray `cp` of one receipt onto another's name is a refusal instead of a
+    merge, and the realistic actor is a frustrated session, not an attacker.
+    """
+    other = git("rev-parse", "HEAD~1", cwd=run["plan_wt"])
+    body = receipt_body(other, run["plan_wt"])
+    write_receipt(run, gh["head"], raw=json.dumps(body))
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "names a different commit" in r.stderr
+    assert merges(gh) == []
+
+
+def test_a_receipt_symlinked_from_another_commits_receipt_is_refused(run, gh):
+    """`-f` follows a symlink, so the path test alone reads this as present."""
+    other = git("rev-parse", "HEAD~1", cwd=run["plan_wt"])
+    real = write_receipt(run, other)
+    link = real.parent / f"{gh['head']}.json"
+    link.symlink_to(real.name)
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "names a different commit" in r.stderr
+    assert merges(gh) == []
+
+
+def test_a_pr_behind_its_base_is_refused_before_any_wait(run, gh):
+    """Branch protection is not observable from here, so it is not relied on.
+
+    Merging a branch whose base has moved produces a merge commit combining two
+    states nothing validated — the migration-number hazard this skill's own
+    documentation describes. Delegating that to `require branches to be up to
+    date` is defensible right up until the project has not enabled it, and
+    nothing here can tell.
+    """
+    write_receipt(run, gh["head"])
+    set_pr_head(gh, gh["head"], merge_state="BEHIND")
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "behind" in r.stderr.lower()
+    assert merges(gh) == []
+    assert not [c for c in calls(gh) if "statusCheckRollup" in c], \
+        "a branch that cannot merge should not be waited on"
+
+
+def test_a_base_that_moves_during_the_wait_is_refused_not_merged(run, gh):
+    """The head guard cannot see this one: the head never moved.
+
+    A thirty-minute wait is long enough for the base to move under the branch,
+    and the poll already reads `mergeStateStatus` from the same call — so the
+    window costs one field to close and would otherwise stay open for the whole
+    wait.
+    """
+    write_receipt(run, gh["head"])
+    (gh["dir"] / "checks-1.json").write_text(rollup(("ci", "IN_PROGRESS", None)))
+    (gh["dir"] / "checks-2.json").write_text(
+        rollup(("ci", "COMPLETED", "SUCCESS"), merge_state="BEHIND"))
+    env = {**gh["env"], "WDD_CHECK_TIMEOUT": "30"}
+
+    r = finish(run["plan_wt"], "merge", PLAN, env=env)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "behind" in r.stderr.lower()
+    assert merges(gh) == []

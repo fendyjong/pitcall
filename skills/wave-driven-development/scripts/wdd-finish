@@ -119,15 +119,22 @@ require_check_name() {
 
 # Where `lane run` files what it validated.
 #
-# Resolved through the lane's OWN `shared_root()`, never re-derived here.
-# lane_config's docstring says that resolution "deliberately happens nowhere
-# else", and it is not house style: in a worktree of a submodule the obvious
-# local answer -- the parent of the git common dir -- lands INSIDE the
-# superproject's git directory, while the lane climbs out and files its
-# receipts beside the superproject itself. A second derivation would look in a
-# directory nothing ever writes to and report every commit as unvalidated,
-# which is the safe direction of a wrong answer and therefore the one nobody
-# would ever debug.
+# `lane.receipts_dir()` ITSELF, not a re-derivation of it. An earlier version
+# imported `shared_root()` and re-appended `.pitcall/receipts` by hand, with a
+# comment saying to keep the two in step -- but nothing enforced that comment,
+# and the drift it invited fails in the silent-safe direction: a reader looking
+# in a directory nothing writes to finds no receipt and reports every commit as
+# unvalidated. Nobody debugs a tool that is merely refusing too much.
+#
+# The same reasoning one level down is why the lane's own resolution is used at
+# all rather than `dirname <git-common-dir>`: in a worktree of a submodule that
+# local answer lands INSIDE the superproject's git directory, while the lane
+# climbs out and files beside the superproject itself.
+#
+# Calling it CREATES the directory when absent, which `lane_dir()` has always
+# done. Harmless on this path -- the lane creates it on first run anyway, and
+# `.pitcall/` is machine-local -- but it is a write, so it is named here rather
+# than discovered.
 #
 # The path arithmetic is the SECOND copy of this plugin's layout in this
 # directory; `project-config` holds the first, one level deeper because it
@@ -136,8 +143,8 @@ receipts_dir() {
   python3 - "$HERE" <<'PY'
 import pathlib, sys
 sys.path.insert(0, str(pathlib.Path(sys.argv[1]).resolve().parents[2] / "scripts"))
-from lane_config import shared_root
-print(shared_root() / ".pitcall" / "receipts")
+import lane
+print(lane.receipts_dir())
 PY
 }
 
@@ -223,6 +230,25 @@ merge)
     echo "  sessions are reading." >&2
     exit 1; }
 
+  # The head guard has to exist before anything else is attempted. Without it
+  # this step merges whatever the head is at merge time, which is a different
+  # commit whenever anything was pushed during the wait -- and a SILENT
+  # fallback to that is strictly worse than refusing to run, because the guard
+  # being absent looks identical from outside to the guard passing.
+  #
+  # Probed by capability rather than by version number: the question is whether
+  # THIS binary takes the flag, and a version comparison answers a different
+  # one that happens to correlate.
+  if ! gh pr merge --help 2>/dev/null | grep -q -- "--match-head-commit"; then
+    echo "wdd-finish: this gh cannot pin a merge to a commit." >&2
+    echo "  'gh pr merge --match-head-commit' is required here and arrived in" >&2
+    echo "  gh 2.96. Refusing rather than merging without it: the flag is what" >&2
+    echo "  makes the receipt's guarantee survive the wait for checks, and a" >&2
+    echo "  merge that silently lost it is indistinguishable from a safe one." >&2
+    echo "  Upgrade gh, or merge on GitHub after re-running the lane." >&2
+    exit 1
+  fi
+
   # -- 1. Which commit is actually going to land ---------------------------
   # The PR's head as GitHub reports it NOW: not this checkout's HEAD, and not a
   # sha resolved earlier in the run. They differ in exactly the case the gate
@@ -230,7 +256,7 @@ merge)
   # gh's stderr is left to flow through rather than folded into the capture:
   # its diagnosis is the useful part of a failure, and merging it into stdout
   # would put a warning line inside the text about to be parsed as JSON.
-  if ! pr_json="$(gh pr view "$BRANCH" --json number,state,headRefOid)"; then
+  if ! pr_json="$(gh pr view "$BRANCH" --json number,state,headRefOid,mergeStateStatus)"; then
     echo "wdd-finish: no PR found for $BRANCH -- run 'ship' first." >&2
     exit 1
   fi
@@ -245,9 +271,10 @@ if not isinstance(pr, dict) or not pr.get("number") or not pr.get("headRefOid"):
 print(pr["number"])
 print(pr["headRefOid"])
 print(pr.get("state") or "UNKNOWN")
+print(pr.get("mergeStateStatus") or "UNKNOWN")
 PY
 )"; then exit 1; fi
-  { read -r PR_NUM; read -r PR_SHA; read -r PR_STATE; } <<< "$pr_fields"
+  { read -r PR_NUM; read -r PR_SHA; read -r PR_STATE; read -r PR_MERGE_STATE; } <<< "$pr_fields"
   [ "$PR_STATE" = "OPEN" ] || {
     echo "wdd-finish: PR #$PR_NUM is $PR_STATE, not OPEN -- nothing to merge." >&2
     exit 1; }
@@ -281,37 +308,98 @@ PY
     echo "  the lane on the commit the PR will merge, then re-run this step." >&2
     exit 1
   fi
-  # Parsed for the MESSAGE, never for the verdict -- and a body that will not
-  # parse is a CORRUPT receipt, which means ABSENT. "I could not read it" must
-  # never widen into "permitted": that is the one direction an unreadable file
-  # is not allowed to resolve in.
-  if ! summary="$(python3 - "$RECEIPT" <<'PY'
+  # The body, read for the message -- and checked for ONE thing beyond it: that
+  # it names the commit it is filed under.
+  #
+  # This does not move the verdict into the body, and the asymmetry is what
+  # keeps the contract intact: the check is ONE-DIRECTIONAL. It can turn a pass
+  # into a refusal; it can never turn a refusal into a pass. Existence at the
+  # path remains the only thing that permits anything.
+  #
+  # What it costs is a `cp` of one receipt onto another's name, or a symlink
+  # (`-f` follows one, so the path test alone reads that as present) -- and the
+  # realistic author of either is a session that has been refused twice and is
+  # looking for a way through, not an attacker.
+  #
+  # A body that will not parse is a CORRUPT receipt, which means ABSENT. "I
+  # could not read it" must never widen into "permitted".
+  if ! receipt_read="$(python3 - "$RECEIPT" "$PR_SHA" <<'PY'
 import datetime, json, sys
 
+# Two lines always, and BOTH MUST BE NON-EMPTY. `$( )` strips trailing
+# newlines, so a blank second line does not survive to the caller: its `read`
+# then hits EOF, returns non-zero, and `set -e` ends the run with no message
+# at all -- which is how a corrupt receipt briefly came to look like a clean
+# exit. Print a real detail on every path.
 try:
     receipt = json.loads(open(sys.argv[1]).read())
     if not isinstance(receipt, dict):
         raise ValueError("a receipt is an object")
-except Exception:
-    # Silent: the caller writes the refusal. A traceback here would bury it.
-    sys.exit(1)
+except Exception as exc:
+    print("corrupt")
+    print(f"{type(exc).__name__}: {exc}")
+    raise SystemExit(0)
+
+claimed = receipt.get("sha")
+if claimed != sys.argv[2]:
+    print("mismatch")
+    print(claimed if isinstance(claimed, str) and claimed else "no sha field")
+    raise SystemExit(0)
 
 when = receipt.get("validated_at")
 try:
     when = datetime.datetime.fromtimestamp(float(when)).isoformat(timespec="seconds")
 except (TypeError, ValueError):
     when = "an unrecorded time"
+print("ok")
 print("validated at {} by session {} -- {}".format(
     when, receipt.get("session"), receipt.get("validate_command")))
 PY
 )"; then
-    echo "wdd-finish: the receipt at $RECEIPT will not parse -- refusing to merge." >&2
-    echo "  A corrupt receipt is treated as an ABSENT one. It attests to" >&2
-    echo "  nothing, and a file nobody can read must never be the thing that" >&2
-    echo "  permits a merge." >&2
+    echo "wdd-finish: could not read the receipt at $RECEIPT -- refusing to merge." >&2
     exit 1
   fi
-  note "receipt: $summary"
+  { read -r receipt_status; read -r receipt_detail; } <<< "$receipt_read"
+  case "$receipt_status" in
+    ok) note "receipt: $receipt_detail" ;;
+    mismatch)
+      echo "wdd-finish: the receipt at $RECEIPT names a different commit -- refusing to merge." >&2
+      echo "  filed under: $PR_SHA" >&2
+      echo "  body claims: $receipt_detail" >&2
+      echo "  A receipt copied or symlinked onto another commit's name attests" >&2
+      echo "  to the commit it was WRITTEN for, never to the one it was filed" >&2
+      echo "  under. Run the lane on the commit the PR will merge." >&2
+      exit 1 ;;
+    *)
+      echo "wdd-finish: the receipt at $RECEIPT will not parse -- refusing to merge." >&2
+      echo "  $receipt_detail" >&2
+      echo "  A corrupt receipt is treated as an ABSENT one. It attests to" >&2
+      echo "  nothing, and a file nobody can read must never be the thing that" >&2
+      echo "  permits a merge." >&2
+      exit 1 ;;
+  esac
+
+  # -- 2b. Behind its base ---------------------------------------------------
+  # Only the exact string BEHIND. `mergeStateStatus` is computed lazily, so
+  # UNKNOWN is ordinary, and BLOCKED merely means the checks this step is about
+  # to wait for have not passed yet -- refusing on either would refuse on
+  # nothing at all.
+  refuse_if_behind() {
+    [ "${1:-}" = "BEHIND" ] || return 0
+    echo "wdd-finish: PR #$PR_NUM is BEHIND $BASE -- refusing to merge." >&2
+    echo "  Merging now produces a merge commit combining two states that were" >&2
+    echo "  never validated together: the branch passed against the base AS OF" >&2
+    echo "  WHEN IT RAN, and two branches can each add a differently-named" >&2
+    echo "  migration claiming the same number, which git merges cleanly and" >&2
+    echo "  leaves broken." >&2
+    echo "  'require branches to be up to date' in branch protection covers" >&2
+    echo "  this, but NOTHING HERE CAN OBSERVE WHETHER IT IS ENABLED, so this" >&2
+    echo "  step does not assume it." >&2
+    echo "  Update the branch from $BASE. That changes its head sha, so re-run" >&2
+    echo "  the lane afterwards -- the receipt does not carry across." >&2
+    exit 1
+  }
+  refuse_if_behind "$PR_MERGE_STATE"
 
   # -- 3. Wait for the required check, bounded -----------------------------
   # Bounded because an unbounded wait is a session that never ends, and a
@@ -327,10 +415,10 @@ PY
     # stderr is deliberately NOT suppressed: a `gh` that is failing every poll
     # would otherwise surface only as a timeout reading "the check is still
     # running", which is the one explanation that is definitely wrong.
-    if ! rollup="$(gh pr view "$BRANCH" --json statusCheckRollup)"; then
+    if ! rollup="$(gh pr view "$BRANCH" --json statusCheckRollup,mergeStateStatus)"; then
       rollup=""
     fi
-    verdict="$(python3 - "$CHECK" "$rollup" <<'PY'
+    poll="$(python3 - "$CHECK" "$rollup" <<'PY'
 import json, sys
 
 name = sys.argv[1]
@@ -366,9 +454,17 @@ for c in checks or []:
         else:
             verdict = "fail"
     break
+
+# Two lines: the check verdict, then the merge state. The base can move under
+# a branch during a thirty-minute wait, and the head guard cannot see that --
+# the head has not moved. It rides on this call because it is already being
+# made; a window open for the length of the wait is not worth a second one.
 print(verdict)
+print((data.get("mergeStateStatus") or "UNKNOWN") if isinstance(data, dict) else "UNKNOWN")
 PY
 )"
+    { read -r verdict; read -r merge_state; } <<< "$poll"
+    refuse_if_behind "$merge_state"
     case "$verdict" in
       pass) note "$CHECK: green"; break ;;
       fail)
@@ -395,11 +491,26 @@ PY
   #   * `cleanup` gates task-branch DELETION on `--is-ancestor HEAD origin/BASE`,
   #     and a new sha makes that permanently false, so every task branch would
   #     be kept forever with no indication why.
-  note "merging PR #$PR_NUM server-side (--merge)"
-  if ! gh pr merge "$PR_NUM" --merge; then
+  #
+  # `--match-head-commit "$PR_SHA"` is the other half of the receipt, and it is
+  # not a nicety. The head sha was read before the wait; the wait can run for
+  # half an hour; and "checks are running, let me push the fix now" is the
+  # ordinary way of working, not an exotic sequence. Worse, the rollup reports
+  # checks for the CURRENT head, so a push mid-wait produces a green signal
+  # about a commit no receipt covers -- every signal agrees, and only the sha
+  # dissents. GitHub refuses the merge server-side if the head has moved.
+  #
+  # Re-reading `headRefOid` here instead would only NARROW the window, and a
+  # narrower race is the kind nobody reproduces afterwards.
+  note "merging PR #$PR_NUM server-side (--merge, pinned to $PR_SHA)"
+  if ! gh pr merge "$PR_NUM" --merge --match-head-commit "$PR_SHA"; then
     echo "wdd-finish: gh refused the merge -- nothing landed." >&2
-    echo "  Branch protection sits upstream of this script and is not routed" >&2
-    echo "  around; whatever it objected to has to be settled on GitHub." >&2
+    echo "  If it says the head branch was modified, that is this step working:" >&2
+    echo "  something was pushed while the checks ran, and the receipt covers" >&2
+    echo "  $PR_SHA rather than whatever is on the PR now. Re-run the lane on" >&2
+    echo "  the new commit, then re-run this step." >&2
+    echo "  Otherwise: branch protection sits upstream of this script and is" >&2
+    echo "  not routed around; whatever it objected to is settled on GitHub." >&2
     exit 1
   fi
   note "MERGED: PR #$PR_NUM into $BASE"

@@ -713,7 +713,12 @@ bound holds until the first time it does not, and nothing observes the failure
 that exact commit, in a tree with no uncommitted changes to tracked files, with
 HEAD unmoved for the duration. **Its existence at that path is the verdict**;
 the body is read only to tell you when and by whom, and a receipt that will not
-parse is corrupt, which means *absent*, never *permitted*.
+parse is corrupt, which means *absent*, never *permitted*. The body is checked
+for one thing beyond the message — that it names the commit it is filed under,
+which catches a receipt copied or symlinked onto another commit's name. That
+check is **one-directional**: it can turn a pass into a refusal, never a
+refusal into a pass, so existence remains the only thing that permits
+anything.
 
 Pinning to the sha rather than to the branch is the whole point. A receipt for
 `branch@<a>` says nothing about `branch@<b>`, so **a review fix pushed after the
@@ -734,13 +739,33 @@ and any push in between means running the lane again.
    running* and exits 3, having changed nothing. Anything that is not an
    outright success — failed, skipped, cancelled, or a check that never appears
    — is not a pass;
-4. merges with `gh pr merge --merge`, **server-side**. A local `git merge` runs
-   zero checks and moves HEAD in a checkout other sessions are reading. Not a
-   squash: that mints a new commit, so what lands is a sha nothing validated,
-   and it also makes `cleanup`'s ancestry test permanently false;
+4. merges with `gh pr merge --merge --match-head-commit <sha>`,
+   **server-side**. A local `git merge` runs zero checks and moves HEAD in a
+   checkout other sessions are reading. Not a squash: that mints a new commit,
+   so what lands is a sha nothing validated, and it also makes `cleanup`'s
+   ancestry test permanently false. **The head pin is the other half of the
+   receipt** — see below;
 5. fast-forwards the main checkout, then runs the project's optional
    `refresh_commands` there **best-effort** — the merge has already happened
    and a regeneration failing must not unwind it.
+
+**The head sha is read once, and the wait can run for half an hour.** Pushing a
+review fix while checks run is the ordinary way of working, not an exotic
+sequence — and `statusCheckRollup` reports checks for the *current* head, so a
+push mid-wait produces a green signal about a commit no receipt covers. Every
+signal agrees that merging is fine; only the sha dissents. `--match-head-commit`
+closes that **server-side**: GitHub refuses if the head has moved. Re-reading
+the head just before merging would only narrow the window, and a narrower race
+is the kind nobody reproduces afterwards. A `gh` too old for the flag (it
+arrived in 2.96) makes `merge` refuse rather than merge unguarded — a guard
+that is silently absent looks exactly like a guard that passed.
+
+**A PR that is `BEHIND` its base is refused**, before any waiting. Merging one
+produces a merge commit combining two states nothing validated — the
+migration-number hazard described below. `require branches to be up to date`
+covers it, but nothing here can observe whether a project enabled that, so this
+step does not assume it. The remedy is to update the branch, which changes its
+head sha, so the lane has to run again: the receipt does not carry across.
 
 The fast-forward is the one place any of this touches the shared checkout, and
 it is safe by construction rather than by care: `git merge --ff-only` cannot
