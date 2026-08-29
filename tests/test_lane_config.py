@@ -199,6 +199,32 @@ def test_a_project_with_no_config_at_all_says_where_it_looked(tmp_path, monkeypa
     assert str(root) in str(exc.value), "the error must name the project it resolved"
 
 
+# --- Resolving the config's location --------------------------------------
+
+
+def test_new_location_is_preferred(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".pitcall").mkdir()
+    (tmp_path / ".pitcall" / "config.json").write_text('{"default_branch": "main"}')
+    assert lane_config.config_path(tmp_path) == tmp_path / ".pitcall" / "config.json"
+
+
+def test_legacy_root_still_resolves_and_warns(tmp_path, capsys):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pitcall.config.json").write_text('{"default_branch": "main"}')
+    assert lane_config.config_path(tmp_path) == tmp_path / "pitcall.config.json"
+    assert ".pitcall/config.json" in capsys.readouterr().err
+
+
+def test_both_locations_present_is_an_error(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".pitcall").mkdir()
+    (tmp_path / ".pitcall" / "config.json").write_text("{}")
+    (tmp_path / "pitcall.config.json").write_text("{}")
+    with pytest.raises(RuntimeError, match="two configs"):
+        lane_config.config_path(tmp_path)
+
+
 # --- A missing key is a loud failure, never a default --------------------
 
 

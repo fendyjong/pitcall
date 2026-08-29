@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import NamedTuple
 
-CONFIG_NAME = "pitcall.config.json"
+CONFIG_NAME = "pitcall.config.json"          # legacy location, repo root
+CONFIG_DIR = ".pitcall"
+CONFIG_BASENAME = "config.json"
 
 #: Keys the workflow reads and cannot guess. Most are consumed by the skills
 #: rather than by this module; the check lives here because this is the one
@@ -195,6 +198,31 @@ def worktree_root(start: Path | None = None) -> Path:
     return Path(_rev_parse(settled.directory, "--show-toplevel"))
 
 
+def _resolve_config_in(root: Path) -> Path:
+    """Locate the config within one checkout root.
+
+    Both locations present is refused rather than ordered: a precedence rule
+    lets two configs disagree in silence, and the one that loses is invisible.
+    """
+    new = root / CONFIG_DIR / CONFIG_BASENAME
+    legacy = root / CONFIG_NAME
+    if new.exists() and legacy.exists():
+        raise RuntimeError(
+            f"lane: two configs in {root} — {CONFIG_DIR}/{CONFIG_BASENAME} and "
+            f"{CONFIG_NAME}. Delete the legacy one; having both means a silent "
+            f"disagreement about which is live."
+        )
+    if new.exists():
+        return new
+    if legacy.exists():
+        sys.stderr.write(
+            f"lane: {CONFIG_NAME} is deprecated — move it to "
+            f"{CONFIG_DIR}/{CONFIG_BASENAME} (and un-ignore that path).\n"
+        )
+        return legacy
+    return new
+
+
 def config_path(checkout: Path | str | None = None) -> Path:
     """The config in `checkout`, or in the caller's own — never the shared root.
 
@@ -207,7 +235,8 @@ def config_path(checkout: Path | str | None = None) -> Path:
     `lane run --worktree X` ran in X while reading the config from cwd's
     checkout — which is the same class of quiet mismatch as everything else here.
     """
-    return Path(checkout) / CONFIG_NAME if checkout else worktree_root() / CONFIG_NAME
+    root = Path(checkout) if checkout else worktree_root()
+    return _resolve_config_in(root)
 
 
 def load_config(checkout: Path | str | None = None) -> dict:
