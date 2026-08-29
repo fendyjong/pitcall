@@ -30,13 +30,15 @@ A list key holding something other than a list IS an error, not an empty
 answer: a bare string would word-split at the caller into paths nobody wrote.
 
 `--scalar` reads a single string instead, for the keys that name one thing
-(`default_branch`, `required_check`). **Absence is an ERROR in this mode, not
-an empty answer**, and the asymmetry is deliberate: a caller asking "which
-branch?" has no sensible way to proceed without a name, so printing nothing
-would only move the failure to the caller, where it arrives as an empty
-variable rather than a message. The keys `--scalar` exists for are in
-`REQUIRED_KEYS` anyway, so this fires on a hand-edited config, not on a
-project that legitimately has none.
+(`default_branch`, `required_check`, `worktree_dir`, `plan_dir`). **Absence is an
+ERROR in this mode, not an empty answer**, and the asymmetry is deliberate: a
+caller asking "which branch?" has no sensible way to proceed without a name, so
+printing nothing would only move the failure to the caller, where it arrives as
+an empty variable rather than a message. `default_branch` and `required_check`
+are also in `REQUIRED_KEYS`, so for those two this fires only on a hand-edited
+config. `worktree_dir` and `plan_dir` are NOT in `REQUIRED_KEYS` — for those two
+this `--scalar` check is the only enforcement a missing key ever gets, so it
+fires on any project that has simply never set one, not only a broken config.
 
 Usage: project-config [--scalar] KEY [CHECKOUT]
 Exit:  0 ok (list mode: including "no such key") | 2 usage, unreadable config,
@@ -52,7 +54,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 try:
-    from lane_config import CONFIG_NAME, load_config
+    from lane_config import config_path, load_config
 except ImportError:  # pragma: no cover - a broken install, not a code path
     sys.exit("project-config: cannot import lane_config — the plugin is incomplete")
 
@@ -80,10 +82,15 @@ def main(argv: list[str]) -> int:
 
     if scalar:
         if not isinstance(value, str) or not value:
+            # Name the config `load_config()` actually resolved for this checkout,
+            # never the legacy `CONFIG_NAME` literal: a project correctly using
+            # `.pitcall/config.json` was previously told its key "must be a
+            # non-empty string in pitcall.config.json" — a file that must not
+            # exist, and creating it on that advice trips the both-present error.
             sys.stderr.write(
                 f"project-config: {key} must be a non-empty string in "
-                f"{CONFIG_NAME}, not {value!r} — this is a required key and the "
-                "caller has no defensible default for it\n"
+                f"{config_path(checkout)}, not {value!r} — this is a required key "
+                "and the caller has no defensible default for it\n"
             )
             return 2
         print(value)

@@ -16,7 +16,7 @@ the gate outright — "I could not read this" must never collapse into "this
 reference is fine" for a check whose whole job is catching exactly that kind
 of miss.
 
-Three references can dangle, and the first version of this file caught only
+Four references can dangle, and the first version of this file caught only
 one of them:
 
 - `pitcall:<name>` — a skill or command invoked by name.
@@ -41,6 +41,15 @@ one of them:
   usable in a filename on every platform this plugin installs to, so such a
   path cannot arrive here. The half-vendored directory is the failure that
   actually lives in the path space.)
+- a **bare** (non-`../`) path in `commands/*.md` naming one of this plugin's
+  own `docs/` files. This is NOT covered by either check above: it has no
+  `pitcall:` prefix and no `../`. A command executes with cwd set to the
+  project it configures, not this checkout, so a bare `docs/configuration.md`
+  is a plausible path THERE too, and resolves against a same-named file in
+  that project instead of this plugin's own doc — silently, and for `init`,
+  with write permission. This shipped once: `commands/init.md` named
+  `docs/configuration.md` seven times, unqualified, and every check above
+  passed.
 
 `test_enumeration_is_not_empty` guards the gate itself. Without it a suite
 that checks zero files exits 0 and is indistinguishable from a suite that
@@ -155,6 +164,59 @@ def test_every_relative_reference_resolves():
     assert not dangling, (
         "relative reference(s) pointing outside what this plugin ships: "
         f"{sorted(dangling)}"
+    )
+
+
+#: This plugin's own installed directory, wherever it was installed — the one
+#: spelling that resolves the same way regardless of cwd. A command's cwd is
+#: the ADOPTING PROJECT it is configuring, never this checkout.
+PLUGIN_ROOT_PREFIX = "${CLAUDE_PLUGIN_ROOT}/"
+
+
+def test_every_command_reference_to_a_shipped_doc_is_plugin_rooted():
+    """A `commands/*.md` file naming one of this plugin's own `docs/` files bare
+    is the fourth dangling reference, and neither sibling gate above sees it.
+
+    A command executes with cwd set to the project it is configuring, not this
+    checkout. `docs/configuration.md` is a plausible path in a REAL project too
+    -- so a bare mention resolves against a same-named file there instead of
+    this plugin's own reference doc, and `init` (which literally executes what
+    it reads) then reads a foreign file with write permission. This is exactly
+    what shipped: `test_every_referenced_skill_exists` only matches
+    `pitcall:name`, and `test_every_relative_reference_resolves` only matches a
+    `../`-prefixed path, so a bare, non-relative `docs/configuration.md` was
+    invisible to both until a live run outside this checkout exposed it.
+
+    Scoped to paths tracked under this plugin's own `docs/` -- not every
+    tracked path -- because a command legitimately names paths that must
+    resolve in the ADOPTING PROJECT instead (`.gitignore`, `.pitcall/config.json`,
+    `pitcall.config.json`), and qualifying THOSE with `${CLAUDE_PLUGIN_ROOT}`
+    would be wrong, not safer: it would point them at this plugin's own
+    checkout instead of the project being configured.
+    """
+    tracked = set(tracked_files())
+    doc_paths = sorted((p for p in tracked if p.startswith("docs/")), key=len, reverse=True)
+    assert doc_paths, "no docs/ files are tracked - the enumeration did not run"
+
+    unqualified = set()
+    for rel in _files():
+        if not (rel.startswith("commands/") and rel.endswith(".md")):
+            continue
+        text = _blob_text(rel)
+        for doc in doc_paths:
+            start = 0
+            while True:
+                pos = text.find(doc, start)
+                if pos == -1:
+                    break
+                start = pos + 1
+                if text[:pos].endswith(PLUGIN_ROOT_PREFIX):
+                    continue
+                unqualified.add((rel, doc))
+    assert not unqualified, (
+        "command names a plugin doc bare, not qualified by "
+        f"{PLUGIN_ROOT_PREFIX!r}, so it resolves against the ADOPTING "
+        f"PROJECT's cwd instead of this plugin's own doc: {sorted(unqualified)}"
     )
 
 

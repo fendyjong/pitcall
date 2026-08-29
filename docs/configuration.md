@@ -29,8 +29,9 @@ guess; it is what the tree currently contains.
 ## Required keys
 
 Missing outright, `load_config()` raises immediately and names every missing key at
-once. `bringup` and `validate` may still be `null` — required means the *key* must
-exist, not that it must do anything.
+once — that's true of the four keys below that `lane_config.py`'s `REQUIRED_KEYS` actually
+names. `bringup` and `validate` may still be `null` — required means the *key* must exist, not
+that it must do anything.
 
 | Key | Meaning | Required? | What reads it | If absent |
 | --- | --- | --- | --- | --- |
@@ -38,6 +39,16 @@ exist, not that it must do anything.
 | `validate` | Shell command line — the one suite whose pass licenses a merge — run after `bringup`. | Yes — the key must exist. May be `null`. | `scripts/lane.py`, `scripts/lane_config.py`. | Same shape as `bringup`. A run whose `validate` is `null` also never writes a validation receipt, so nothing downstream can treat it as validated. |
 | `default_branch` | The branch work is cut from and merged back to. | Yes — must be a non-empty string. | `scripts/lane_config.py` (checks the key exists), `skills/wave-driven-development/scripts/wdd` (reads the value via `project-config --scalar default_branch` to know what to branch from and retarget PRs onto). | Key missing entirely: `load_config()` raises. Key present but empty or non-string: the *reader* refuses (`project-config: default_branch must be a non-empty string ...`) the first time anything asks for it, not at config-load time. |
 | `required_check` | Name of the CI status check that must go green before `wdd`'s merge step proceeds. | Yes — must be a non-empty string. | `scripts/lane_config.py`, `skills/wave-driven-development/scripts/wdd` (polls this check by name, bounded, before merging). | Same shape as `default_branch`. |
+
+**Two more keys are just as mandatory in practice — every WDD run needs both — but neither is
+in `REQUIRED_KEYS`, so `load_config()` does not check them. Each is enforced instead by its own
+reader, through `project-config --scalar`, the first time a skill asks for it — later than
+`load_config()`, and deep inside a wave rather than at the start of a run:**
+
+| Key | Meaning | Required? | What reads it | If absent |
+| --- | --- | --- | --- | --- |
+| `worktree_dir` | Directory, relative to the project root, that per-task worktrees are created under. | Yes in practice — must be a non-empty string. Not checked by `load_config()`. | `skills/wave-driven-development/scripts/wave-worktree` (path construction and the ignore check, via `project-config --scalar worktree_dir`), `skills/wave-driven-development/scripts/wdd`'s `require_worktree_dir` (used by `cleanup`); named in `skills/wave-driven-development/SKILL.md` and `skills/brainstorming/SKILL.md`. | `load_config()` succeeds regardless — the key isn't in `REQUIRED_KEYS`. `wave-worktree`'s own first line, `project-config --scalar worktree_dir`, exits 2 naming the key: WDD cannot create a task worktree at all. |
+| `plan_dir` | Directory, relative to the project root, that WDD plan documents are saved to. | Same shape as `worktree_dir`. | `skills/wave-driven-development/SKILL.md:50`, via `project-config --scalar plan_dir`. No script reads it directly — the same standard as `migration_homes` below, just required rather than optional. | Same shape as `worktree_dir`: `project-config --scalar plan_dir` exits 2 the first time WDD tries to save a plan (Phase 1, step 1). |
 
 **How to recognise the right value in a repository that has never seen this tool:**
 
@@ -55,6 +66,18 @@ exist, not that it must do anything.
   workflow file itself (often the job that depends on — `needs:`, in GitHub
   Actions — every other job, so its own success implies theirs), not off a recent
   PR's green checkmark, which can be green for reasons unrelated to what merged.
+- `worktree_dir` — check `.gitignore`: whatever directory holds per-task worktrees
+  must already be ignored there (git refuses to create a worktree inside a
+  tracked, non-ignored path), so an existing ignore entry for a worktree-shaped
+  directory is usually the answer already in use. A project with no such entry
+  yet is choosing one for the first time by setting this key — `.worktrees/` is
+  this tool's own convention absent a project-specific reason to pick something
+  else.
+- `plan_dir` — if the project already keeps design documents somewhere (a `docs/`,
+  `design/`, or `specs/` directory with a consistent convention), that is the
+  answer. A project with no such convention yet is choosing one for the first
+  time by setting this key — `docs/plans/` is this tool's own convention absent a
+  project-specific reason to pick something else.
 
 ## Optional keys with a shipped reader
 
@@ -90,12 +113,12 @@ branch on it.
 These keys exist in `pitcall.config.example.json` and are legitimate places to
 record a value, but no shipped code consumes them today. Writing a value here has
 no observable effect until the work that reads it lands; that work is specified
-elsewhere, not by this file. Unlike the two keys in the next section, nothing here
-is standing in for these — there is simply no consumer yet.
+elsewhere, not by this file. Unlike `worktree_dir` and `plan_dir` above, nothing
+here is standing in for these — there is simply no consumer yet.
 
 | Key | Intended meaning | Required? | What reads it | If absent |
 | --- | --- | --- | --- | --- |
-| `teardown` | Shell command line to tear the stack `bringup` started back down. | No. | Nothing shipped. Appears only in this project's own test fixtures (`skills/wave-driven-development/tests/test_wave_worktree.py`, `tests/test_lane.py`, `tests/test_lane_config.py`) and, coincidentally, the English word "teardown" in an unrelated comment in `scripts/lane.py` — that comment is not a read of this key. | No effect either way. Do not write it expecting a step to run. |
+| `teardown` | Shell command line to tear the stack `bringup` started back down. | No. | Nothing shipped. Appears only in this project's own test fixtures (`skills/wave-driven-development/tests/test_wave_worktree.py`, `tests/test_lane.py`, `tests/test_lane_config.py`) and, coincidentally, as the English word "teardown" in unrelated prose — a comment in `scripts/lane.py` and two mentions of worktree teardown in `skills/wave-driven-development/SKILL.md` — none of which are reads of this key. | No effect either way. Do not write it expecting a step to run. |
 | `branch_prefix` | The prefix a cut branch's name carries ahead of `<issue>-<slug>`, e.g. `feat/`. | No. | Nothing shipped reads the key. One command's prose (`commands/spec-review.md`) already assumes branches are named `<branch_prefix>/<issue>-<slug>` when deriving the current issue from `git rev-parse --abbrev-ref HEAD`, but it does that by convention, not by reading this key. | No effect. Declared for branch-naming work specified elsewhere. |
 | `backlog_milestone` | Name of the milestone that holds backlog / not-yet-scheduled work, distinct from a milestone a plan is actively executing against. | No. | Nothing shipped. | No effect. Declared for backlog-triage work specified elsewhere. |
 | `claim_expiry_hours` | Hours an issue claim is honoured before another session may treat it as abandoned and take the work over. | No. | Nothing shipped. | No effect. Declared for claim-protocol work specified elsewhere. |
@@ -114,36 +137,11 @@ will use it:**
   project fact to discover; pick a number that comfortably outlasts one working
   session.
 
-## Declared, read from a literal today — being wired by this change
-
-Both keys measured zero readers for the same reason: a hardcoded literal already
-does the job the key was declared for, sitting beside code that could read the key
-instead and does not. That is a worse state than "not yet built" — the consumer
-exists, and simply ignores the key. Wiring these up (removing the literals, reading
-the key in their place) is part of this same change, not a deferral.
-
-| Key | Meaning | Required? | Literal it replaces | If absent (today) |
-| --- | --- | --- | --- | --- |
-| `worktree_dir` | Directory, relative to the project root, that per-task worktrees are created under. | Not today. Will become effectively required once wired (see "If absent"). | `.worktrees/`, hardcoded in `skills/wave-driven-development/scripts/wave-worktree` (path construction and the ignore check) and named in `skills/wave-driven-development/SKILL.md` and `skills/brainstorming/SKILL.md`. | No effect today — the literal is used regardless of what (or whether) this key is set. Once wired, a missing key is a loud failure: no fallback to `.worktrees/` is kept. |
-| `plan_dir` | Directory, relative to the project root, that WDD plan documents are saved to. | Not today. Same trajectory as `worktree_dir`. | `docs/superpowers/plans/`, hardcoded in the plan-saving instruction in `skills/wave-driven-development/SKILL.md`. | No effect today, same reason. Once wired, a missing key is a loud failure there too. |
-
-**How to recognise the right value:**
-
-- `worktree_dir` — check `.gitignore`: whatever directory holds per-task worktrees
-  must already be ignored there (git refuses to create a worktree inside a
-  tracked, non-ignored path), so an existing ignore entry for a worktree-shaped
-  directory is usually the answer already in use.
-- `plan_dir` — if the project already keeps design documents somewhere (a `docs/`,
-  `design/`, or `specs/` directory with a consistent convention), that is the
-  answer. A project with no such convention yet is choosing one for the first
-  time by setting this key.
-
 ## Not a key of this plugin
 
-`premerge_script` is not documented above because it does not exist here: it
-appears in at least one project's configuration outside this repository, and
-nowhere in this repository — not in code, not in `pitcall.config.example.json`, not
-in prose. It was invented against a surface that had never documented what it
-actually was. If you find it in a config you're adopting, it does nothing when read
-by this plugin; the project that wrote it meant something this plugin does not
-implement.
+`premerge_script` is not documented above because it does not exist here: except
+for this paragraph naming it, it appears nowhere in this repository — not in code,
+not in `pitcall.config.example.json`. It was invented against a surface that had
+never documented what it actually was. If you find it in a config you're adopting,
+it does nothing when read by this plugin; the project that wrote it meant
+something this plugin does not implement.
