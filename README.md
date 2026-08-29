@@ -22,7 +22,7 @@ It is read from the checkout you are standing in, so a linked worktree reads the
 copy on its own branch: a branch that changes its validate command is tested with
 that command, and the change is visible in its own diff.
 
-Copy `pitcall.config.example.json` to your project root and edit it. If you ever see
+Copy `pitcall.config.example.json` into place and edit it. If you ever see
 
 ```
 lane: no .pitcall/config.json or pitcall.config.json in <checkout> — that is the

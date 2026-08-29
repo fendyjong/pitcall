@@ -1,4 +1,4 @@
-# Configuration reference — `pitcall.config.json`
+# Configuration reference
 
 This is the one artifact that describes the plugin's configuration surface. It has
 two readers: a human deciding whether to adopt the tool, and this plugin's `init`
