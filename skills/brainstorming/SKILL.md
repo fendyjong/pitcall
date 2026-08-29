@@ -98,10 +98,10 @@ your path and complete them in order.
 3. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
 4. **Propose 2-3 approaches** — with trade-offs and your recommendation
 5. **Present design** — in sections scaled to their complexity, get user approval after each section
-6. **Create the isolated workspace** — the spec is the first file this process writes; make (or confirm) the worktree it belongs in before writing it. See Create the Workspace below.
-7. **Write design doc** — save to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and commit
+6. **Create the isolated workspace** — the spec is a comment rather than a file, but the plan that follows it is a file; make (or confirm) the worktree before handing off. See Create the Workspace below.
+7. **Write the spec** — post it as a comment on the work issue, marked `# Spec:` and carrying a `**Version:**` header
 8. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
-9. **User reviews written spec** — ask user to review the spec file before proceeding
+9. **User reviews the spec** — ask user to review the spec comment before proceeding
 10. **Transition to implementation** — invoke pitcall:wave-driven-development, which writes the implementation plan from the approved spec and executes it
 
 ## Process Flow
@@ -257,13 +257,25 @@ implementation starts.
 
 **Documentation:**
 
-- Write the validated design (spec) to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
-  - (User preferences for spec location override this default)
+- Post the validated design (spec) as a **comment on the work issue** — the issue the work is
+  tracked under, whose body is the queue entry. The spec never becomes a file.
+- **Its first line must be `# Spec: <title>`.** That marker is how any later session finds it;
+  comments accumulate, so position is not an address and "the first comment" stops being true the
+  moment someone replies before the spec is written.
+- **Carry a `**Version:** N` header, starting at 1.** A file spec had version identity for free —
+  the commit sha. A comment edited in place has none, so a reader who quotes it may be quoting a
+  state that has already moved. Approval names a version; any edit after approval bumps it and
+  re-opens the gate.
 - Use elements-of-style:writing-clearly-and-concisely skill if available
-- Commit the design document to git
+- **A spec too large for one comment is a decomposition finding, not a splitting problem.** The
+  limit is roughly 150,000 characters. Do not split a spec across comments: comment order is
+  creation order and cannot be reordered, so a later restructuring lands below the approval and the
+  document loses both its reading order and its single address. Report it and decompose into
+  sub-projects, each with its own issue and spec — which this skill already requires of a design
+  spanning independent subsystems.
 
 **Spec Self-Review:**
-After writing the spec document, look at it with fresh eyes:
+After posting the spec comment, look at it with fresh eyes:
 
 1. **Placeholder scan:** Any "TBD", "TODO", incomplete sections, or vague requirements? Fix them.
 2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
@@ -275,7 +287,7 @@ Fix any issues inline. No need to re-review — just fix and move on.
 **User Review Gate:**
 After the spec review loop passes, ask the user to review the written spec before proceeding:
 
-> "Spec written and committed to `<path>`. Please review it and let me know if you want to make any changes before we start writing out the implementation plan."
+> "Spec posted as a comment on #<issue>: <comment URL>. Please review it and let me know if you want to make any changes before we start writing out the implementation plan."
 
 Wait for the user's response. If they request changes, make them and re-run the spec review loop. Only proceed once the user approves.
 

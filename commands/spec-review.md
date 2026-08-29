@@ -12,13 +12,26 @@ hand back is a clean spec, not a list of complaints.
 
 `$ARGUMENTS`
 
+**The spec is a comment on its work issue, not a file.**
+
 Resolve the target:
-- A file path or glob → that document set.
-- A branch name, `PR#`, or `HEAD` → the spec/design/plan docs changed in that diff.
-- Empty → the spec this session just produced. If there isn't one, find candidates
-  (`docs/**/*.md`, `specs/**`, `*plan*.md`, `*design*.md`, `*spec*.md`, most recently modified;
-  check `git status` and `git log -1 --name-only`). More than one plausible → list them and ask
-  which. Do not guess.
+- An issue number or issue URL → the spec comment on that issue.
+- A comment URL or comment id → that comment directly.
+- Empty → the issue this session is working. The branch name encodes it:
+  `<branch_prefix>/<issue>-<slug>`, so `git rev-parse --abbrev-ref HEAD` names the issue.
+- Nothing resolves → list the candidates and ask which. Do not guess.
+
+Find the spec **by its `# Spec:` first line, never by position** — comments accumulate, so the
+newest is not the spec and neither, once anyone has replied, is the first:
+
+```bash
+gh api "repos/<owner>/<repo>/issues/<n>/comments" \
+  --jq '.[] | select(.body|startswith("# Spec:")) | .id'
+```
+
+**Never reach for `gh issue comment --edit-last`.** It targets the most recent comment by the
+current user, which is the spec only until someone replies — after that it silently edits the wrong
+comment, and the spec is left untouched while the report says it was fixed.
 
 If `--review-only` appears in the arguments, run Phases 1 and 2 and stop — report, change nothing.
 
@@ -186,8 +199,20 @@ Edit the spec in place. Rules:
 - **Update what the edits invalidate** — a table of contents, a summary section, cross-references,
   a diagram caption, an example that used the old field name. An internally inconsistent "fixed"
   spec is a worse outcome than the original.
-- **Only the spec.** Do not write code, do not change other docs, do not touch the tracker or open
-  issues, do not commit. Leave the change in the working tree for the user to review.
+- **Bump the `**Version:** N` header and reset `Status:` to draft, in the same edit.** Approval
+  names a version, so an edit after approval has to re-open that gate. Leaving the version alone
+  silently transfers an approval onto text nobody approved — the failure state sitting exactly where
+  the safe state should be.
+- **Only the spec comment.** Do not write code, do not change other docs, do not touch any other
+  comment or issue, do not commit. The edit lands on the comment itself:
+
+  ```bash
+  gh api --method PATCH "repos/<owner>/<repo>/issues/comments/<id>" \
+    -f body="$(cat <edited-spec-file>)"
+  ```
+
+  Write the edited text to a scratch file first and PATCH from it — passing a long body inline is
+  how quoting mangles a spec.
 
 ---
 
