@@ -57,7 +57,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SELF = "tests/test_plugin_closure.py"
-# Includes `_`: a reference like `pitcall:executing-plans_old` must capture
+# Includes `_`: a reference like `pitcall:brainstorming_old` must capture
 # the whole trailing token, not truncate at the underscore and accidentally
 # resolve against a real, but different, skill.
 REF = re.compile(r"\bpitcall:([a-z0-9_-]+)")

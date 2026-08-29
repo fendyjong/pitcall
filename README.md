@@ -56,7 +56,7 @@ remembering to branch on it.
 | --- | --- |
 | `regenerated_paths` | No tracked file is rewritten by a git hook, so nothing needs restoring after a worktree is created. Absent, `null` and `[]` are all the same answer. |
 | `migration_homes` | The project has no migration directories, so the duplicate-number check has nothing to compare. Absent, `null` and `[]` are the same answer. |
-| `refresh_commands` | Nothing to regenerate after a merge, so `wdd-finish merge` skips the step. Each item is a shell command line, run in the **main checkout** after it fast-forwards, and **best-effort**: the merge has already happened, so a failure here is reported and the run still succeeds. |
+| `refresh_commands` | Nothing to regenerate after a merge, so `wdd merge` skips the step. Each item is a shell command line, run in the **main checkout** after it fast-forwards, and **best-effort**: the merge has already happened, so a failure here is reported and the run still succeeds. |
 | `outbound_allowlist` | Only read by `lane_config.allowlisted()`. A project that sends nothing outbound need not write it; if something does call `allowlisted()` without it, that call fails loudly rather than permitting anything. |
 | `teardown` | Nothing. **No shipped command reads this key.** It appears in the test fixtures and is reserved for a future teardown step — do not write it expecting it to run. |
 

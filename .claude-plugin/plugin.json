@@ -1,7 +1,7 @@
 {
   "name": "pitcall",
   "description": "A development workflow for Claude Code: spec, plan, parallel execution in isolated worktrees, review, and ship — with a machine-wide validation lane",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Fendy Jong"
   },

@@ -1,11 +1,5 @@
 # Implementer Subagent Prompt Template
 
-<!-- Forked from pitcall:subagent-driven-development's template of the same
-     name, not referenced in place: this copy has diverged deliberately for
-     wave scheduling, and a reference would silently adopt the other skill's
-     wording instead. Re-diff it against that template when either changes,
-     and adopt the difference on purpose. -->
-
 Use this template when dispatching an implementer subagent.
 
 ```
@@ -54,13 +48,17 @@ Subagent (general-purpose):
 
     ## Parallel Execution Overrides
 
-    Sibling tasks from this plan are being implemented **right now**, each in
-    its own git worktree on its own branch. These consequences bind you:
+    Sibling tasks from this plan are usually being implemented **right now**,
+    each in its own git worktree on its own branch. Every rule below holds
+    whether or not that is true of this wave: a wave that happens to hold one
+    task gets no worktree of its own, because there is no concurrent writer to
+    be isolated from — but the declared file list, the lockfile rules and the
+    reporting contract are the same either way, and you cannot see which case
+    you are in. These consequences bind you:
 
-    **1. Your working directory is a task worktree, and it is the only tree you
-    touch.** Never `cd` out of it, never edit files in the plan worktree or in
-    a sibling's worktree, never `git checkout` another branch. Commit on the
-    branch you were given.
+    **1. The working directory you were given is the only tree you touch.**
+    Never `cd` out of it, never edit files in another worktree, never `git
+    checkout` another branch. Commit on the branch you were given.
 
     **1a. Your task's declared file list is a boundary, not a suggestion.** The
     brief's `**Files:**` block names every path you may create, modify, delete,
@@ -109,6 +107,18 @@ Subagent (general-purpose):
 
     While iterating, run the focused test for what you're changing; run the
     full suite once before committing, not after every edit.
+
+    ## You Do Not Dispatch Subagents
+
+    Do all of this task's work yourself. Never spawn a subagent to
+    implement part of the task, and above all never spawn a reviewer to
+    check your work. Self-review (below) means reading your own diff.
+    Review is the controller's job: after you report, it dispatches a
+    fresh reviewer against your diff. A reviewer you spawn duplicates
+    that review at full cost, and its approval counts for nothing in
+    the process. If you catch yourself thinking "an independent review
+    would strengthen my report" — that review is already scheduled.
+    Report instead.
 
     ## Code Organization
 

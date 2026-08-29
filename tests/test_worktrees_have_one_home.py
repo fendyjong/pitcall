@@ -12,7 +12,7 @@ cleanup step "only cleans worktrees under `.worktrees/` or `worktrees/`, which
 never matches" the home it had chosen — a defect visible in prose for as long
 as the prose survived, and enforced by nothing.
 
-`.worktrees/` is the home. It is what `using-git-worktrees` defaults to, it is
+`.worktrees/` is the home. It is what `pitcall:brainstorming` defaults to, it is
 what `.gitignore` ignores, and this test is what keeps the other spelling from
 coming back in a paste.
 
