@@ -359,10 +359,13 @@ the plan branch, ready for Final Review.
    check matters because the two dirs also differ inside a submodule, which is
    not a worktree. If you are already in one, use it; do not nest another.
 
-   Otherwise create it under `.worktrees/` at the project root, **based on
+   Otherwise create it under `<worktree-dir>` at the project root, **based on
    `origin/<default-branch>` explicitly**, after a `git fetch` —
-   `<default-branch>` being the project config's `default_branch`, never a name
-   assumed here:
+   `<worktree-dir>` being the project config's `worktree_dir`
+   (`scripts/project-config --scalar worktree_dir`), and `<default-branch>`
+   being the project config's `default_branch`, never a name assumed here.
+   Every task-worktree path below is spelled `<worktree-dir>/<slug>-t<N>` —
+   the same `<worktree-dir>`, never a literal:
 
    ```bash
    git fetch --no-tags origin <default-branch>
@@ -432,7 +435,7 @@ the plan branch, ready for Final Review.
 **Per wave, until every task is complete or escalated:** everything below
 runs from the plan worktree unless a command names a different directory
 explicitly — task worktrees are always spelled out as
-`.worktrees/<slug>-t<N>`. Every subagent dispatch also names its
+`<worktree-dir>/<slug>-t<N>`. Every subagent dispatch also names its
 model explicitly — an omitted model silently inherits the session's most
 expensive one. Tiers: see Model Selection, below.
 
@@ -475,7 +478,7 @@ expensive one. Tiers: see Model Selection, below.
 
    ```bash
    scripts/project-config regenerated_paths |
-     xargs -r git -C .worktrees/<slug>-t<N> checkout --
+     xargs -r git -C <worktree-dir>/<slug>-t<N> checkout --
    ```
 
    so the implementer never sees churn it did not cause. A project that
@@ -511,11 +514,11 @@ expensive one. Tiers: see Model Selection, below.
    somewhere else — a check `prune` never has to bypass, because `prune`
    only ever drops registrations whose directory is already confirmed gone.
 
-   `git worktree prune && git worktree add .worktrees/<slug>-t<N>
+   `git worktree prune && git worktree add <worktree-dir>/<slug>-t<N>
    <slug>-t<N>` (no `-b` — checks out the branch that already exists rather
    than creating a new one). Then do the two setup steps `wave-worktree
    create` would otherwise have done, in order: `git -C
-   .worktrees/<slug>-t<N> submodule update --init --recursive`
+   <worktree-dir>/<slug>-t<N> submodule update --init --recursive`
    (a plain `worktree add` does not initialise submodules, so every submodule
    lands empty and any tooling that reads one fails — the exact failure
    `wave-worktree` exists to prevent), then step 2's restore over
