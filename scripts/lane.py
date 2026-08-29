@@ -42,6 +42,26 @@ acquisition.** `acquire()` therefore returns a `Held` whose kernel lock lives
 exactly as long as the object's file handle, and `lane run` (see `main`) is the
 entry point that holds it across `bringup` and `validate` in one process.
 
+## The receipt: what this run validated
+
+A successful `validate` leaves `.pitcall/receipts/<sha>.json`, naming the commit
+it covered. A later step merges a pull request once its checks are green, and
+what makes that safe is a rule that nothing merges without having passed a lane
+run — so the receipt turns that rule from something a session remembers into
+something a machine can check.
+
+It is keyed by SHA, never by branch: the ordinary failure is a review fix landing
+after validation and inheriting its approval, and a branch-keyed receipt says
+"this branch was fine" long after it stopped being the branch that was tested.
+
+**A receipt that attests to nothing is worse than no receipt**, because it reads
+exactly like one that does. Three ways to write one, all three of which this
+codebase has shipped before: for a step that was SKIPPED (`validate` may be null,
+and the lane skips a step configured that way — the run still exits 0), for a
+step that FAILED, and for the WRONG COMMIT (the sha is resolved from the
+validated worktree, never the caller's cwd; `lane run --worktree X` means those
+two are routinely different directories). See `_cmd_run`.
+
 ## Clearing a stuck lane
 
 That leaves the owner one job: a live holder that is stuck. Clear it by **killing
@@ -92,6 +112,20 @@ def lane_dir() -> Path:
     excludes nobody.
     """
     d = shared_root() / ".pitcall"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def receipts_dir() -> Path:
+    """Where a validated commit is recorded, beside the lane it was run in.
+
+    Under `lane_dir()`, so every worktree of the project reads and writes ONE
+    set of receipts — the same reason the lock lives there. A worktree-scoped
+    directory would let the merge step consult a set of receipts that the
+    session which actually ran the lane never wrote to, and find nothing, and be
+    unable to tell that from a branch that was never validated.
+    """
+    d = lane_dir() / "receipts"
     d.mkdir(exist_ok=True)
     return d
 
@@ -313,6 +347,51 @@ def _step(label: str, command: str, cwd: Path) -> int:
     return subprocess.run(command, shell=True, cwd=cwd).returncode
 
 
+def _worktree_sha(worktree: str) -> str | None:
+    """HEAD of the checkout that was validated, or None if it has none.
+
+    `-C <worktree>`, never the process's own cwd. `lane run --worktree X` runs
+    the steps in X while the process stands wherever the caller invoked it, so a
+    receipt built from cwd would name a commit nothing was run against — and the
+    two roots are the same path in the main checkout, which is why that mistake
+    survives casual testing. This module has resolved the wrong one of that pair
+    twice already.
+    """
+    out = subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"],
+                         capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def _record_receipt(session: str, worktree: str, command: str) -> None:
+    """Record the commit a SUCCESSFUL `validate` covered.
+
+    One caller, `_cmd_run`, which calls this only after `validate` ran and
+    exited 0 and while it still holds the lane. The two preconditions are the
+    caller's to enforce — this function cannot tell a skipped step from a
+    passing one, and must never be given the chance to guess.
+    """
+    sha = _worktree_sha(worktree)
+    if sha is None:
+        # Fail closed, and loudly. No receipt means the merge step refuses,
+        # which is the safe direction; silence would leave the next session
+        # hunting for a file that nothing ever wrote and no line ever mentioned.
+        print(f"[lane] validate passed, but {worktree} has no resolvable HEAD — "
+              "no receipt written")
+        return
+    path = receipts_dir() / f"{sha}.json"
+    # Temp-then-rename, like the queue: a reader that catches a half-written
+    # receipt must see no receipt (safe) rather than a truncated one, and a
+    # partial file left in the directory is noise nobody can account for later.
+    _write_json(path, {
+        "sha": sha,
+        "session": session,
+        "worktree": worktree,
+        "validate": command,
+        "validated_at": time.time(),
+    })
+    print(f"[lane] receipt: {path}")
+
+
 def _cmd_run(session: str, worktree: str) -> int:
     # The config comes from the checkout the bring-up will run in — one answer to
     # "which checkout", not two that can disagree.
@@ -347,6 +426,7 @@ def _cmd_run(session: str, worktree: str) -> int:
         return EXIT_ALREADY_RUNNING
 
     rc = 0
+    validated = False
     try:
         for label in ("bringup", "validate"):
             command = cfg.get(label)
@@ -357,6 +437,17 @@ def _cmd_run(session: str, worktree: str) -> int:
             if rc != 0:
                 print(f"[lane] {label} FAILED (exit {rc})")
                 break
+            if label == "validate":
+                # Set HERE and nowhere else. The obvious alternative — write the
+                # receipt when the loop finishes with rc == 0 — is wrong twice
+                # over: a run whose `validate` is null skips the step and still
+                # leaves rc at 0 from the bringup, and a run with no steps at all
+                # never touches rc. Both would be certified as validated.
+                validated = True
+        if validated:
+            # Inside the try, so it happens while the lane is still held: nothing
+            # else can be mid-bringup against this checkout as the sha is read.
+            _record_receipt(session, worktree, cfg["validate"])
     finally:
         nxt = held.release()
 
