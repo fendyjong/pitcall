@@ -3,14 +3,16 @@
 # short-lived artifacts: task briefs, implementer reports, review packages, and
 # the progress ledger. Prints the plan directory's absolute path.
 #
-# Forked from pitcall:subagent-driven-development's `sdd-workspace`. The
-# fork exists because superpowers lives in a version-pinned plugin cache whose
-# paths break on upgrade. Two deliberate differences from the original:
-#   - the namespace is .superpowers/wdd/, so a plan executed under both skills
-#     never has two controllers writing one ledger;
-#   - it refuses to run inside a task worktree.
+# One directory per plan (.superpowers/wdd/<plan-basename>/) so a follow-up plan
+# in the same working tree can never read or overwrite another plan's artifacts.
+# A stale ledger misread as current progress makes controllers skip whole task
+# sequences -- plan-scoping removes that failure structurally rather than by
+# asking anyone to check.
 #
-# That refusal matters only under WDD. The directory is derived from
+# This is also the single source of truth for the workspace location, so
+# task-brief and review-package cannot drift to different directories.
+#
+# It refuses to run inside a task worktree. The directory is derived from
 # `git rev-parse --show-toplevel`, which inside a task worktree resolves to the
 # task worktree -- so every implementer would silently get its own orphan
 # workspace the controller cannot read. Only the controller resolves the
@@ -19,7 +21,8 @@
 # The workspace lives in the working tree (not under .git/) because Claude Code
 # treats .git/ as a protected path and denies agent writes there, which would
 # block an implementer from writing its report file. A self-ignoring .gitignore
-# at .superpowers/wdd/ keeps every plan's workspace out of `git status`.
+# at .superpowers/wdd/ keeps every plan's workspace out of `git status` and out
+# of accidental commits, without modifying any tracked file.
 #
 # Usage: wdd-workspace PLAN_FILE
 set -euo pipefail

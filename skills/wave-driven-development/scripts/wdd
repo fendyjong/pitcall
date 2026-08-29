@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
-# wdd-finish — Phase 3. Take a plan branch whose waves are all integrated to a
-# merged PR, then remove everything the run created.
+# wdd — Phase 3. Take a plan branch whose waves are all integrated to a merged
+# PR, then remove everything the run created.
 #
-# WHY THIS EXISTS RATHER THAN pitcall:finishing-a-development-branch.
+# WHY THIS IS A SCRIPT AND NOT AN INSTRUCTION.
 #
-# That skill's option 1 runs `git checkout <base>` and `git pull` in the MAIN
+# The obvious alternative is a menu: verify the suite, offer the controller
+# "merge locally / open a PR / keep the branch", execute the answer. Its
+# local-merge arm runs `git checkout <base>` and `git pull` in the MAIN
 # checkout. Where concurrent sessions share that checkout this is destructive:
-# a real run measured the base branch moving twice in the minutes between the
-# menu appearing and the controller acting, with another session's uncommitted
-# edits in that tree throughout. WDD's answer was prose telling the controller
-# to pick option 2. Prose lost three times in one week on the project this
-# grew in, and each loss was only fixed by making the wrong thing mechanically
-# impossible. So: this script refuses to run anywhere but a plan worktree, and
-# never touches the main checkout at all.
+# a real run measured the base branch moving twice in the minutes between such
+# a menu appearing and the controller acting, with another session's
+# uncommitted edits in that tree throughout.
 #
-# It also closes a gap that skill never covered. SKILL.md says task branches
+# The answer used to be prose telling the controller to pick the safe arm.
+# Prose lost three times in one week on the project this grew in, and each loss
+# was only fixed by making the wrong thing mechanically impossible. So: this
+# script refuses to run anywhere but a plan worktree, and never touches the
+# main checkout at all -- with one deliberate exception, the --ff-only sync at
+# the end of `merge`, which cannot create a commit.
+#
+# It also closes a gap a menu never covered. SKILL.md says task branches
 # "persist until the final PR"; nothing then deleted them. Measured on one
 # repository: 33 task branches on disk, 20 of them already merged.
 #
@@ -25,12 +30,12 @@
 # first time it does not, with nothing observing the failure.
 #
 # Usage:
-#   wdd-finish check   PLAN_FILE   # verify only, no side effects
-#   wdd-finish ship    PLAN_FILE   # check, push, open PR
-#   wdd-finish merge   PLAN_FILE   # require a lane receipt for the PR's head
-#                                  # sha, wait for green, merge server-side,
-#                                  # fast-forward the main checkout
-#   wdd-finish cleanup PLAN_FILE   # AFTER the PR merges: branches + worktrees + workspace
+#   wdd check   PLAN_FILE   # verify only, no side effects
+#   wdd ship    PLAN_FILE   # check, push, open PR
+#   wdd merge   PLAN_FILE   # require a lane receipt for the PR's head
+#                           # sha, wait for green, merge server-side,
+#                           # fast-forward the main checkout
+#   wdd cleanup PLAN_FILE   # AFTER the PR merges: branches + worktrees + workspace
 #
 # Exit: 0 ok | 1 verification failed, or merge refused (nothing landed)
 #       2 usage or wrong location
@@ -44,7 +49,7 @@ CMD="${1:-}"; PLAN="${2:-}"
 case "$CMD" in check|ship|merge|cleanup) ;; *)
   sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
-[ -n "$PLAN" ] || { echo "wdd-finish: PLAN_FILE required" >&2; exit 2; }
+[ -n "$PLAN" ] || { echo "wdd: PLAN_FILE required" >&2; exit 2; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(git rev-parse --show-toplevel)"
@@ -59,7 +64,7 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 GIT_DIR="$(git rev-parse --path-format=absolute --git-dir)"
 GIT_COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
 if [ "$GIT_DIR" = "$GIT_COMMON" ]; then
-  echo "wdd-finish: refusing to run in the main checkout ($ROOT)." >&2
+  echo "wdd: refusing to run in the main checkout ($ROOT)." >&2
   echo "  It is shared by concurrent sessions; this would move HEAD under live work." >&2
   echo "  Run from the plan worktree instead." >&2
   exit 2
@@ -92,7 +97,7 @@ require_base_branch() {
   # diagnosis to stderr; this adds only what it cannot know -- why the caller
   # will not proceed without an answer.
   if ! BASE="$("$HERE/project-config" --scalar default_branch)"; then
-    echo "wdd-finish: cannot read default_branch from the project config." >&2
+    echo "wdd: cannot read default_branch from the project config." >&2
     echo "  Refusing rather than guessing: the wrong base either fails on push," >&2
     echo "  or names a real branch nobody meant and then gates the deletion of" >&2
     echo "  task branches -- the only copy of their work -- on it." >&2
@@ -108,7 +113,7 @@ require_base_branch() {
 # then reports slow CI.
 require_check_name() {
   if ! CHECK="$("$HERE/project-config" --scalar required_check)"; then
-    echo "wdd-finish: cannot read required_check from the project config." >&2
+    echo "wdd: cannot read required_check from the project config." >&2
     echo "  Refusing rather than guessing: a name nobody configured names a" >&2
     echo "  check that never appears, and an absent check is indistinguishable" >&2
     echo "  from a slow one -- so the guess would end in a timeout that reads" >&2
@@ -158,7 +163,7 @@ bad()  { printf '  FAIL: %s\n' "$*" >&2; fail=1; }
 # ---------------------------------------------------------------------------
 WORKSPACE="$("$HERE/wdd-workspace" "$PLAN")"
 LEDGER="$WORKSPACE/progress.md"
-echo "wdd-finish $CMD: plan '$SLUG' on branch '$BRANCH'"
+echo "wdd $CMD: plan '$SLUG' on branch '$BRANCH'"
 
 if [ ! -f "$LEDGER" ]; then
   bad "no ledger at $LEDGER — this run never dispatched a wave"
@@ -192,7 +197,7 @@ else
   note "task branches: none found for slug '$SLUG'"
 fi
 
-[ "$fail" = 0 ] || { echo "wdd-finish: verification failed." >&2; exit 1; }
+[ "$fail" = 0 ] || { echo "wdd: verification failed." >&2; exit 1; }
 note "verification OK"
 
 # ---------------------------------------------------------------------------
@@ -215,7 +220,7 @@ ship)
   note "check green on a branch that is UP TO DATE with the base, plus whatever"
   note "pre-merge gate the project provides -- branch protection is upstream of"
   note "this script and is never routed around."
-  note "Then: run the lane on this exact commit, and 'wdd-finish merge $PLAN'."
+  note "Then: run the lane on this exact commit, and 'wdd merge $PLAN'."
   note "The merge refuses without a receipt for the sha it is about to land, so"
   note "any push after the lane run means running the lane again."
   ;;
@@ -224,7 +229,7 @@ merge)
   require_base_branch
   require_check_name
   command -v gh >/dev/null 2>&1 || {
-    echo "wdd-finish: gh is not on PATH." >&2
+    echo "wdd: gh is not on PATH." >&2
     echo "  This step merges SERVER-SIDE and has no local fallback: a local" >&2
     echo "  'git merge' runs zero checks and moves HEAD in a checkout other" >&2
     echo "  sessions are reading." >&2
@@ -254,7 +259,7 @@ merge)
   case "$gh_help" in
     *--match-head-commit*) ;;
     *)
-      echo "wdd-finish: this gh cannot pin a merge to a commit." >&2
+      echo "wdd: this gh cannot pin a merge to a commit." >&2
       echo "  'gh pr merge --match-head-commit' is required here and arrived in" >&2
       echo "  gh 2.96. Refusing rather than merging without it: the flag is what" >&2
       echo "  makes the receipt's guarantee survive the wait for checks, and a" >&2
@@ -271,7 +276,7 @@ merge)
   # its diagnosis is the useful part of a failure, and merging it into stdout
   # would put a warning line inside the text about to be parsed as JSON.
   if ! pr_json="$(gh pr view "$BRANCH" --json number,state,headRefOid,mergeStateStatus,baseRefName)"; then
-    echo "wdd-finish: no PR found for $BRANCH -- run 'ship' first." >&2
+    echo "wdd: no PR found for $BRANCH -- run 'ship' first." >&2
     exit 1
   fi
   if ! pr_fields="$(python3 - "$pr_json" <<'PY'
@@ -287,19 +292,19 @@ import json, re, sys
 try:
     pr = json.loads(sys.argv[1])
 except ValueError:
-    sys.exit("wdd-finish: gh did not answer with JSON")
+    sys.exit("wdd: gh did not answer with JSON")
 if not isinstance(pr, dict):
-    sys.exit("wdd-finish: gh did not answer with a PR object")
+    sys.exit("wdd: gh did not answer with a PR object")
 
 number = str(pr.get("number") or "")
 if not number.isdigit():
-    sys.exit(f"wdd-finish: gh reported no usable PR number ({number!r})")
+    sys.exit(f"wdd: gh reported no usable PR number ({number!r})")
 
 # 40 hex, checked rather than assumed: this value is interpolated into the
 # receipt's PATH, and it is also what gets pinned into the merge.
 sha = pr.get("headRefOid")
 if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
-    sys.exit(f"wdd-finish: gh reported no usable head sha ({sha!r})")
+    sys.exit(f"wdd: gh reported no usable head sha ({sha!r})")
 
 
 def enum(value):
@@ -334,7 +339,7 @@ PY
   { read -r PR_NUM; read -r PR_SHA; read -r PR_STATE
     read -r PR_MERGE_STATE; read -r PR_BASE; } <<< "$pr_fields"
   [ "$PR_STATE" = "OPEN" ] || {
-    echo "wdd-finish: PR #$PR_NUM is $PR_STATE, not OPEN -- nothing to merge." >&2
+    echo "wdd: PR #$PR_NUM is $PR_STATE, not OPEN -- nothing to merge." >&2
     exit 1; }
   note "PR #$PR_NUM, head $PR_SHA, base $PR_BASE"
 
@@ -344,7 +349,7 @@ PY
   # to another and prints "merged into $BASE", which is simply false about the
   # branch a human is most likely to trust the sentence on.
   if [ "$PR_BASE" != "$BASE" ]; then
-    echo "wdd-finish: PR #$PR_NUM targets '$PR_BASE', but this project's base is '$BASE'." >&2
+    echo "wdd: PR #$PR_NUM targets '$PR_BASE', but this project's base is '$BASE'." >&2
     echo "  Refusing: every other step here -- the fast-forward, the cleanup" >&2
     echo "  ancestry test, the freshness argument -- is about '$BASE', and none" >&2
     echo "  of them would be true of a merge into '$PR_BASE'." >&2
@@ -364,7 +369,7 @@ PY
   # lead back here.
   LOCAL_HEAD="$(git rev-parse HEAD)"
   if [ "$LOCAL_HEAD" != "$PR_SHA" ]; then
-    echo "wdd-finish: this checkout is not on the commit the PR would merge." >&2
+    echo "wdd: this checkout is not on the commit the PR would merge." >&2
     echo "  here (verified above): $LOCAL_HEAD" >&2
     echo "  the PR would merge:    $PR_SHA" >&2
     echo "  Refusing: the checks above ran against the first and the merge" >&2
@@ -383,12 +388,12 @@ PY
   # EXISTENCE AT THE EXACT PATH IS THE VERDICT. The body is read below only to
   # say something useful to a human; nothing about the decision depends on it.
   if ! RECEIPTS="$(receipts_dir)"; then
-    echo "wdd-finish: cannot resolve the lane's receipts directory." >&2
+    echo "wdd: cannot resolve the lane's receipts directory." >&2
     exit 1
   fi
   RECEIPT="$RECEIPTS/$PR_SHA.json"
   if [ ! -f "$RECEIPT" ]; then
-    echo "wdd-finish: no lane receipt for $PR_SHA -- refusing to merge." >&2
+    echo "wdd: no lane receipt for $PR_SHA -- refusing to merge." >&2
     echo "  expected: $RECEIPT" >&2
     others="$(ls -1 "$RECEIPTS" 2>/dev/null | grep -c '\.json$' || true)"
     if [ "${others:-0}" != 0 ]; then
@@ -437,7 +442,7 @@ try:
         raise ValueError("a receipt is a JSON object")
 except Exception as exc:
     sys.stderr.write(
-        f"wdd-finish: the receipt at {RECEIPT} will not parse -- refusing to merge.\n"
+        f"wdd: the receipt at {RECEIPT} will not parse -- refusing to merge.\n"
         f"  {type(exc).__name__}: {exc}\n"
         "  A corrupt receipt is treated as an ABSENT one. It attests to\n"
         "  nothing, and a file nobody can read must never be the thing that\n"
@@ -449,7 +454,7 @@ if claimed != WANTED:
     # !r, so a value made of whitespace is visible as one rather than
     # silently rearranging the message it appears in.
     sys.stderr.write(
-        f"wdd-finish: the receipt at {RECEIPT} names a different commit -- refusing to merge.\n"
+        f"wdd: the receipt at {RECEIPT} names a different commit -- refusing to merge.\n"
         f"  filed under: {WANTED}\n"
         f"  body claims: {claimed!r}\n"
         "  A receipt copied or symlinked onto another commit's name attests\n"
@@ -471,7 +476,7 @@ PY
   case "$receipt_rc" in
     0) ;;
     3|4) exit 1 ;;
-    *) echo "wdd-finish: could not read the receipt at $RECEIPT (status $receipt_rc) -- refusing to merge." >&2
+    *) echo "wdd: could not read the receipt at $RECEIPT (status $receipt_rc) -- refusing to merge." >&2
        exit 1 ;;
   esac
 
@@ -482,7 +487,7 @@ PY
   refuse_if_unmergeable() {
     case "${1:-}" in
       BEHIND)
-        echo "wdd-finish: PR #$PR_NUM is BEHIND $BASE -- refusing to merge." >&2
+        echo "wdd: PR #$PR_NUM is BEHIND $BASE -- refusing to merge." >&2
         echo "  Merging now produces a merge commit combining two states that" >&2
         echo "  were never validated together: the branch passed against the" >&2
         echo "  base AS OF WHEN IT RAN, and two branches can each add a" >&2
@@ -499,7 +504,7 @@ PY
         # across 20 open PRs. Unguarded, a conflicting PR waited the full bound
         # and then attempted a merge GitHub was always going to refuse -- half
         # an hour spent to arrive at an inaccurate message.
-        echo "wdd-finish: PR #$PR_NUM has conflicts with $BASE -- refusing to merge." >&2
+        echo "wdd: PR #$PR_NUM has conflicts with $BASE -- refusing to merge." >&2
         echo "  GitHub will not merge it in this state, so waiting for checks" >&2
         echo "  would only spend the bound to arrive at the same answer." >&2
         echo "  Resolve the conflict. That changes the head sha, so re-run the" >&2
@@ -622,14 +627,14 @@ PY
       dirty)  refuse_if_unmergeable DIRTY ;;
       pass)   note "$CHECK: green"; break ;;
       fail)
-        echo "wdd-finish: '$CHECK' is not green on PR #$PR_NUM -- refusing to merge." >&2
+        echo "wdd: '$CHECK' is not green on PR #$PR_NUM -- refusing to merge." >&2
         echo "  Nothing was merged. Fix the branch, re-run the lane against the" >&2
         echo "  new commit -- the receipt is pinned to a sha and does not carry" >&2
         echo "  forward -- and then re-run this step." >&2
         exit 1 ;;
     esac
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      echo "wdd-finish: NOT MERGED -- '$CHECK' was still running when the ${TIMEOUT}s bound expired." >&2
+      echo "wdd: NOT MERGED -- '$CHECK' was still running when the ${TIMEOUT}s bound expired." >&2
       echo "  Nothing was merged and nothing was changed. Re-run this step once" >&2
       echo "  the check finishes." >&2
       exit 3
@@ -658,7 +663,7 @@ PY
   # narrower race is the kind nobody reproduces afterwards.
   note "merging PR #$PR_NUM server-side (--merge, pinned to $PR_SHA)"
   if ! gh pr merge "$PR_NUM" --merge --match-head-commit "$PR_SHA"; then
-    echo "wdd-finish: gh refused the merge -- nothing landed." >&2
+    echo "wdd: gh refused the merge -- nothing landed." >&2
     echo "  If it says the head branch was modified, that is this step working:" >&2
     echo "  something was pushed while the checks ran, and the receipt covers" >&2
     echo "  $PR_SHA rather than whatever is on the PR now. Re-run the lane on" >&2
@@ -676,12 +681,12 @@ PY
   # is the interesting half, and it is deliberately not repaired.
   MAIN="$(git worktree list --porcelain | awk 'NR==1 && /^worktree /{print substr($0, 10)}')"
   if [ -z "$MAIN" ] || [ ! -d "$MAIN" ]; then
-    echo "wdd-finish: MERGED, but the main checkout could not be located." >&2
+    echo "wdd: MERGED, but the main checkout could not be located." >&2
     exit 4
   fi
   main_branch="$(git -C "$MAIN" symbolic-ref --short HEAD 2>/dev/null || true)"
   if [ "$main_branch" != "$BASE" ]; then
-    echo "wdd-finish: MERGED, but the main checkout is on '${main_branch:-a detached HEAD}', not '$BASE'." >&2
+    echo "wdd: MERGED, but the main checkout is on '${main_branch:-a detached HEAD}', not '$BASE'." >&2
     echo "  Left untouched: fast-forwarding whatever branch happens to be" >&2
     echo "  checked out there would move a branch nobody asked about." >&2
     exit 4
@@ -689,14 +694,14 @@ PY
   if ! git -C "$MAIN" fetch --no-tags --quiet origin "$BASE"; then
     # Explicit rather than letting `set -e` end the run silently: the merge has
     # already happened, and a bare non-zero exit here reads like it did not.
-    echo "wdd-finish: MERGED, but 'git fetch origin $BASE' failed in $MAIN." >&2
+    echo "wdd: MERGED, but 'git fetch origin $BASE' failed in $MAIN." >&2
     echo "  The checkout is behind, not broken. Fetch and fast-forward it by hand." >&2
     exit 4
   fi
   if git -C "$MAIN" merge --ff-only "origin/$BASE" >/dev/null 2>&1; then
     note "main checkout fast-forwarded to origin/$BASE ($(git -C "$MAIN" rev-parse --short HEAD))"
   else
-    echo "wdd-finish: MERGED, but the main checkout would NOT fast-forward." >&2
+    echo "wdd: MERGED, but the main checkout would NOT fast-forward." >&2
     local_commits="$(git -C "$MAIN" log --oneline "origin/$BASE..$BASE" || true)"
     if [ -n "$local_commits" ]; then
       echo "  Local commits on $BASE that are not on origin/$BASE:" >&2
@@ -733,7 +738,7 @@ PY
 
   echo ""
   note "PR #$PR_NUM merged; $MAIN is level with origin/$BASE."
-  note "Then: wdd-finish cleanup $PLAN"
+  note "Then: wdd cleanup $PLAN"
   ;;
 
 cleanup)
@@ -742,7 +747,7 @@ cleanup)
   require_base_branch
   git fetch --no-tags --quiet origin "$BASE"
   git merge-base --is-ancestor HEAD "origin/$BASE" 2>/dev/null || {
-    echo "wdd-finish: $BRANCH is not merged into origin/$BASE yet — nothing to clean up." >&2
+    echo "wdd: $BRANCH is not merged into origin/$BASE yet — nothing to clean up." >&2
     exit 1; }
 
   for b in $task_branches; do

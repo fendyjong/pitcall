@@ -1,11 +1,5 @@
 # Task Reviewer Prompt Template
 
-<!-- Forked from pitcall:subagent-driven-development's template of the same
-     name, not referenced in place: this copy has diverged deliberately for
-     wave scheduling, and a reference would silently adopt the other skill's
-     wording instead. Re-diff it against that template when either changes,
-     and adopt the difference on purpose. -->
-
 Use this template when dispatching a task reviewer subagent. The reviewer
 reads the task's diff once and returns two verdicts: spec compliance and
 code quality.
@@ -58,6 +52,15 @@ Subagent (general-purpose):
     Your review is read-only on this checkout. Do not mutate the working
     tree, the index, HEAD, or branch state in any way.
 
+    ## You Do Not Dispatch Subagents
+
+    Do all of this review yourself. Never spawn a subagent to review part
+    of the diff, and never spawn another reviewer for a second opinion.
+    This process already provides every review seat the work gets; a
+    reviewer you spawn duplicates one of them at full cost, and its
+    verdict counts for nothing. If the diff feels too large for one
+    pass, review it in passes yourself and say so in your report.
+
     ## Do Not Trust the Report
 
     Treat the implementer's report as unverified claims about the code. It
@@ -81,6 +84,13 @@ Subagent (general-purpose):
     Warnings or other noise in the implementer's reported test output are
     findings — test output should be pristine.
 
+    Evidence you cannot see is not evidence that doesn't exist. If the
+    report or its test evidence looks truncated, or you cannot locate the
+    results it claims, re-read the file at its stated path — and if it is
+    genuinely missing or garbled, report that as a gap for the controller.
+    Re-running the suite to regenerate what you failed to read is not
+    verification; illegibility of the evidence is not invalidation of it.
+
     ## Part 1: Spec Compliance
 
     Compare the diff against What Was Requested:
@@ -91,6 +101,15 @@ Subagent (general-purpose):
       "nice to haves"
     - **Misunderstood:** right feature built the wrong way, wrong problem
       solved
+
+    **Where the brief spells out a per-file change list** — the same small
+    edit repeated across several files, planned as one task — check the diff
+    against that list file by file: every file the brief says to change must
+    have its corresponding hunk. A listed file the diff never touches is a
+    Missing finding, no matter how clean the rest of the batch looks. This is
+    about the brief's stated changes, not about its `**Files:**` block: that
+    block is drawn to the task's blast radius rather than its minimum edit, so
+    a declared path the diff leaves alone is expected and is not a finding.
 
     If a requirement cannot be verified from this diff alone (it lives in
     unchanged code or spans tasks), report it as a ⚠️ item instead of

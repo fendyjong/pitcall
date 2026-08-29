@@ -1,11 +1,5 @@
 # Scoped Re-Review Prompt Template
 
-<!-- Forked from pitcall:subagent-driven-development's template of the same
-     name, not referenced in place: this copy has diverged deliberately for
-     wave scheduling, and a reference would silently adopt the other skill's
-     wording instead. Re-diff it against that template when either changes,
-     and adopt the difference on purpose. -->
-
 Use this template when dispatching a re-review after a fix round. The
 re-reviewer verifies the findings were addressed and checks the fix diff for
 new breakage. It is not a fresh review — the full review already happened.
@@ -48,6 +42,15 @@ Subagent (general-purpose):
 
     Your review is read-only on this checkout. Do not mutate the working
     tree, the index, HEAD, or branch state in any way.
+
+    ## You Do Not Dispatch Subagents
+
+    Do all of this review yourself. Never spawn a subagent to review part
+    of the diff, and never spawn another reviewer for a second opinion.
+    This process already provides every review seat the work gets; a
+    reviewer you spawn duplicates one of them at full cost, and its
+    verdict counts for nothing. If the diff feels too large for one
+    pass, review it in passes yourself and say so in your report.
 
     ## Scope
 

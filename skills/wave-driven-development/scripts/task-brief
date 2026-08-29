@@ -3,16 +3,19 @@
 # implementer reads in one call, so the task text never has to be pasted
 # through the controller's context.
 #
-# Forked from pitcall:subagent-driven-development's `task-brief`, with two
-# changes: the workspace resolver it calls, and run-length-aware fence tracking.
-#
-# The original toggles `infence` on every ```-prefixed line. That desynchronises
-# on a plan containing a fenced example that itself contains a fence -- the
-# parser then believes a heading inside that example is a real task heading and
-# truncates the brief there, handing an implementer half its requirements.
+# Fence tracking is run-length-aware, and that is not a refinement. The obvious
+# implementation toggles `infence` on every ```-prefixed line, which
+# desynchronises on a plan containing a fenced example that itself contains a
+# fence -- the parser then believes a heading inside that example is a real task
+# heading and truncates the brief there, handing an implementer half its
+# requirements. Plans in this workflow embed fenced examples routinely (the task
+# structure template is one), so this is the common case, not an exotic one.
 #
 # Usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]
 # Default OUTFILE: <repo-root>/.superpowers/wdd/<plan-basename>/task-<N>-brief.md
+# (per plan and per worktree; concurrent runs of the SAME plan in the same
+# working tree share it, which is what lets a resumed task re-read the brief the
+# original implementer was given).
 set -euo pipefail
 
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then

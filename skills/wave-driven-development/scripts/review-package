@@ -3,13 +3,13 @@
 # extended context, written to a file the reviewer reads in one call. Using the
 # recorded per-task BASE (not HEAD~1) keeps multi-commit tasks intact.
 #
-# Forked from pitcall:subagent-driven-development's `review-package`; the
-# only change is the workspace resolver it calls. No worktree-specific change is
-# needed: all worktrees share one .git, so a controller in the plan worktree can
-# diff any task branch.
+# No worktree-specific handling is needed: all worktrees share one .git, so a
+# controller in the plan worktree can diff any task branch by name.
 #
 # Usage: review-package PLAN_FILE BASE HEAD [OUTFILE]
 # Default OUTFILE: <repo-root>/.superpowers/wdd/<plan-basename>/review-<base7>..<head7>.diff
+# (named per range, so a re-review after a fix round gets a distinct fresh file
+# rather than overwriting the package the previous review read).
 set -euo pipefail
 
 if [ $# -lt 3 ] || [ $# -gt 4 ]; then
