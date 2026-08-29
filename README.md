@@ -15,12 +15,12 @@ the commands under `commands/` for what each piece does once installed.
 
 The plugin is generic: it is installed once and drives many projects, so it cannot
 guess what brings your stack up or what your default branch is called. Each project
-tells it, in a file named exactly `pitcall.config.json`.
+tells it, in a config file — see [`docs/configuration.md`](docs/configuration.md)
+for exactly where that file lives.
 
-**Where it goes.** Committed at the root of the project you are working on — not in
-this plugin's checkout. It is read from the checkout you are standing in, so a linked
-worktree reads the copy on its own branch: a branch that changes its validate command
-is tested with that command, and the change is visible in its own diff.
+It is read from the checkout you are standing in, so a linked worktree reads the
+copy on its own branch: a branch that changes its validate command is tested with
+that command, and the change is visible in its own diff.
 
 Copy `pitcall.config.example.json` to your project root and edit it. If you ever see
 
