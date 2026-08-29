@@ -1,7 +1,7 @@
 ---
 description: Final pass on a spec/plan/design doc — find ambiguities, redundancies, inconsistencies, gaps and clarity problems, then fix them in place so the spec ships clean
 argument-hint: [path to spec | branch | PR# | blank = most recent spec touched] [--review-only]
-allowed-tools: Read, Edit, Write, Grep, Glob, AskUserQuestion, TodoWrite, Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(ls:*), Bash(find:*)
+allowed-tools: Read, Edit, Write, Grep, Glob, AskUserQuestion, TodoWrite, Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git grep:*), Bash(git ls-files:*), Bash(grep:*), Bash(wc:*), Bash(gh pr view:*), Bash(gh pr diff:*), Bash(ls:*), Bash(find:*)
 ---
 
 Take a specification through a **final pass before implementation**: find every ambiguity,
@@ -20,7 +20,7 @@ Resolve the target:
   check `git status` and `git log -1 --name-only`). More than one plausible → list them and ask
   which. Do not guess.
 
-If `--review-only` appears in the arguments, run Phase 1 and stop — report, change nothing.
+If `--review-only` appears in the arguments, run Phases 1 and 2 and stop — report, change nothing.
 
 Read the **entire** target before writing a single finding. Also read whatever the spec cites as
 authority (referenced designs, schemas, ADRs, the repo's `CLAUDE.md` / `AGENTS.md`) when a finding
@@ -66,10 +66,11 @@ Judgment rules:
 - **No scope creep.** Review the spec that exists; don't design a better one. "I'd have done this
   differently" is not a finding. "This cannot work because ___" is.
 - **Uncertainty stated, not hidden.** A finding resting on an unverified assumption about the
-  codebase is marked `unverified`, with what would settle it.
+  codebase is marked `unverified`, with what would settle it — and Phase 2 is where you settle
+  it. A mark that survives into the report is one you could not check, never one you did not.
 - **A clean spec gets a short report.** Never manufacture findings to fill the template.
 
-Now **sort every finding into exactly one bucket** — this is the whole safety mechanism of Phase 3:
+Now **sort every finding into exactly one bucket** — this is the whole safety mechanism of Phase 4:
 
 - **MECHANICAL** — the correct fix is determined by the document itself: wording an ambiguity to
   match what the spec plainly intends elsewhere, deleting a duplicate in favour of the canonical
@@ -78,14 +79,73 @@ Now **sort every finding into exactly one bucket** — this is the whole safety 
 - **DECISION** — the fix requires choosing something nobody has chosen yet: the retry policy, the
   rollback plan, who is authorised, the timeout value, which of two genuinely contradictory
   statements is right. **You do not know the answer, and neither does the document.** These go to
-  Phase 2.
+  Phase 3.
 
 When unsure which bucket, it is a DECISION. Inventing an answer is the one failure mode that makes
 the spec worse than leaving it broken: an invented policy reads as ratified and nobody ever revisits it.
 
 ---
 
-# Phase 2 — Ask (only for DECISION findings)
+# Phase 2 — Check (the spec against the tree)
+
+Phase 1 read the document; this phase leaves it. Every claim the spec makes about anything outside
+itself — a count, another file, a caller, a lookup — gets checked by **running a command**, and the
+output wins. A claim you did not check is reported as unchecked, never as fine.
+
+Each check below names something you type. "Be rigorous" is what Phase 1 already asks for, and it is
+not what catches these.
+
+1. **Measure every number.** Line counts, file counts, sizes, "N of M", percentages, "about half".
+   `wc -l <paths>`, `git ls-files <path> | wc -l`, `git grep -c '<pat>' -- <path>` — then compare
+   with what the spec says. A number carried from memory is a guess wearing precision, and on the
+   page it is indistinguishable from a measured one.
+2. **Grep every claim about another artefact, and pair each sweep with a known-positive control.**
+   "X already does Y", "there is no more Z", "that logic lives in W" are searches, not assertions:
+   `git grep -n '<term>' -- <path>`. Every path, filename and directory the spec names is a claim of
+   the same kind — `ls <path>`, never recall, because a layout that has been reorganised reads
+   exactly like one that has not. Then run the same sweep for a term you know is present. **The
+   control is the check** — a sweep that found nothing and a sweep that never ran produce the same
+   output, and both spell `0`. Not hypothetical: a sweep across twenty-two commits reported `0 hits`
+   for every one of them because the loop running it had lost `git` from its `PATH`. A sweep whose
+   control comes back empty measured nothing; repair it and run it again.
+3. **Name each mechanism's caller, and check that the caller can satisfy it.** For every "the system
+   records / writes / locks / reads …", answer two questions: *who invokes this*, and *can they do
+   what the spec asks?* Read the caller; do not reason about it. A mechanism specified against no
+   caller survives every reading pass, because there is nothing wrong with it as prose — it is
+   merely impossible.
+4. **For every lookup or resolution, name an input on which its cases diverge.** "Resolve the X",
+   "find the current Y", "the Z for this run" is often several questions wearing one name, and they
+   agree in the environment the author is sitting in — which is exactly why the author cannot see
+   it. Name a concrete input where the answers differ. Failing to find one is a finding, not a
+   clean result.
+
+Findings here sort into the same two buckets as Phase 1. There is no third:
+
+- A **measurement that contradicts the spec** is MECHANICAL — the tree is the authority. Correct the
+  number to what you measured, and report what you ran.
+- A **mechanism no caller can satisfy**, or a **lookup that turns out to be two questions**, is a
+  DECISION. The fix is a design choice nobody has made yet, and writing a plausible one here ratifies
+  an impossible mechanism as though someone had chosen it.
+
+Why a reading pass cannot substitute for this. Each of the following shipped in a reviewed spec:
+
+- a line-count total for a set of files, given to the digit and wrong by ninety-nine lines;
+- "those rules have already moved to the other component" — the other component contained none of them;
+- liveness defined as a recorded process id, whose only writer is a short-lived subprocess: the value
+  is dead by the time anyone reads it;
+- one named function resolving "the project", which is two questions — which lock, which checkout —
+  whose answers coincide in a main checkout and diverge in a linked worktree;
+- "the run writes a receipt", silent on when the recorded commit id is read back and whether the tree
+  must be clean; both load-bearing.
+
+**Every one of them reads perfectly, because every one is internally consistent and externally
+false.** There is nothing in the document to notice. Three were caught by a later review and two by
+an implementer who tried to build the thing and could not — none by reading the spec. The four checks
+above are earlier and cheaper than either.
+
+---
+
+# Phase 3 — Ask (only for DECISION findings)
 
 Ask the user about the DECISION findings **in one batch**, before touching the file. Use
 `AskUserQuestion` where the choice is between concrete options — give the real options with their
@@ -94,13 +154,13 @@ an answer. Do not ask about MECHANICAL findings; do not ask permission to fix th
 
 If the user answers → their answer is what gets written, in their words where they gave words.
 If the user skips, defers, or says "leave it" → that finding is **not** silently dropped; it becomes
-an explicit marker in Phase 3.
+an explicit marker in Phase 4.
 
 Skip this phase entirely when there are no DECISION findings.
 
 ---
 
-# Phase 3 — Fix
+# Phase 4 — Fix
 
 Edit the spec in place. Rules:
 
@@ -131,14 +191,15 @@ Edit the spec in place. Rules:
 
 ---
 
-# Phase 4 — Verify
+# Phase 5 — Verify
 
 Re-read the document as edited, whole, from the top, as a reader who wasn't here:
 
 - Did every Must-fix and Should-fix finding actually get resolved in the text?
 - Did the edits introduce a *new* inconsistency — a term now spelled two ways, a reference to a
   paragraph you deleted, a summary that no longer matches its section?
-- Does any requirement, number, or caveat from the original no longer appear anywhere?
+- Does any requirement, number, or caveat from the original no longer appear anywhere — other
+  than a number Phase 2 measured and corrected?
 - Does anything now read as decided that nobody decided?
 
 Fix what this pass turns up before reporting. Do not report completion on an unverified edit.
@@ -157,6 +218,10 @@ Report to the user (not into the document):
 One line each, worst first:
 **[ambiguity|redundancy|inconsistency|gap|clarity]** § <section> — <what was wrong> → <what it says now>
 
+## Checked (N)
+Every Phase 2 command, including the ones that agreed — the agreements are what show the phase ran.
+One line each: `<command>` → <what it returned>; spec said <what>.
+
 ## Left open (N)
 Only decisions the user declined to settle, now marked **OPEN:** in the doc.
 One line each: the question, and what it blocks.
@@ -166,5 +231,6 @@ Findings deliberately left alone — out of scope, or the fix belongs in a diffe
 One line each with the reason and where it belongs.
 ```
 
-Omit any section that is empty. If the spec was already clean, say so in two lines and stop —
-do not edit a document that did not need editing.
+Omit any section that is empty — except `## Checked`: a clean verdict with nothing under it is
+indistinguishable from a verdict nobody checked. If the spec was already clean, say so in two
+lines, keep `## Checked`, and stop — do not edit a document that did not need editing.
