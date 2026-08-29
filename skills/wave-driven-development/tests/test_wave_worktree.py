@@ -1,9 +1,37 @@
 """Task worktree creation and teardown."""
 
+import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from conftest import run_script
+
+#: The four keys `load_config` requires of every project, plus the one
+#: `wave-worktree` itself reads. `default_branch` matches the fixture repo's
+#: branch, though this script never consults it.
+CONFIG = {
+    "bringup": None,
+    "validate": "true",
+    "default_branch": "main",
+    "required_check": "ci",
+    "worktree_dir": ".worktrees",
+}
+
+
+@pytest.fixture
+def repo(repo):
+    """Override the shared `repo` fixture: `wave-worktree` now refuses to run
+    without a `pitcall.config.json` naming `worktree_dir` — a missing key is a
+    loud failure, not a fallback to some default directory (see
+    `scripts/project-config`). `worktree_dir` is set to `.worktrees` here
+    purely to match the `.gitignore` the base fixture already writes and the
+    literal paths these tests assert against; the script itself no longer
+    hardcodes that value.
+    """
+    (repo.path / "pitcall.config.json").write_text(json.dumps(CONFIG))
+    return repo
 
 
 def _branches(repo) -> list[str]:
@@ -78,6 +106,7 @@ def test_remove_deletes_the_worktree_but_keeps_the_branch(repo):
     created = run_script(
         "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
+    assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
 
     r = run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
@@ -91,6 +120,7 @@ def test_remove_refuses_to_discard_uncommitted_work(repo):
     created = run_script(
         "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
+    assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
     (path / "unsaved.txt").write_text("an implementer's work\n")
 

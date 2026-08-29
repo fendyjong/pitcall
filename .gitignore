@@ -1,5 +1,7 @@
 .worktrees/
-.pitcall/
+# Lane receipts are machine-local and pinned to a commit; the config is not.
+.pitcall/*
+!.pitcall/config.json
 __pycache__/
 .pytest_cache/
 docs/superpowers/plans/

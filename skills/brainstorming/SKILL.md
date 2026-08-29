@@ -246,11 +246,12 @@ implementation starts.
   `git fetch` only writes refs and is always safe to run against a shared
   checkout; `git pull` and `git checkout` there are not — they move HEAD out
   from under whatever else is running against it.
-  - Pick `<path>` inside `.worktrees/` at the project root — the project's
-    established worktree home. Before creating anything there, confirm it's
-    git-ignored (`git check-ignore -q .worktrees`); if it isn't, add it to
-    `.gitignore` and commit that first, or the whole worktree's contents get
-    committed into the repo.
+  - Pick `<path>` inside the project's configured `worktree_dir`
+    (`scripts/project-config --scalar worktree_dir`) at the project root —
+    its established worktree home. Before creating anything there, confirm
+    it's git-ignored (`git check-ignore -q "<worktree_dir>"`); if it isn't,
+    add it to `.gitignore` and commit that first, or the whole worktree's
+    contents get committed into the repo.
   - If `git worktree add` fails on a permission error (a sandboxed
     environment refusing it), tell the user the sandbox blocked worktree
     creation and continue in the current directory instead.

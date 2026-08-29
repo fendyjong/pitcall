@@ -1,4 +1,4 @@
-"""Worktrees live in exactly one place: `.worktrees/` at the project root.
+"""Worktrees live in exactly one place: whatever the project's own `worktree_dir` names.
 
 Two homes is not a cosmetic inconsistency. Every worktree-aware step in this
 plugin is a pair of instructions that must agree on a path — a skill tells the
@@ -12,9 +12,12 @@ cleanup step "only cleans worktrees under `.worktrees/` or `worktrees/`, which
 never matches" the home it had chosen — a defect visible in prose for as long
 as the prose survived, and enforced by nothing.
 
-`.worktrees/` is the home. It is what `pitcall:brainstorming` defaults to, it is
-what `.gitignore` ignores, and this test is what keeps the other spelling from
-coming back in a paste.
+The home is configurable — `pitcall:brainstorming` and WDD both read the project's
+own `worktree_dir` (`scripts/project-config --scalar worktree_dir`) rather than
+assuming a fixed directory — but the legacy spelling below is rejected regardless
+of what a project configures. This test only rejects that one spelling; it does
+not assert which directory is the home, and does not need to whenever
+`worktree_dir` changes.
 
 Reads the git BLOB for each tracked path (`git cat-file -p :<path>`), never
 `path.read_text()` on the working tree — the same two properties as
