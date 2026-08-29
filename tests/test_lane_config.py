@@ -199,6 +199,32 @@ def test_a_project_with_no_config_at_all_says_where_it_looked(tmp_path, monkeypa
     assert str(root) in str(exc.value), "the error must name the project it resolved"
 
 
+def test_the_no_config_message_names_the_checkout_and_real_filenames(tmp_path, monkeypatch):
+    """This string's correctness has depended on nobody reading it before.
+
+    It used to report `path.parent` -- `.pitcall/` once neither location
+    exists -- as though that directory were the checkout, and it named the
+    LEGACY filename inside it: `.pitcall/pitcall.config.json`, a path neither
+    the new nor the legacy location ever uses. Someone who created exactly
+    that file would still have no working config.
+
+    This pins the message to the checkout ROOT, and to the two filenames a
+    project could actually write there.
+    """
+    root = _new_repo(tmp_path / "project")
+    monkeypatch.chdir(root)
+    with pytest.raises(RuntimeError) as exc:
+        lane_config.load_config()
+    message = str(exc.value)
+    assert f"in {root} " in message, "must name the checkout root, not a directory inside it"
+    assert f"{lane_config.CONFIG_DIR}/{lane_config.CONFIG_BASENAME}" in message
+    assert lane_config.CONFIG_NAME in message
+    assert f"{lane_config.CONFIG_DIR}/{lane_config.CONFIG_NAME}" not in message, (
+        "must never name the legacy filename inside the new directory -- that "
+        "path is not read by either location"
+    )
+
+
 # --- Resolving the config's location --------------------------------------
 
 

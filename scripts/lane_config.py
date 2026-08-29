@@ -223,6 +223,15 @@ def _resolve_config_in(root: Path) -> Path:
     return new
 
 
+def _checkout_root(checkout: Path | str | None) -> Path:
+    """The checkout `config_path()` and `load_config()` both resolve against.
+
+    Shared so the two never diverge on what "the checkout" means — including
+    when one of them reports it in an error message.
+    """
+    return Path(checkout) if checkout else worktree_root()
+
+
 def config_path(checkout: Path | str | None = None) -> Path:
     """The config in `checkout`, or in the caller's own — never the shared root.
 
@@ -235,8 +244,7 @@ def config_path(checkout: Path | str | None = None) -> Path:
     `lane run --worktree X` ran in X while reading the config from cwd's
     checkout — which is the same class of quiet mismatch as everything else here.
     """
-    root = Path(checkout) if checkout else worktree_root()
-    return _resolve_config_in(root)
+    return _resolve_config_in(_checkout_root(checkout))
 
 
 def load_config(checkout: Path | str | None = None) -> dict:
@@ -253,16 +261,20 @@ def load_config(checkout: Path | str | None = None) -> dict:
     configured that way. Treating that as missing would erase the distinction
     the check exists to draw.
     """
-    path = config_path(checkout)
+    root = _checkout_root(checkout)
+    path = _resolve_config_in(root)
     try:
         cfg = json.loads(path.read_text())
     except FileNotFoundError:
         # Name the checkout we resolved, not just the path we failed to open:
         # since the resolution follows the caller's cwd, "the wrong checkout" is
-        # now a reachable mistake and the path alone does not show it.
+        # now a reachable mistake and the path alone does not show it. `root` is
+        # the checkout itself; `path.parent` is NOT — once neither location
+        # exists it is `.pitcall/`, a directory inside the checkout, and naming
+        # it here would be exactly the mistake this comment describes.
         raise RuntimeError(
-            f"lane: no {CONFIG_NAME} in {path.parent} — that is the checkout "
-            f"resolved from the current directory"
+            f"lane: no {CONFIG_DIR}/{CONFIG_BASENAME} or {CONFIG_NAME} in {root} "
+            f"— that is the checkout resolved from the current directory"
         ) from None
     missing = [k for k in REQUIRED_KEYS if k not in cfg]
     if missing:
