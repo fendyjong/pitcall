@@ -47,8 +47,9 @@ the docs they might need, how to verify it. Assume a skilled developer who
 knows almost nothing about this toolset or problem domain, and who does not
 know good test design well. DRY, YAGNI, TDD, frequent commits.
 
-Save the plan to `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`
-(a stated user preference for plan location overrides this default).
+Save the plan to the project's `plan_dir` (`scripts/project-config --scalar plan_dir`),
+named `YYYY-MM-DD-<feature-name>.md` (a stated user preference for plan location
+overrides this).
 
 ### Scope check
 
