@@ -26,10 +26,14 @@ exist: `.pitcall/config.json` and the legacy root `pitcall.config.json`. Resolve
 checkout root with `git rev-parse --show-toplevel` and check both paths under it.
 
 If either exists and `--force` is **not** in `$ARGUMENTS`: stop here. Report which path you
-found, and that passing `--force` would overwrite it. Do not read further, do not touch
-`.gitignore`, do not write anything.
+found, and what passing `--force` would do to it — overwrite it in place if it is already
+`.pitcall/config.json`, or migrate it (Step 8) if it is the legacy `pitcall.config.json`. Do
+not read further, do not touch `.gitignore`, do not write anything.
 
-If `--force` is present, continue — Step 8 will overwrite whichever config is found.
+If `--force` is present, continue. Remember which path was found, and whether it was the
+legacy `pitcall.config.json` — Step 8 needs both facts, because overwriting the legacy file
+in place is not an option: only `.pitcall/config.json` is ever written, so a legacy config
+found here is migrated, not overwritten.
 
 ---
 
@@ -119,6 +123,16 @@ Write `.pitcall/config.json` as pretty-printed JSON, containing exactly the keys
 resolved a value for in Steps 3, 4, and 6 (including any resolved explicitly to `null`).
 Every key left unset is simply absent from the file; never write a placeholder for it.
 
+If Step 1 found the legacy `pitcall.config.json` (this only happens under `--force`, since a
+first run with nothing at either location has nothing to migrate), this run is a migration:
+after writing `.pitcall/config.json`, **delete the legacy file.** Never leave both in place —
+two configs present at once is exactly the loud failure `docs/configuration.md`'s "Where the
+config lives" section defines (`lane_config.load_config()` raises on it rather than picking
+one), and `--force` recreating that failure beside the file it was meant to replace would be
+worse than refusing outright. Deleting the legacy file here is the one case this command
+removes anything. State the migration in your output, naming both paths — a migration nobody
+can see is indistinguishable from a file that went missing.
+
 ---
 
 # Output
@@ -130,6 +144,8 @@ Report, in this order:
 2. That `outbound_allowlist` was left unset, and why — Step 5's wording, not a summary of it.
 3. Every other key left unset, and what you looked at and did not find.
 4. The `.gitignore` change from Step 7, or that none was needed.
+5. If Step 8 migrated a legacy config, say so explicitly, naming both paths — the legacy file
+   that was removed and the new one that replaced it.
 
 If Step 1 stopped the command, report only that: which config exists, and that `--force`
-would overwrite it.
+would migrate or overwrite it (per Step 1's distinction).
