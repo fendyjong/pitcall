@@ -19,13 +19,25 @@ to EVERY task on EVERY path below — the ceremony scales with the task;
 the approval gate never does.
 </HARD-GATE>
 
-## Three Paths
+## Four Paths
 
 Before your first question, classify the request and say the
 classification out loud — "this looks bounded, so I'll present a short
 design here rather than write a spec" — so your human partner can
 override it:
 
+- **Solution-ready** — an issue whose body already carries its own fix, and
+  says so with a `## Failing check` section naming a check that fails today
+  and passes when the issue is done. Run
+  `${CLAUDE_PLUGIN_ROOT}/scripts/solution_ready.py <issue>` and do what it
+  says: it proceeds, it closes the issue as already resolved, or it refuses
+  and you take the ordinary path below. There is no human approval gate on
+  this path — not because the work is small, but because the decision was
+  made and written down at filing time, and a `solution-ready` label can only
+  be applied by someone with triage or write permission. On `proceed`, run
+  `/spec-review` against the issue and hand off to
+  pitcall:wave-driven-development. The issue body is the spec; no spec comment
+  is written.
 - **Spike** — a feasibility question ("can we...", "is it possible...",
   "quick and dirty is fine") whose output is an answer, not code you
   keep. Present the question and what you'll try in 2-3 sentences, get
@@ -52,6 +64,12 @@ When in doubt between two paths, take the heavier one. The ratchet is
 one-way: hidden complexity discovered mid-task upgrades the path —
 stop, say so, and step up. Nothing downgrades mid-task.
 
+Solution-ready sits outside that ordering rather than at the bottom of it:
+it is decided by the script, on evidence, not by your judgement of how big
+the work looks. A `spec-review` DECISION finding on such an issue is proof
+the label was wrong, and demotes it to a brainstorming session with your
+human partner.
+
 ## Anti-Pattern: "Too Simple To Need Approval"
 
 Every path ends with your human partner approving your intent before
@@ -72,11 +90,20 @@ artifact, never the approval.
 | "The spike works, so I'll keep the code" | A spike's output is an answer. Keeping the code is a new request — classify it. |
 | "It grew, but I'm almost done — no need to re-classify" | Hidden complexity upgrades the path mid-task. Stop and say so. |
 | "They approved the spike, so the follow-up change is approved too" | Each task gets its own classification and its own approval. |
+| "This issue looks small, I'll label it solution-ready" | Size is a self-assessment, and the cheap answer and the self-serving answer are the same answer. The label requires a named check that fails today — a property of the issue, not a judgement about effort. |
 
 ## Checklist
 
 Classify first, announce the path, then create a task for each item on
 your path and complete them in order.
+
+**Solution-ready:**
+1. **Run the gate** — `${CLAUDE_PLUGIN_ROOT}/scripts/solution_ready.py <issue>`; it proceeds, closes, or refuses
+2. **Refused** — take the ordinary path: classify spike / bounded / architectural and continue below
+3. **Closed** — the issue was already resolved; report that and STOP
+4. **Proceed** — run `/spec-review` against the issue, whose spec is its BODY
+5. **DECISION finding** — the label was wrong; it is removed and this becomes a brainstorming session
+6. **MECHANICAL only** — hand off to pitcall:wave-driven-development; no spec comment is written
 
 **Spike:**
 1. **Explore project context** — enough to frame the probe
@@ -108,6 +135,10 @@ your path and complete them in order.
 
 ```dot
 digraph brainstorming {
+    "Run solution_ready.py" [shape=diamond];
+    "Report already-resolved; STOP" [shape=doublecircle];
+    "spec-review on the issue BODY" [shape=box];
+    "MECHANICAL only?" [shape=diamond];
     "Classify: spike / bounded / architectural" [shape=diamond];
     "Present question + probe (2-3 sentences)" [shape=box];
     "Ask clarifying questions (bounded)" [shape=box];
@@ -147,6 +178,12 @@ digraph brainstorming {
     "Spec self-review\n(fix inline)" -> "User reviews spec?";
     "User reviews spec?" -> "Write design doc" [label="changes requested"];
     "User reviews spec?" -> "Invoke wave-driven-development" [label="approved"];
+    "Run solution_ready.py" -> "Report already-resolved; STOP" [label="close"];
+    "Run solution_ready.py" -> "Classify: spike / bounded / architectural" [label="refuse"];
+    "Run solution_ready.py" -> "spec-review on the issue BODY" [label="proceed"];
+    "spec-review on the issue BODY" -> "MECHANICAL only?";
+    "MECHANICAL only?" -> "Invoke wave-driven-development" [label="yes"];
+    "MECHANICAL only?" -> "Classify: spike / bounded / architectural" [label="no: DECISION, label removed"];
 }
 ```
 

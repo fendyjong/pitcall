@@ -57,6 +57,39 @@ that reads stale. `file` opens a new issue straight into `backlog_milestone` —
 the milestone in flight. Both refuse loudly, rather than guess, when a key they need
 is missing from the config; see [`docs/configuration.md`](docs/configuration.md).
 
+## Filing a solution-ready issue
+
+An issue whose body already carries its own fix can be labelled `solution-ready`, and
+`brainstorming` will route it without a human approval gate. Two things are required, and the
+second is not optional:
+
+**The `solution-ready` label.** Only a user with triage or write permission can apply one, so the
+label is what authorizes an unattended run. It never asserts that the fix is correct.
+
+**A `## Failing check` section**, whose first fenced block is a command that **fails today and
+passes when the issue is done**, followed by an `Expected today:` line recording the failure as you
+observed it, with the distinguishing text in backticks:
+
+````markdown
+## Failing check
+
+```
+python3 -m pytest tests/test_widget.py -q
+```
+
+Expected today: FAILS with `AssertionError: 4 != 5`
+````
+
+`${CLAUDE_PLUGIN_ROOT}/scripts/solution_ready.py <issue>` runs that command and reads the result
+both ways. It **fails as recorded** → the classification is verified and the work proceeds. It
+**passes** → the issue is already resolved, and it is closed as completed with the command's output
+as evidence. It **fails differently**, or the backticked fragment is missing → the run refuses, and
+the issue takes the ordinary path with a human.
+
+The backticked fragment is what makes the comparison mechanical rather than a judgement, and an
+`Expected today:` line without one reads as *no failure was ever observed* — which is a refusal, not
+a detail.
+
 ## License
 
 Licensed under the MIT License — see `LICENSE`. This plugin vendors skills from an
