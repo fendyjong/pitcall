@@ -160,3 +160,40 @@ def test_resumes_own_claim_never_matches_an_empty_session():
 
 def test_resumes_own_claim_is_false_with_no_claim_at_all():
     assert not claim_mod.resumes_own_claim("https://example/session-42", None)
+
+
+MINE = "https://example.invalid/session_MINE"
+THEIRS = "https://example.invalid/session_THEIRS"
+
+
+def _body(session, extra=""):
+    return f"{tracker.CLAIM_MARKER}{session}" + (f"\n\n{extra}" if extra else "")
+
+
+def test_an_exact_session_resumes_its_own_claim():
+    assert claim_mod.resumes_own_claim(MINE, {"body": _body(MINE)}) is True
+
+
+def test_a_prefix_of_another_session_does_not_resume_it():
+    """The reproduction from #24: containment matched a shared URL prefix."""
+    prefix = "https://example.invalid/session_"
+    assert claim_mod.resumes_own_claim(prefix, {"body": _body(THEIRS)}) is False
+
+
+def test_a_longer_value_containing_the_claim_does_not_resume_it():
+    assert claim_mod.resumes_own_claim(MINE + "-extra", {"body": _body(MINE)}) is False
+
+
+def test_an_empty_session_never_resumes():
+    assert claim_mod.resumes_own_claim("", {"body": _body(MINE)}) is False
+
+
+def test_a_body_without_the_marker_never_resumes():
+    assert claim_mod.resumes_own_claim(MINE, {"body": f"discussion of {MINE}"}) is False
+
+
+def test_a_takeover_note_below_the_marker_line_is_ignored():
+    """--take appends prose that can legitimately quote another session."""
+    body = _body(MINE, extra=f"Takes over the claim posted by {THEIRS}, which expired.")
+    assert claim_mod.resumes_own_claim(MINE, {"body": body}) is True
+    assert claim_mod.resumes_own_claim(THEIRS, {"body": body}) is False

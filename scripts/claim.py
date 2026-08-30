@@ -32,18 +32,27 @@ def branch_exists(branch, cwd=None):
 
 
 def resumes_own_claim(session, claim):
-    """True when `claim`'s body already carries this run's `--session` value.
+    """True when `claim`'s FIRST LINE names exactly this run's `--session`.
 
-    Nothing else ever compares --session against a claim's body, so this is
-    what lets a re-run recognise a claim comment ITS OWN prior attempt posted
-    before failing on the branch step, and continue idempotently instead of
-    reading its own live claim as someone else's and refusing.
+    Exact, never containment. Session identifiers share a fixed shape
+    (`https://claude.ai/code/session_<id>`), so a truncated or prefix value is
+    a substring of every OTHER session's claim -- and a run that mistook
+    another session's live claim for its own would skip the refusal, the label
+    and the comment, silently taking a claim it never posted.
 
-    `session` truthy first: an empty string is a substring of every string,
-    so without this guard an unattributed re-run (no --session at all) would
-    look like a resume of a claim that is not its own.
+    A minimum-length rule would be a self-assessment of how much uniqueness is
+    enough, and it fails silently when it is wrong. Equality has no threshold
+    to get wrong.
+
+    Reads the FIRST line only: `--take` appends a takeover note below the
+    marker line, so a later line can legitimately quote another session.
     """
-    return bool(session) and claim is not None and session in claim["body"]
+    if not session or claim is None:
+        return False
+    first = claim["body"].split("\n", 1)[0].strip()
+    if not first.startswith(tracker.CLAIM_MARKER):
+        return False
+    return first[len(tracker.CLAIM_MARKER):].strip() == session.strip()
 
 
 def describe_claim(cfg, claim, issue, base, now, cwd=None):
