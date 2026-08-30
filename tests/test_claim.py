@@ -197,3 +197,100 @@ def test_a_takeover_note_below_the_marker_line_is_ignored():
     body = _body(MINE, extra=f"Takes over the claim posted by {THEIRS}, which expired.")
     assert claim_mod.resumes_own_claim(MINE, {"body": body}) is True
     assert claim_mod.resumes_own_claim(THEIRS, {"body": body}) is False
+
+
+# --- select_next: which issue gets claimed, without a network ----------------
+
+CANDIDATES = [(8, "eight"), (15, "fifteen"), (31, "thirty-one")]
+
+
+def _judge(verdicts):
+    """A stand-in for the claim-comment lookup, recording what it was asked."""
+    asked = []
+
+    def judge(number):
+        asked.append(number)
+        return verdicts.get(number, "free")
+
+    return judge, asked
+
+
+def test_the_lowest_numbered_free_issue_wins():
+    judge, _ = _judge({})
+    picked, skipped = claim_mod.select_next(CANDIDATES, judge)
+    assert picked == (8, "eight")
+    assert skipped == []
+
+
+def test_a_live_claim_is_passed_over():
+    judge, _ = _judge({8: "live"})
+    picked, skipped = claim_mod.select_next(CANDIDATES, judge)
+    assert picked == (15, "fifteen")
+    assert skipped == [(8, "live")]
+
+
+def test_a_stale_claim_is_passed_over_without_take():
+    """--next must not choose WHICH claim to steal. `claim <n> --take` is a
+    human naming an issue they looked at; this is not that act."""
+    judge, _ = _judge({8: "stale"})
+    picked, skipped = claim_mod.select_next(CANDIDATES, judge, take=False)
+    assert picked == (15, "fifteen")
+    assert skipped == [(8, "stale")]
+
+
+def test_a_stale_claim_IS_taken_with_take():
+    judge, _ = _judge({8: "stale"})
+    picked, _ = claim_mod.select_next(CANDIDATES, judge, take=True)
+    assert picked == (8, "eight")
+
+
+def test_take_still_does_not_touch_a_live_claim():
+    judge, _ = _judge({8: "live"})
+    picked, _ = claim_mod.select_next(CANDIDATES, judge, take=True)
+    assert picked == (15, "fifteen")
+
+
+def test_nothing_claimable_reports_every_reason_rather_than_a_bare_none():
+    judge, _ = _judge({8: "live", 15: "stale", 31: "live"})
+    picked, skipped = claim_mod.select_next(CANDIDATES, judge)
+    assert picked is None
+    assert skipped == [(8, "live"), (15, "stale"), (31, "live")]
+
+
+def test_judging_stops_at_the_first_hit():
+    """Each judgement is an API call, so the walk must be lazy -- the common
+    case is one call, not one per open issue."""
+    judge, asked = _judge({})
+    claim_mod.select_next(CANDIDATES, judge)
+    assert asked == [8]
+
+
+def test_no_candidates_is_none_not_an_error():
+    judge, _ = _judge({})
+    assert claim_mod.select_next([], judge) == (None, [])
+
+
+def test_a_verdict_that_is_neither_free_nor_stale_is_skipped_even_with_take():
+    """`--next` also meets an issue whose branch exists with no claim comment.
+    `claim <n>` refuses outright there, deliberately; under `--next` that would
+    abort the whole walk on the first such issue instead of moving past it."""
+    judge, _ = _judge({8: "branch"})
+    picked, skipped = claim_mod.select_next(CANDIDATES, judge, take=True)
+    assert picked == (15, "fifteen")
+    assert skipped == [(8, "branch")]
+
+
+def test_neither_an_issue_nor_next_is_refused():
+    with pytest.raises(tracker.TrackerError, match="never both and never neither"):
+        claim_mod.main([])
+
+
+def test_both_an_issue_and_next_is_refused():
+    """Silently preferring one would make the other argument a lie."""
+    with pytest.raises(tracker.TrackerError, match="never both and never neither"):
+        claim_mod.main(["19", "--next"])
+
+
+def test_milestone_without_next_is_refused_rather_than_ignored():
+    with pytest.raises(tracker.TrackerError, match="--milestone narrows"):
+        claim_mod.main(["19", "--milestone", "Backlog"])

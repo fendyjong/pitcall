@@ -52,6 +52,7 @@ own checkout (not a project this plugin drives):
 
 ```
 python3 scripts/claim.py <issue-number> [--session <url>] [--take]
+python3 scripts/claim.py --next [--milestone <name>] [--session <url>] [--take]
 python3 scripts/file.py "<title>" [--body-file <path>]
 ```
 
@@ -60,7 +61,18 @@ cuts `<branch_prefix><issue>-<slug>` from `default_branch` — refusing if the i
 already carries a live claim, or if more than one branch matches the issue and there
 is no way to tell which holds the work. `--session` records the caller's session URL
 in the comment, so a later run can recognise its own claim; `--take` reclaims a claim
-that reads stale. `file` opens a new issue straight into `backlog_milestone` — never
+that reads stale.
+
+`--next` picks the issue instead of taking one: the lowest-numbered open issue nothing
+holds, so the oldest work surfaces rather than starving. It judges from claim comments
+rather than labels — a label is skipped entirely when `status_labels.ongoing` is unset,
+and survives a claim going stale — and walks lazily, so the usual cost is one lookup
+rather than one per open issue. A stale claim is passed over unless `--take` is given:
+naming an issue yourself and letting a selector choose which abandoned claim to take
+over are different acts. `--milestone` narrows what it considers, as a filter rather
+than a gate; without it an issue carrying no milestone is still a candidate.
+
+`file` opens a new issue straight into `backlog_milestone` — never
 the milestone in flight. Both refuse loudly, rather than guess, when a key they need
 is missing from the config; see [`docs/configuration.md`](docs/configuration.md).
 

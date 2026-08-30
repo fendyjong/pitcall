@@ -327,3 +327,51 @@ def test_a_branch_checked_out_in_a_linked_worktree_still_resolves_clean(tmp_path
     # `linked`, so listing from `repo` sees the `+` marker, never `*`.
     got = tracker.resolve_branch(CFG_PREFIX, 19, cwd=str(repo))
     assert got == "feat/19-x"
+
+
+# --- select_candidates: the ordering decision, without a network -------------
+
+def _issue(number, title="t", milestone=None, pull_request=False):
+    d = {"number": number, "title": title,
+         "milestone": {"title": milestone} if milestone else None}
+    if pull_request:
+        d["pull_request"] = {"url": "https://example.invalid/pr"}
+    return d
+
+
+def test_candidates_are_ordered_lowest_number_first():
+    """FIFO is the whole point: the oldest issue has to come out first."""
+    got = tracker.select_candidates([_issue(31), _issue(8), _issue(15)])
+    assert [n for n, _ in got] == [8, 15, 31]
+
+
+def test_pull_requests_are_excluded():
+    """`repos/:r/issues` returns PRs too -- claiming one would be nonsense."""
+    got = tracker.select_candidates([_issue(8), _issue(9, pull_request=True)])
+    assert [n for n, _ in got] == [8]
+
+
+def test_a_milestone_filter_keeps_only_that_milestone():
+    got = tracker.select_candidates(
+        [_issue(8, milestone="Backlog"), _issue(9, milestone="v2"), _issue(10)],
+        milestone="Backlog")
+    assert [n for n, _ in got] == [8]
+
+
+def test_no_milestone_filter_keeps_issues_that_have_no_milestone():
+    """A filter is opt-in; without one, an unmilestoned issue is a candidate.
+
+    Ten of this repo's own open issues carry no milestone, and they are the
+    oldest -- excluding them by default would starve exactly what FIFO protects.
+    """
+    got = tracker.select_candidates([_issue(8), _issue(9, milestone="Backlog")])
+    assert [n for n, _ in got] == [8, 9]
+
+
+def test_the_title_travels_with_the_number():
+    got = tracker.select_candidates([_issue(8, title="a real title")])
+    assert got == [(8, "a real title")]
+
+
+def test_no_candidates_is_an_empty_list_not_an_error():
+    assert tracker.select_candidates([]) == []

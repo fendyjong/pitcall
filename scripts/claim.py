@@ -96,19 +96,102 @@ def describe_claim(cfg, claim, issue, base, now, cwd=None):
     return verdict, lines
 
 
+def select_next(candidates, judge, take=False):
+    """The first claimable issue and the ones passed over, or `(None, skipped)`.
+
+    `candidates` is `(number, title)` in FIFO order; `judge(number)` returns
+    `"free"`, `"live"` or `"stale"`. Pure given the judge, so the policy is
+    provable without a network -- every judgement is an API call.
+
+    **The walk is lazy on purpose.** It stops at the first claimable issue, so
+    the common case costs one judgement rather than one per open issue.
+
+    **A stale claim is passed over unless `take`.** `claim <n> --take` is a
+    person naming an issue they looked at; letting a selector decide WHICH
+    abandoned claim to take over is a different act, and not one this flag is
+    asking for. A live claim is never taken, with or without `take`.
+
+    `skipped` carries every rejection and its verdict, so a run that claims
+    nothing can say what it considered instead of reporting a bare absence.
+    """
+    skipped = []
+    for number, title in candidates:
+        verdict = judge(number)
+        if verdict == "free" or (verdict == "stale" and take):
+            return (number, title), skipped
+        skipped.append((number, verdict))
+    return None, skipped
+
+
+def resolve_next(cfg, repo, base, now, args):
+    """The issue number `--next` picks, or a refusal naming what it passed over.
+
+    The judge is where the network lives: one claim-comment lookup per
+    candidate, run lazily by `select_next`, so the common case is a single
+    call. `"branch"` is its own verdict rather than a free issue -- `claim <n>`
+    refuses when a branch exists with no claim comment, and inheriting that
+    refusal here would abort the whole walk on the first such issue instead of
+    stepping past it.
+    """
+    candidates = tracker.open_issues(repo, args.milestone)
+    titles = dict(candidates)
+
+    def judge(number):
+        claim = tracker.latest_claim(number, repo)
+        if claim is not None:
+            return describe_claim(cfg, claim, number, base, now)[0]
+        if branch_exists(tracker.branch_name(cfg, number, titles[number])):
+            return "branch"
+        return "free"
+
+    picked, skipped = select_next(candidates, judge, take=args.take)
+    if picked is None:
+        where = f" in milestone {args.milestone!r}" if args.milestone else ""
+        if not skipped:
+            raise tracker.TrackerError(f"no open issues{where} to claim.")
+        detail = ", ".join(f"#{n} ({v})" for n, v in skipped)
+        raise tracker.TrackerError(
+            f"every open issue{where} is spoken for: {detail}."
+            + ("" if args.take else
+               " --take would reclaim a stale one, oldest first.")
+        )
+    number, title = picked
+    if skipped:
+        print(f"--next: passed over {', '.join(f'#{n} ({v})' for n, v in skipped)}")
+    print(f"--next selected #{number}: {title}")
+    return number
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="claim")
-    ap.add_argument("issue", type=int)
+    ap.add_argument("issue", type=int, nargs="?")
+    ap.add_argument("--next", dest="pick_next", action="store_true",
+                    help="claim the lowest-numbered open issue nothing holds")
+    ap.add_argument("--milestone", default=None,
+                    help="with --next, consider only this milestone")
     ap.add_argument("--take", action="store_true",
                     help="reclaim a STALE claim, posting a takeover comment first")
     ap.add_argument("--session", default="",
                     help="session URL recorded in the claim comment")
     args = ap.parse_args(argv)
 
+    if (args.issue is None) == (not args.pick_next):
+        raise tracker.TrackerError(
+            "pass an issue number or --next, never both and never neither."
+        )
+    if args.milestone is not None and not args.pick_next:
+        raise tracker.TrackerError(
+            "--milestone narrows what --next considers; it means nothing "
+            "beside an issue number you already chose."
+        )
+
     cfg = tracker.config()
     repo = tracker.origin_repo()
     base = f"origin/{tracker.require(cfg, 'default_branch')}"
     now = datetime.now(timezone.utc)
+
+    if args.pick_next:
+        args.issue = resolve_next(cfg, repo, base, now, args)
 
     issue = issue_state(args.issue, repo)
     if issue["state"].lower() != "open":
