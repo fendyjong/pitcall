@@ -221,6 +221,48 @@ def latest_claim(issue, repo):
     return None
 
 
+def select_candidates(issues, milestone=None):
+    """Open issues as `(number, title)`, lowest number first.
+
+    Pure, so the ordering rule is provable without a network -- the same split
+    this module already applies to the staleness decision.
+
+    Two filters, and both earn their place:
+
+    `repos/:owner/:repo/issues` returns pull requests as well as issues, and a
+    PR is distinguished only by carrying a `pull_request` key. Claiming one
+    would cut a branch for a number that is not an issue at all.
+
+    `milestone` is opt-in. Absent, an issue with no milestone is still a
+    candidate: at the time this was written ten of this repository's thirteen
+    open issues carried none, and they were the oldest -- filtering them out by
+    default would starve precisely the work FIFO exists to reach.
+    """
+    out = []
+    for issue in issues:
+        if issue.get("pull_request") is not None:
+            continue
+        if milestone is not None:
+            if ((issue.get("milestone") or {}).get("title")) != milestone:
+                continue
+        out.append((issue["number"], issue["title"]))
+    return sorted(out)
+
+
+def open_issues(repo, milestone=None):
+    """Every open issue, oldest number first. See `select_candidates`.
+
+    Paginated rather than limited. `gh issue list` caps at 30 by default and
+    returns NEWEST first, so a limit silently drops the oldest issues -- the
+    exact end of the queue a FIFO selector exists to serve, and a truncation
+    that looks like a complete answer.
+    """
+    raw = run("gh", "api", f"repos/{repo}/issues?state=open&per_page=100",
+              "--paginate", "--jq", ".[] | @json")
+    issues = [json.loads(line) for line in raw.split("\n") if line.strip()]
+    return select_candidates(issues, milestone)
+
+
 def commits_since(branch, base, since, cwd=None):
     """Commits on `branch` past `base`, committed at or after `since`.
 
