@@ -195,7 +195,7 @@ def test_every_command_reference_to_a_shipped_doc_is_plugin_rooted():
     checkout instead of the project being configured.
     """
     tracked = set(tracked_files())
-    doc_paths = [p for p in tracked if p.startswith("docs/")]
+    doc_paths = sorted(p for p in tracked if p.startswith("docs/"))
     assert doc_paths, "no docs/ files are tracked - the enumeration did not run"
 
     unqualified = set()

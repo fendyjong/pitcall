@@ -3,8 +3,16 @@
 Skill documents are executable instructions, and they run with the cwd set to the
 *adopting project* — not to this plugin. A bare `scripts/foo` in one therefore names
 a directory belonging to somebody else's repository. It is correct only when the
-document means its own skill's script, because that is the one case where the plugin
-loader has already put the file where the reader will look.
+document means its own skill's script, and even then nothing mechanical resolves
+it — this repository's own prose does, at
+`skills/wave-driven-development/SKILL.md:343-344`: "script paths here and in
+Phase 2 are relative to this skill's own directory, wherever the plugin is
+installed." A reader follows that sentence; there is no loader chdir that makes
+a bare path land inside its own skill on its own. The mechanically-correct
+spelling for an own-skill script is `${CLAUDE_SKILL_DIR}`, which Claude Code's
+documentation resolves "regardless of the current working directory" — this
+repository does not use it anywhere today, and this file does not require it,
+but a future reader should know the escape hatch exists.
 
 `skills/brainstorming/SKILL.md` shipped a bare `scripts/project-config`, which lives
 in `wave-driven-development`. It fails loudly (`no such file or directory`) rather
@@ -95,6 +103,8 @@ def test_bare_script_paths_resolve_inside_their_own_skill(rel):
         assert own in tracked, (
             f"{rel}: names `scripts/{name}`, which does not exist at {own!r}. "
             f"A skill document runs with the adopting project's cwd, so a bare "
-            f"path resolves into THAT repository unless the script is its own "
-            f"skill's. Spell it `${{CLAUDE_PLUGIN_ROOT}}/…` instead."
+            f"path resolves into THAT repository — this repository's own "
+            f"convention (skills/wave-driven-development/SKILL.md:343-344) permits "
+            f"a bare path only when it names its own skill's script. Spell it "
+            f"`${{CLAUDE_PLUGIN_ROOT}}/…` instead."
         )
