@@ -1,0 +1,20 @@
+{
+  "bringup": null,
+  "validate": "python3 -m pytest -q",
+  "teardown": null,
+  "default_branch": "main",
+  "required_check": "ci",
+  "worktree_dir": ".worktrees/",
+  "plan_dir": "docs/plans/",
+  "branch_prefix": "feat/",
+  "claim_expiry_hours": 24,
+  "status_labels": {
+    "ongoing": "status:ongoing",
+    "in_review": "status:in-review",
+    "blocked": "status:blocked"
+  },
+  "regenerated_paths": [],
+  "refresh_commands": [],
+  "migration_homes": [],
+  "backlog_milestone": "Backlog"
+}

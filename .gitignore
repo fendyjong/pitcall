@@ -4,5 +4,5 @@
 !.pitcall/config.json
 __pycache__/
 .pytest_cache/
-docs/superpowers/plans/
+docs/plans/
 .claude/
