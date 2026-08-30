@@ -51,8 +51,15 @@ CITED_PATH = re.compile(r"(?:^|/)scripts/[^/\s]+$")
 # is a claim that the thing exists; the same letters in running prose are not,
 # which is what keeps `WDD Phase 1` from tripping a gate that must still catch
 # a backticked `wdd`.
+#
+# The closing fence must be at least as long as the opener: `\1` backreferences
+# the captured backtick run, so a fence opened with four backticks does not
+# close on the first inner three-backtick fence it contains. Without this,
+# `skills/wave-driven-development/SKILL.md`'s own four-backtick block --
+# which itself contains three inner ``` fences, to document fenced examples --
+# mis-pairs into fragments that drop real content between them.
 INLINE = re.compile(r"`([^`\n]+)`")
-FENCED = re.compile(r"^[ \t]*```[^\n]*\n(.*?)^[ \t]*```", re.M | re.S)
+FENCED = re.compile(r"^[ \t]*(`{3,})[^\n]*\n(.*?)^[ \t]*\1`*[ \t]*$", re.M | re.S)
 
 # Punctuation a name picks up from the sentence around it.
 TRIM = "()[]{}<>,.;:!?'\"*"
@@ -116,7 +123,7 @@ def names_ever(root):
 def spans(text):
     """Inline code spans, plus each non-blank line of each fenced block."""
     found = INLINE.findall(text)
-    for block in FENCED.findall(text):
+    for _delimiter, block in FENCED.findall(text):
         found.extend(line for line in block.split("\n") if line.strip())
     return found
 
@@ -140,6 +147,18 @@ def problems_in(text, path, dead, tracked_paths):
     found = []
     for span in spans(text):
         for token in tokens(span):
+            if "<" in token or ">" in token:
+                # A token holding a placeholder like `<name>` is prose showing
+                # the SHAPE of a path, not a claim that one exists. This idiom
+                # is already live and correct in this repo:
+                # `wdd/<plan-slug>/progress.md` (SKILL.md:817),
+                # `.pitcall/receipts/<sha>.json` (SKILL.md:1131), and
+                # `repos/<owner>` (commands/spec-review.md:28). Checking either
+                # rule against a placeholder would fail a correct doc edit --
+                # a false positive on correct prose is how a check gets
+                # switched off rather than fixed, which is the failure this
+                # gate exists to avoid in the first place.
+                continue
             if token in dead:
                 found.append(
                     f"{path}: `{token}` is named here but no longer exists in "
@@ -276,3 +295,42 @@ def test_a_shallow_clone_fails_rather_than_passing_quietly(tmp_path):
     _git(tmp_path, "clone", "-q", "--depth", "1", f"file://{src}", str(dst))
     with pytest.raises(AssertionError, match="shallow clone"):
         problems(dst)
+
+
+def test_a_fence_nested_inside_a_longer_delimiter_fence_is_still_scanned():
+    """A four-backtick fence containing an inner three-backtick fence.
+
+    The closing must match the OPENER's length, not just any ``` at column 0
+    -- otherwise the inner fence's own close/open lines get treated as the
+    outer fence's boundary, and content between them (here, the dead name)
+    falls in the gap between two mis-paired matches and is never scanned.
+    """
+    text = (
+        "````markdown\n"
+        "pre text\n"
+        "```bash\n"
+        "wdd-finish check\n"
+        "```\n"
+        "tail text\n"
+        "````\n"
+    )
+    found = problems_in(text, "SKILL.md", {"wdd-finish"}, [])
+    assert found, "a dead name inside a nested fence must not be dropped"
+    assert "wdd-finish" in found[0]
+
+
+def test_a_scripts_placeholder_is_not_a_path_claim():
+    """`scripts/<name>` shows the SHAPE of a path; it names no file.
+
+    The same idiom is already live and correct elsewhere in this repo --
+    `wdd/<plan-slug>/progress.md`, `.pitcall/receipts/<sha>.json`,
+    `repos/<owner>` -- so a future `scripts/<name>` must not fail CI, even
+    though an unrelated bad path with the same prefix still must.
+    """
+    found = problems_in(
+        "Name it `scripts/<name>` so the loader finds it.", "docs/x.md", set(), []
+    )
+    assert found == [], "a placeholder is not a claim that a file exists"
+
+    found = problems_in("see `scripts/typo-name`", "docs/x.md", set(), ["skills/w/scripts/real"])
+    assert found and "typo-name" in found[0], "a real bad path must still be caught"
