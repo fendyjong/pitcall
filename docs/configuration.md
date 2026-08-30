@@ -91,6 +91,10 @@ branch on it.
 | `regenerated_paths` | Tracked paths a git hook rewrites (e.g. a `post-checkout` hook), which are dirtied by `git worktree add` itself, before any task touches them. | No. | `skills/wave-driven-development/scripts/project-config` (list mode), invoked from the per-wave worktree-creation step in `skills/wave-driven-development/SKILL.md` to restore these paths right after creation. | Absent, `null`, and `[]` are the same answer: nothing to restore, so the restore step runs and prints nothing. |
 | `refresh_commands` | Shell command lines run in the **main checkout**, best-effort, after `wdd`'s merge step fast-forwards it. | No. | `skills/wave-driven-development/scripts/wdd` (the merge step). | Nothing to regenerate, so the step is skipped. A command listed here that fails is reported but never unwinds the merge — the merge has already happened by the time this runs. |
 | `migration_homes` | Directories holding this project's migration files, one entry per independently-numbered sequence. | No. | `skills/wave-driven-development/scripts/project-config` (list mode), read at planning time (`SKILL.md`) to catch two tasks in one wave claiming the same migration number in the same home. | Absent, `null`, and `[]` are the same answer: the project has no migration directories, so the duplicate-number check has nothing to compare and does nothing. |
+| `status_labels` | The project's own names for the claim states, as `{ongoing, in_review, blocked}`. The plugin applies them; the project names them. | No. | `scripts/tracker.py`'s `status_label()`, via `scripts/claim.py` (`ongoing`). `in_review` is read by nothing yet — its consumer is issue #20; `blocked` likewise, issue #21. | The label half of `claim` is skipped and says so. Never a guessed name: `gh issue edit --add-label` rejects a label the project has not already created, which aborts `claim` before any comment is posted — a safer failure than the label being silently created out of a guess. |
+| `branch_prefix` | The prefix a cut branch carries ahead of `<issue>-<slug>`, separator included (`feat/`, `wdd/`). | Yes for `claim`. | `scripts/tracker.py`'s `branch_name()`. | `claim` refuses rather than cutting an unprefixed branch. |
+| `claim_expiry_hours` | Hours a claim is honoured before another session may treat it as abandoned — **one half of the test**, never the whole of it. | Yes for `claim`'s refusal path. | `scripts/tracker.py`'s `is_stale()`, via `scripts/claim.py`. | `claim` cannot judge an existing claim and refuses. |
+| `backlog_milestone` | The milestone holding not-yet-scheduled work. | Yes for `file`. | `scripts/file.py`'s `build_command()`. | `file` refuses rather than filing into the milestone in flight. |
 
 **How to recognise the right value:**
 
@@ -107,6 +111,17 @@ branch on it.
   holding sequentially-numbered migration files). A project with one database
   behind one schema has exactly one home; a project with two independently
   numbered schemas has two.
+- `status_labels` — the project's existing label taxonomy for claim states, if it
+  has one (`gh label list`). Leave a sub-field unset rather than inventing a name
+  the project does not already use.
+- `branch_prefix` — look at how issue-linked branches are already named in this
+  project's history (recent merged PR branch names) for a consistent shape.
+- `claim_expiry_hours` — a convention this tool will own outright rather than a
+  project fact to discover; pick a number that comfortably outlasts one working
+  session.
+- `backlog_milestone` — the project's milestone list (e.g. `gh api
+  repos/<owner>/<repo>/milestones`) for the one nothing is currently scheduled
+  against.
 
 ## Declared, but nothing reads them yet
 
@@ -119,23 +134,12 @@ here is standing in for these — there is simply no consumer yet.
 | Key | Intended meaning | Required? | What reads it | If absent |
 | --- | --- | --- | --- | --- |
 | `teardown` | Shell command line to tear the stack `bringup` started back down. | No. | Nothing shipped. Appears only in this project's own test fixtures (`skills/wave-driven-development/tests/test_wave_worktree.py`, `tests/test_lane.py`, `tests/test_lane_config.py`) and, coincidentally, as the English word "teardown" in unrelated prose — a comment in `scripts/lane.py` and two mentions of worktree teardown in `skills/wave-driven-development/SKILL.md` — none of which are reads of this key. | No effect either way. Do not write it expecting a step to run. |
-| `branch_prefix` | The prefix a cut branch's name carries ahead of `<issue>-<slug>`, e.g. `feat/`. | No. | Nothing shipped reads the key. One command's prose (`commands/spec-review.md`) already assumes branches are named `<branch_prefix>/<issue>-<slug>` when deriving the current issue from `git rev-parse --abbrev-ref HEAD`, but it does that by convention, not by reading this key. | No effect. Declared for branch-naming work specified elsewhere. |
-| `backlog_milestone` | Name of the milestone that holds backlog / not-yet-scheduled work, distinct from a milestone a plan is actively executing against. | No. | Nothing shipped. | No effect. Declared for backlog-triage work specified elsewhere. |
-| `claim_expiry_hours` | Hours an issue claim is honoured before another session may treat it as abandoned and take the work over. | No. | Nothing shipped. | No effect. Declared for claim-protocol work specified elsewhere. |
 
 **How to recognise the right value, if you are choosing one ahead of the reader that
 will use it:**
 
 - `teardown` — mirror `bringup`: the command that reverses it (`docker compose
   down`, stopping whatever `bringup` started).
-- `branch_prefix` — look at how issue-linked branches are already named in this
-  project's history (recent merged PR branch names) for a consistent shape.
-- `backlog_milestone` — the project's milestone list (e.g. `gh api
-  repos/<owner>/<repo>/milestones`) for the one nothing is currently scheduled
-  against.
-- `claim_expiry_hours` — a convention this tool will own outright rather than a
-  project fact to discover; pick a number that comfortably outlasts one working
-  session.
 
 ## Not a key of this plugin
 
