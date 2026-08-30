@@ -18,7 +18,8 @@ Resolve the target:
 - An issue number or issue URL → the spec comment on that issue.
 - A comment URL or comment id → that comment directly.
 - Empty → the issue this session is working. The branch name encodes it:
-  `<branch_prefix>/<issue>-<slug>`, so `git rev-parse --abbrev-ref HEAD` names the issue.
+  `<branch_prefix><issue>-<slug>` (`branch_prefix` already includes its own
+  separator), so `git rev-parse --abbrev-ref HEAD` names the issue.
 - Nothing resolves → list the candidates and ask which. Do not guess.
 
 Find the spec **by its `# Spec:` first line, never by position** — comments accumulate, so the
