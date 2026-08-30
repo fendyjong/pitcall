@@ -295,7 +295,7 @@ implementation starts.
   checkout; `git pull` and `git checkout` there are not — they move HEAD out
   from under whatever else is running against it.
   - Pick `<path>` inside the project's configured `worktree_dir`
-    (`scripts/project-config --scalar worktree_dir`) at the project root —
+    (`${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/project-config --scalar worktree_dir`) at the project root —
     its established worktree home. Before creating anything there, confirm
     it's git-ignored (`git check-ignore -q "<worktree_dir>"`); if it isn't,
     add it to `.gitignore` and commit that first, or the whole worktree's
