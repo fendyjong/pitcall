@@ -1,5 +1,6 @@
 """The mechanism behind the issue verbs, exercised without a network."""
 
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -173,3 +174,62 @@ def test_commits_since_counts_only_commits_past_the_base(tmp_path):
     run("add", "c")
     run("commit", "-qm", "real work")
     assert tracker.commits_since("work", "main", long_ago, cwd=str(repo)) == 1
+
+
+def test_commits_since_excludes_commits_before_since_and_includes_after(tmp_path):
+    """`since` has to be a real filter, not decoration that every test passes
+    a `datetime(2000, 1, 1)` and never actually exercises: a `since` set just
+    after the real commit's own committer time must exclude it, and a
+    `since` set just before it must include it."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    run = lambda *a: subprocess.run(("git", "-C", str(repo), *a), check=True,
+                                    capture_output=True)
+    run("init", "-q", "-b", "main")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (repo / "a").write_text("1\n")
+    run("add", "a")
+    run("commit", "-qm", "base")
+    run("branch", "work")
+    run("checkout", "-q", "work")
+    (repo / "c").write_text("3\n")
+    run("add", "c")
+    run("commit", "-qm", "real work")
+    committer_time = datetime.fromisoformat(subprocess.run(
+        ("git", "-C", str(repo), "log", "-1", "--format=%cI"),
+        check=True, capture_output=True, text=True,
+    ).stdout.strip())
+    just_before = committer_time - timedelta(seconds=1)
+    just_after = committer_time + timedelta(seconds=1)
+    assert tracker.commits_since("work", "main", just_before, cwd=str(repo)) == 1
+    assert tracker.commits_since("work", "main", just_after, cwd=str(repo)) == 0
+
+
+def test_commits_since_filters_on_committer_date_not_author_date(tmp_path):
+    """The docstring says committer date, never author date, because a
+    rebase preserves the author date and rewrites the committer date. Proven
+    directly: a commit with an ancient AUTHOR date but today's COMMITTER date
+    (GIT_AUTHOR_DATE overridden, GIT_COMMITTER_DATE left alone) must still
+    count as recent -- `%aI` in place of `%cI` would report 0 here."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    run = lambda *a, **kw: subprocess.run(("git", "-C", str(repo), *a), check=True,
+                                          capture_output=True, **kw)
+    run("init", "-q", "-b", "main")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (repo / "a").write_text("1\n")
+    run("add", "a")
+    run("commit", "-qm", "base")
+    run("branch", "work")
+    run("checkout", "-q", "work")
+    (repo / "c").write_text("3\n")
+    run("add", "c")
+    old_author_env = {**os.environ, "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00"}
+    run("commit", "-qm", "old author date, real committer date", env=old_author_env)
+    since = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    assert tracker.commits_since("work", "main", since, cwd=str(repo)) == 1, (
+        "since=2020 is after the author date (2000) but before the real, "
+        "unset committer date (now) -- %aI would report 0 here, %cI reports 1"
+    )

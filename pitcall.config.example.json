@@ -9,6 +9,11 @@
   "plan_dir": "docs/plans/",
   "backlog_milestone": "Backlog",
   "claim_expiry_hours": 24,
+  "status_labels": {
+    "ongoing": "status:in-progress",
+    "in_review": "status:in-review",
+    "blocked": "status:blocked"
+  },
   "regenerated_paths": [],
   "migration_homes": [],
   "refresh_commands": [],

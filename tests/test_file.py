@@ -19,7 +19,7 @@ def test_the_milestone_is_always_the_backlog_one():
 def test_there_is_no_milestone_override():
     """A flag able to express the forbidden thing is a flag someone passes."""
     with pytest.raises(SystemExit):
-        file_mod.main(["a title", "--milestone", "v0.9.x - MVP: Launch Day"])
+        file_mod.main(["a title", "--milestone", "vNext - Some Milestone"])
 
 
 def test_it_refuses_without_the_key_rather_than_guessing():

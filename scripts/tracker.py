@@ -119,6 +119,37 @@ def branch_name(cfg, issue, title):
     return f"{require(cfg, 'branch_prefix')}{issue}-{slug(title)}"
 
 
+def resolve_branch(cfg, issue, cwd=None):
+    """Issue #<issue>'s branch, local or on `origin` -- or `None`.
+
+    `git branch --list` matches a pattern against the ref's short name, and a
+    remote-tracking ref's short name carries the remote's own name ahead of
+    it (`origin/feat/19-x`, never just `feat/19-x`, which is only ever a
+    LOCAL ref's short name) -- so a single un-prefixed pattern only ever
+    matches a local ref. That is the whole defect this exists to close: a
+    branch cut here and never checked out anywhere else reads as "no branch"
+    to every other clone, which turns real activity into a false 0.
+
+    Matched by ISSUE NUMBER, not by `branch_name()`'s full reconstruction --
+    retitling the issue changes the slug that produces, but never the number
+    a real branch was already cut for. `branch_name()` stays the right tool
+    for CREATING a branch, where two simultaneous claimants need to agree on
+    one deterministic name; this is for finding whichever one already exists.
+
+    Local wins when both a local and a remote-tracking ref match, matching
+    what `describe_claim` already measured before this existed.
+    """
+    pattern = f"{require(cfg, 'branch_prefix')}{issue}-*"
+    out = run("git", "branch", "-a", "--list", pattern, f"origin/{pattern}",
+             cwd=cwd)
+    names = [line.strip().lstrip("*").strip()
+            for line in out.split("\n") if line.strip()]
+    if not names:
+        return None
+    local = [n for n in names if not n.startswith("remotes/")]
+    return local[0] if local else names[0]
+
+
 def is_stale(comment_time, commits_since, claim_expiry_hours, now):
     """"live" or "stale", from data alone -- no network, no git.
 

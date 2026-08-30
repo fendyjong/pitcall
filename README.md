@@ -38,6 +38,24 @@ this file is what it is asking for, and `<checkout>` is where to put it.
 meaning, whether it's required, what reads it, what happens when it's absent, and how
 to recognise the right value in a project that has never seen this tool.
 
+## Claiming and filing issues
+
+`scripts/claim.py` and `scripts/file.py` are human-run CLIs, invoked from this project's
+own checkout (not a project this plugin drives):
+
+```
+python3 scripts/claim.py <issue-number> [--session <url>] [--take]
+python3 scripts/file.py "<title>" [--body-file <path>]
+```
+
+`claim` posts a claim comment (and applies `status_labels.ongoing`, if configured) and
+cuts `<branch_prefix><issue>-<slug>` from `default_branch` — refusing if the issue
+already carries a live claim. `--session` records the caller's session URL in the
+comment, so a later run can recognise its own claim; `--take` reclaims a claim that
+reads stale. `file` opens a new issue straight into `backlog_milestone` — never the
+milestone in flight. Both refuse loudly, rather than guess, when a key they need is
+missing from the config; see [`docs/configuration.md`](docs/configuration.md).
+
 ## License
 
 Licensed under the MIT License — see `LICENSE`. This plugin vendors skills from an
