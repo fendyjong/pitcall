@@ -32,6 +32,25 @@ class TrackerError(RuntimeError):
     """Stops a verb with a message, never a traceback."""
 
 
+def _require_aware(value, name):
+    """`value`, or a `TrackerError` naming `name` when it is a naive datetime.
+
+    `datetime.now()` is naive by default -- the single most natural way a
+    caller produces `now=` -- while every timestamp this module actually
+    handles is aware (`%cI` from git, ISO8601 from the GitHub API). Silently
+    coercing a naive value to UTC would guess at a timezone the caller did
+    not state, and guessing wrong shifts a claim's age by hours in a rule
+    whose whole job is deciding whether 24 of them have passed. So this
+    refuses instead of guessing.
+    """
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        raise TrackerError(
+            f"{name} must be a timezone-aware datetime, not a naive one -- "
+            f"this module never guesses at a timezone."
+        )
+    return value
+
+
 def run(*args, cwd=None):
     """stdout, or a loud failure naming the command.
 
@@ -47,7 +66,19 @@ def run(*args, cwd=None):
 
 
 def config(checkout=None):
-    return lane_config.load_config(checkout)
+    """The project's pitcall config, or a `TrackerError` when it cannot be read.
+
+    `lane_config.load_config` raises a bare `RuntimeError` on a missing
+    checkout or a missing required key. `TrackerError` subclasses
+    `RuntimeError`, so that subclass relationship runs the wrong way for a
+    caller: `except TrackerError` does not catch a bare `RuntimeError`. This
+    is where that boundary is declared -- the same reader, its error
+    translated, not a second config reader.
+    """
+    try:
+        return lane_config.load_config(checkout)
+    except RuntimeError as exc:
+        raise TrackerError(str(exc)) from exc
 
 
 def require(cfg, key):
@@ -95,7 +126,12 @@ def is_stale(comment_time, commits_since, claim_expiry_hours, now):
     long; commit-recency alone never expires a branch whose session died after
     one commit. This is a pure function so both directions are provable
     offline.
+
+    `comment_time` and `now` must both be timezone-aware -- see
+    `_require_aware`. Never pass a naive `datetime.now()` here.
     """
+    _require_aware(comment_time, "comment_time")
+    _require_aware(now, "now")
     expired = now - comment_time >= timedelta(hours=float(claim_expiry_hours))
     return "stale" if expired and commits_since == 0 else "live"
 
@@ -132,7 +168,10 @@ def commits_since(branch, base, since, cwd=None):
     whole base history, every commit of which predates any claim. Committer
     date, never author date -- a rebase preserves the author date, so an
     author-date filter reads replayed work as old and expires a live claim.
+
+    `since` must be timezone-aware -- see `_require_aware`.
     """
+    _require_aware(since, "since")
     out = run("git", "log", f"{base}..{branch}", "--format=%cI", cwd=cwd)
     return sum(
         1 for line in out.split("\n")
