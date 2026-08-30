@@ -1,6 +1,6 @@
 {
   "bringup": null,
-  "validate": "python -m pytest -q",
+  "validate": "python3 -m pytest -q",
   "teardown": null,
   "default_branch": "main",
   "required_check": "ci",
