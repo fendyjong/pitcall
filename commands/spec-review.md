@@ -27,6 +27,14 @@ Resolve the target:
 - The issue carries the `solution-ready` label → its **body** is the spec. Do not look for a
   `# Spec:` comment; there is none, and finding one would mean the issue is on the wrong path.
 
+Read the labels before resolving anything else — every bullet above turns on whether
+`solution-ready` is present, and an agent that cannot tell falls back to the comment path and
+silently bypasses the whole route:
+
+```bash
+gh issue view <n> --repo <owner>/<repo> --json labels --jq '.labels[].name'
+```
+
 Find the spec **by its `# Spec:` first line, never by position** — comments accumulate, so the
 newest is not the spec and neither, once anyone has replied, is the first:
 
