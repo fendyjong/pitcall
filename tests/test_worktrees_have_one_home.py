@@ -47,7 +47,6 @@ ROOT = Path(__file__).resolve().parents[1]
 #: Spelled in pieces so this file can state the rejected path without tripping
 #: its own check.
 WRONG_HOME = ".claude" + "/worktrees"
-RIGHT_HOME = ".worktrees"
 
 
 def tracked_files():
@@ -78,13 +77,14 @@ def test_enumeration_is_not_empty():
 @pytest.mark.parametrize("rel", tracked_files())
 def test_file_names_only_the_one_worktree_home(rel):
     assert WRONG_HOME not in rel, (
-        f"{rel}: tracked under {WRONG_HOME!r} — worktrees live in "
-        f"{RIGHT_HOME!r} and are never tracked"
+        f"{rel}: tracked under {WRONG_HOME!r} — worktrees live in this project's "
+        f"configured worktree_dir, and are never tracked"
     )
 
     text = blob_text(rel)
     assert WRONG_HOME not in text, (
-        f"{rel}: names {WRONG_HOME!r}. Worktrees have one home, {RIGHT_HOME!r} — "
-        "a second one silently splits the create step from the ignore guard "
-        "and the cleanup step that are supposed to agree with it."
+        f"{rel}: names {WRONG_HOME!r}. Worktrees have one home, whichever this "
+        "project's worktree_dir names — a second one silently splits the create "
+        "step from the ignore guard and the cleanup step that are supposed to "
+        "agree with it."
     )
