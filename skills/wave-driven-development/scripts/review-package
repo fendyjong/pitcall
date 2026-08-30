@@ -7,7 +7,7 @@
 # controller in the plan worktree can diff any task branch by name.
 #
 # Usage: review-package PLAN_FILE BASE HEAD [OUTFILE]
-# Default OUTFILE: <repo-root>/.superpowers/wdd/<plan-basename>/review-<base7>..<head7>.diff
+# Default OUTFILE: <repo-root>/.pitcall/wdd/<plan-basename>/review-<base7>..<head7>.diff
 # (named per range, so a re-review after a fix round gets a distinct fresh file
 # rather than overwriting the package the previous review read).
 set -euo pipefail

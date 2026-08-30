@@ -11,6 +11,13 @@ Add this repository as a plugin source in Claude Code and enable it, or clone it
 point Claude Code's plugin loader at the checkout. See the skills under `skills/` and
 the commands under `commands/` for what each piece does once installed.
 
+### Upgrading to 0.7.0
+
+WDD and brainstorm scratch moved from the upstream plugin's directory name into
+`.pitcall/` (`.pitcall/wdd/`, `.pitcall/brainstorm/`). There is no fallback path:
+a WDD run that is in flight when you upgrade loses track of its ledger and reads
+as "nothing to resume". Finish in-flight runs before upgrading.
+
 ## Project configuration
 
 The plugin is generic: it is installed once and drives many projects, so it cannot

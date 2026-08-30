@@ -12,7 +12,7 @@
 # structure template is one), so this is the common case, not an exotic one.
 #
 # Usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]
-# Default OUTFILE: <repo-root>/.superpowers/wdd/<plan-basename>/task-<N>-brief.md
+# Default OUTFILE: <repo-root>/.pitcall/wdd/<plan-basename>/task-<N>-brief.md
 # (per plan and per worktree; concurrent runs of the SAME plan in the same
 # working tree share it, which is what lets a resumed task re-read the brief the
 # original implementer was given).

@@ -81,7 +81,7 @@ def write_config(checkout, **overrides):
 
 
 def write_ledger(plan_wt, waves_dispatched, waves_integrated, plan=PLAN, extra=""):
-    ws = plan_wt / ".superpowers" / "wdd" / SLUG
+    ws = plan_wt / ".pitcall" / "wdd" / SLUG
     ws.mkdir(parents=True, exist_ok=True)
     lines = [f"# WDD ledger — plan: {plan}"]
     for w in waves_dispatched:
@@ -194,7 +194,7 @@ def test_cleanup_refuses_before_the_branch_reaches_origin_master(run):
 
 def test_cleanup_deletes_task_branches_and_workspace_once_merged(run):
     git("push", "-q", "origin", "planbranch:master", cwd=run["plan_wt"])
-    ws = run["plan_wt"] / ".superpowers" / "wdd" / SLUG
+    ws = run["plan_wt"] / ".pitcall" / "wdd" / SLUG
     assert ws.exists()
 
     r = finish(run["plan_wt"], "cleanup", PLAN)
