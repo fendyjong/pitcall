@@ -146,7 +146,14 @@ def resolve_branch(cfg, issue, cwd=None):
     pattern = f"{require(cfg, 'branch_prefix')}{issue}-*"
     out = run("git", "branch", "-a", "--list", pattern, f"origin/{pattern}",
              cwd=cwd)
-    names = [line.strip().lstrip("*").strip()
+    # `*` marks the branch checked out in the CURRENT worktree; `+` marks one
+    # checked out in a DIFFERENT linked worktree of the same repo -- which is
+    # the normal state here, since every WDD task gets its own worktree.
+    # Leaving `+` unstripped turns a real branch into a garbage candidate
+    # name (`+ feat/24-x`), which either reads as a second, ambiguous branch
+    # next to its own remote-tracking counterpart, or -- unambiguous -- gets
+    # returned as-is and blows up the next git command that takes it.
+    names = [line.strip().lstrip("*+").strip()
             for line in out.split("\n") if line.strip()]
     if not names:
         return None

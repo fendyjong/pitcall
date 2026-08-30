@@ -50,11 +50,12 @@ python3 scripts/file.py "<title>" [--body-file <path>]
 
 `claim` posts a claim comment (and applies `status_labels.ongoing`, if configured) and
 cuts `<branch_prefix><issue>-<slug>` from `default_branch` — refusing if the issue
-already carries a live claim. `--session` records the caller's session URL in the
-comment, so a later run can recognise its own claim; `--take` reclaims a claim that
-reads stale. `file` opens a new issue straight into `backlog_milestone` — never the
-milestone in flight. Both refuse loudly, rather than guess, when a key they need is
-missing from the config; see [`docs/configuration.md`](docs/configuration.md).
+already carries a live claim, or if more than one branch matches the issue and there
+is no way to tell which holds the work. `--session` records the caller's session URL
+in the comment, so a later run can recognise its own claim; `--take` reclaims a claim
+that reads stale. `file` opens a new issue straight into `backlog_milestone` — never
+the milestone in flight. Both refuse loudly, rather than guess, when a key they need
+is missing from the config; see [`docs/configuration.md`](docs/configuration.md).
 
 ## License
 

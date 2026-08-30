@@ -305,3 +305,25 @@ def test_a_remote_only_branch_still_resolves(tmp_path):
                    check=True, capture_output=True)
     got = tracker.resolve_branch(CFG_PREFIX, 19, cwd=str(clone))
     assert got is not None and got.endswith("feat/19-remote-only")
+
+
+def test_a_branch_checked_out_in_a_linked_worktree_still_resolves_clean(tmp_path):
+    """`git branch -a --list` marks a branch checked out in ANOTHER linked
+    worktree with `+`, not `*` -- and that is the normal state here, since
+    every WDD task gets its own worktree. `checkout`ing the branch in the
+    SAME clone (as `test_a_branch_and_its_remote_counterpart_are_one_branch`
+    does) only ever exercises `*`, so it can't catch a `+` left unstripped.
+
+    Unstripped, `+ feat/19-x` either reads as a second, ambiguous branch next
+    to its own `remotes/origin/feat/19-x` counterpart, or -- unambiguous --
+    comes back as `resolve_branch`'s answer with a `+` still glued to the
+    front, which then blows up whatever git command consumes it next.
+    """
+    repo = _branch_repo(tmp_path, "feat/19-x")
+    linked = tmp_path / "linked"
+    subprocess.run(("git", "-C", str(repo), "worktree", "add", "-q",
+                    str(linked), "feat/19-x"), check=True, capture_output=True)
+    # `repo` itself is still on `main` -- `feat/19-x` is checked out only in
+    # `linked`, so listing from `repo` sees the `+` marker, never `*`.
+    got = tracker.resolve_branch(CFG_PREFIX, 19, cwd=str(repo))
+    assert got == "feat/19-x"
