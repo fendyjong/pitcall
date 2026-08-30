@@ -5,5 +5,4 @@
 __pycache__/
 .pytest_cache/
 docs/superpowers/plans/
-.superpowers/
 .claude/

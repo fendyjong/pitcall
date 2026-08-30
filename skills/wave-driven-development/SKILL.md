@@ -814,7 +814,7 @@ single-file mechanical fixes.
 
 ## Ledger
 
-`<plan-worktree>/.superpowers/wdd/<plan-slug>/progress.md`, first line naming the plan file.
+`<plan-worktree>/.pitcall/wdd/<plan-slug>/progress.md`, first line naming the plan file.
 
 **The ledger exists because conversation memory does not survive compaction.**
 In real sessions, controllers that lost their place have re-dispatched entire
@@ -905,10 +905,10 @@ corrupts the ledger permanently:
 Without a plan file (`continue`), scan for ledgers across every worktree of this repo, not one
 fixed root: `wdd-workspace` resolves the workspace from `git rev-parse --show-toplevel`, which
 inside a plan worktree — the normal place to run this skill — is the
-*worktree's* root, not the main checkout's. A scan of only `<repo-root>/.superpowers/wdd/` from the
+*worktree's* root, not the main checkout's. A scan of only `<repo-root>/.pitcall/wdd/` from the
 main checkout then finds nothing and reports "nothing to resume," the one answer that invites a
 fresh start over a run that is in fact resumable. Enumerate roots with `git worktree list
---porcelain` and glob `<root>/.superpowers/wdd/*/progress.md` under each. Ledgers with an open
+--porcelain` and glob `<root>/.pitcall/wdd/*/progress.md` under each. Ledgers with an open
 wave: exactly one, resume it; none, nothing to resume; more than one, stop and ask which, because
 guessing picks somebody's other run.
 

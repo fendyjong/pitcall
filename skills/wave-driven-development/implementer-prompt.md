@@ -87,7 +87,7 @@ Subagent (general-purpose):
     - Any path the project declares regenerable (`regenerated_paths` in the
       project config) — a git hook owns those, not you, and committing a
       hook's output from a task branch conflicts with every sibling.
-    - Anything under `.superpowers/` — controller scratch, git-ignored.
+    - Anything under `.pitcall/` — controller scratch, git-ignored.
 
     Also, before running any project script from your worktree, check that it
     is worktree-safe. Some resolve assets back to the main checkout, and a

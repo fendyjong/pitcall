@@ -36,7 +36,7 @@ def test_workspace_prints_only_the_directory(repo):
     r = run_script("wdd-workspace", str(plan), cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
     out = r.stdout.strip()
-    assert out.endswith("/.superpowers/wdd/plan")
+    assert out.endswith("/.pitcall/wdd/plan")
     assert Path(out).is_dir()
     # Exactly one line: callers do `dir=$(wdd-workspace plan.md)`.
     assert len(r.stdout.strip().splitlines()) == 1
@@ -45,9 +45,9 @@ def test_workspace_prints_only_the_directory(repo):
 def test_workspace_is_self_ignoring(repo):
     plan = _plan(repo)
     run_script("wdd-workspace", str(plan), cwd=repo.path, env=repo.env)
-    assert (repo.path / ".superpowers/wdd/.gitignore").read_text() == "*\n"
+    assert (repo.path / ".pitcall/wdd/.gitignore").read_text() == "*\n"
     status = repo.git("status", "--porcelain").stdout
-    assert ".superpowers" not in status
+    assert ".pitcall" not in status
 
 
 def test_workspace_is_idempotent(repo):
@@ -105,7 +105,7 @@ def test_workspace_accepts_a_plain_checkout_named_like_a_task_worktree(repo, tmp
     (other / "plan.md").write_text(PLAN)
     r = run_script("wdd-workspace", "plan.md", cwd=other, env=repo.env)
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip().endswith("/.superpowers/wdd/plan")
+    assert r.stdout.strip().endswith("/.pitcall/wdd/plan")
 
 
 def test_workspace_missing_plan_exits_2(repo):
@@ -120,7 +120,7 @@ def test_task_brief_extracts_only_the_named_task(repo):
     plan = _plan(repo)
     r = run_script("task-brief", str(plan), "1", cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
-    body = (repo.path / ".superpowers/wdd/plan/task-1-brief.md").read_text()
+    body = (repo.path / ".pitcall/wdd/plan/task-1-brief.md").read_text()
     assert "Body of task one." in body
     assert "Body of task two." not in body
 
@@ -128,7 +128,7 @@ def test_task_brief_extracts_only_the_named_task(repo):
 def test_task_brief_ignores_headings_inside_fences(repo):
     plan = _plan(repo)
     run_script("task-brief", str(plan), "2", cwd=repo.path, env=repo.env)
-    body = (repo.path / ".superpowers/wdd/plan/task-2-brief.md").read_text()
+    body = (repo.path / ".pitcall/wdd/plan/task-2-brief.md").read_text()
     assert "Decoy inside a fence" in body  # it belongs to Task 2's body
     r = run_script("task-brief", str(plan), "3", cwd=repo.path, env=repo.env)
     assert r.returncode == 3
@@ -160,7 +160,7 @@ def test_task_brief_survives_a_fence_inside_a_fence(repo):
     )
     r = run_script("task-brief", str(plan), "1", cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
-    body = (repo.path / ".superpowers/wdd/nested/task-1-brief.md").read_text()
+    body = (repo.path / ".pitcall/wdd/nested/task-1-brief.md").read_text()
     assert "Opening body." in body
     assert "Closing body that must survive." in body
     assert "Other task." not in body
