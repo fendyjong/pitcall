@@ -1,7 +1,7 @@
 ---
 description: Write .pitcall/config.json by executing this plugin's own configuration reference, key by key, proposing an evidence-backed value for each key this project justifies
 argument-hint: [--force]
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash(git rev-parse:*), Bash(git symbolic-ref:*), Bash(rm:*), Bash(gh pr list:*), Bash(gh api:*)
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash(git rev-parse:*), Bash(git symbolic-ref:*), Bash(rm:*), Bash(gh pr list:*), Bash(gh api repos/*/milestones)
 ---
 
 Configure this project for the plugin by writing `.pitcall/config.json`. This command
@@ -14,7 +14,7 @@ right and this file is the one that's wrong.
 This command executes with its **current directory set to the project being configured**,
 never to this plugin's own checkout — `${CLAUDE_PLUGIN_ROOT}` is the one spelling that
 resolves to this plugin's own installed directory regardless of where it was installed or
-which project it is configuring. Every other path this command names (`.pitcall/config.json`,
+which project it is configuring. Every other path this command names (e.g. `.pitcall/config.json`,
 `pitcall.config.json`, `.gitignore`) is deliberately bare, because those are meant to resolve
 in the project being configured — only the reference to this plugin's own doc needs the
 qualifier.
