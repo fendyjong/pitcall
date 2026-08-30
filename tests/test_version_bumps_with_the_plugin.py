@@ -115,7 +115,7 @@ def problems(root):
 def test_this_repository_satisfies_its_own_gate():
     """Passes vacuously whenever nothing under WATCHED has changed since
     base_sha — which is always true on `main`, where HEAD *is* the merge-base,
-    so this comparison never has anything to compare. The four fixture tests
+    so this comparison never has anything to compare. The eight fixture tests
     below are what actually exercise the version comparison.
     """
     assert problems(REPO_ROOT) == []
@@ -191,6 +191,7 @@ def test_a_version_moving_backwards_fails(tmp_path):
     found = problems(root)
     assert found, "the version moved backwards — the gate must fail"
     assert "0.2.0" in found[0] and "0.1.0" in found[0]
+    assert "'0.2.0' -> '0.1.0'" in found[0]
 
 
 def test_a_version_gaining_only_whitespace_fails(tmp_path):
