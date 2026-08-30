@@ -233,3 +233,75 @@ def test_commits_since_filters_on_committer_date_not_author_date(tmp_path):
         "since=2020 is after the author date (2000) but before the real, "
         "unset committer date (now) -- %aI would report 0 here, %cI reports 1"
     )
+
+
+def _branch_repo(tmp_path, *branches):
+    """A repo with one commit on `main` and a branch per name given."""
+    root = tmp_path / "r"
+    root.mkdir()
+    def g(*a):
+        subprocess.run(("git", "-C", str(root), *a), check=True,
+                       capture_output=True)
+    subprocess.run(("git", "init", "-q", "-b", "main", str(root)), check=True,
+                   capture_output=True)
+    g("config", "user.email", "t@example.com")
+    g("config", "user.name", "t")
+    (root / "a").write_text("1\n")
+    g("add", "a")
+    g("commit", "-qm", "base")
+    for b in branches:
+        g("branch", b)
+    return root
+
+
+CFG_PREFIX = {"branch_prefix": "feat/"}
+
+
+def test_two_matching_branches_refuse_rather_than_guess(tmp_path):
+    """The whole point: an alphabetical pick can choose the abandoned one."""
+    repo = _branch_repo(tmp_path, "feat/19-aaa-abandoned", "feat/19-zzz-live")
+    with pytest.raises(tracker.TrackerError, match="matches 2 branches"):
+        tracker.resolve_branch(CFG_PREFIX, 19, cwd=str(repo))
+
+
+def test_the_refusal_names_every_candidate(tmp_path):
+    repo = _branch_repo(tmp_path, "feat/19-aaa-abandoned", "feat/19-zzz-live")
+    with pytest.raises(tracker.TrackerError) as exc:
+        tracker.resolve_branch(CFG_PREFIX, 19, cwd=str(repo))
+    assert "feat/19-aaa-abandoned" in str(exc.value)
+    assert "feat/19-zzz-live" in str(exc.value)
+
+
+def test_one_branch_still_resolves(tmp_path):
+    repo = _branch_repo(tmp_path, "feat/19-only")
+    assert tracker.resolve_branch(CFG_PREFIX, 19, cwd=str(repo)) == "feat/19-only"
+
+
+def test_no_branch_is_none_not_an_error(tmp_path):
+    repo = _branch_repo(tmp_path)
+    assert tracker.resolve_branch(CFG_PREFIX, 19, cwd=str(repo)) is None
+
+
+def test_a_branch_and_its_remote_counterpart_are_one_branch(tmp_path):
+    """Pushed work must not read as ambiguous with itself.
+
+    Built as a real clone so the remote-tracking ref is genuine rather than a
+    hand-made ref: `remotes/origin/feat/19-x` alongside local `feat/19-x`.
+    """
+    origin = _branch_repo(tmp_path, "feat/19-x")
+    clone = tmp_path / "clone"
+    subprocess.run(("git", "clone", "-q", f"file://{origin}", str(clone)),
+                   check=True, capture_output=True)
+    subprocess.run(("git", "-C", str(clone), "checkout", "-q", "feat/19-x"),
+                   check=True, capture_output=True)
+    assert tracker.resolve_branch(CFG_PREFIX, 19, cwd=str(clone)) == "feat/19-x"
+
+
+def test_a_remote_only_branch_still_resolves(tmp_path):
+    """#19's origin-only fix must not regress: local-only listing saw nothing."""
+    origin = _branch_repo(tmp_path, "feat/19-remote-only")
+    clone = tmp_path / "clone2"
+    subprocess.run(("git", "clone", "-q", f"file://{origin}", str(clone)),
+                   check=True, capture_output=True)
+    got = tracker.resolve_branch(CFG_PREFIX, 19, cwd=str(clone))
+    assert got is not None and got.endswith("feat/19-remote-only")

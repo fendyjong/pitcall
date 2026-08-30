@@ -136,8 +136,12 @@ def resolve_branch(cfg, issue, cwd=None):
     for CREATING a branch, where two simultaneous claimants need to agree on
     one deterministic name; this is for finding whichever one already exists.
 
-    Local wins when both a local and a remote-tracking ref match, matching
-    what `describe_claim` already measured before this existed.
+    Local wins when a local ref and its own remote-tracking counterpart both
+    match -- that is one branch seen twice. Two genuinely DIFFERENT branches
+    are a refusal: `claim --take` can create that state itself, because
+    `branch_name()` rebuilds the name from the issue's CURRENT title, so a
+    retitle cuts a second branch beside the first. Guessing between them is
+    how a live claim gets read as stale and stolen.
     """
     pattern = f"{require(cfg, 'branch_prefix')}{issue}-*"
     out = run("git", "branch", "-a", "--list", pattern, f"origin/{pattern}",
@@ -146,6 +150,24 @@ def resolve_branch(cfg, issue, cwd=None):
             for line in out.split("\n") if line.strip()]
     if not names:
         return None
+
+    # A local ref and its remote-tracking counterpart are ONE branch seen
+    # twice, not two candidates -- strip the remote prefix before judging
+    # ambiguity, or every branch that has been pushed reads as ambiguous
+    # with itself.
+    REMOTE = "remotes/origin/"
+    distinct = {n[len(REMOTE):] if n.startswith(REMOTE) else n for n in names}
+    if len(distinct) > 1:
+        raise TrackerError(
+            f"#{issue} matches {len(distinct)} branches: "
+            f"{', '.join(sorted(distinct))}. Refusing to guess which holds the "
+            f"work: `git branch --list` returns them sorted, so picking the "
+            f"first picks alphabetically, and picking the most recent commit "
+            f"is a guess too -- an abandoned branch rebased yesterday would "
+            f"beat live work committed last week. Delete the abandoned branch, "
+            f"or act on the right one by hand."
+        )
+
     local = [n for n in names if not n.startswith("remotes/")]
     return local[0] if local else names[0]
 
