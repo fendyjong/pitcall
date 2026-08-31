@@ -1039,18 +1039,33 @@ def test_every_script_named_in_the_skill_exists():
     controller running a command that does not exist, with every gate green.
     That is not hypothetical: this script was named `wdd-finish` and its name is
     spelled seven times across the skill's markdown.
+
+    **A reference carries its own anchor, and there are two.** A bare
+    `scripts/<name>` is relative to this skill's directory, as the Phase 1
+    validate step says. A `${CLAUDE_PLUGIN_ROOT}/scripts/<name>` is the plugin
+    root — that is where `lane.py` lives, because the lane belongs to the plugin
+    rather than to this skill. Resolving both against the skill would report a
+    shipped script as missing, which reads as a broken citation and invites
+    "fixing" a correct path; resolving both against the plugin root would let a
+    renamed skill script pass. So each is checked where it actually claims to
+    be, and a bare `scripts/lane.py` still fails — it names the wrong place.
     """
     import re
 
+    plugin_root = SKILL.parent.parent
+
     referenced = set()
     for doc in sorted(SKILL.glob("*.md")):
-        for name in re.findall(r"scripts/([a-z0-9][a-z0-9-]*)", doc.read_text()):
-            referenced.add((doc.name, name))
+        for anchor, name in re.findall(
+            r"(\$\{CLAUDE_PLUGIN_ROOT\}/)?scripts/([a-z0-9][a-z0-9_-]*(?:\.py)?)",
+            doc.read_text(),
+        ):
+            referenced.add((doc.name, name, plugin_root if anchor else SKILL))
 
     assert referenced, "no script references found - the scan did not run"
     missing = sorted(
-        (doc, name) for doc, name in referenced
-        if not (SKILL / "scripts" / name).is_file()
+        (doc, name) for doc, name, root in referenced
+        if not (root / "scripts" / name).is_file()
     )
     assert not missing, f"named in the skill's prose but not shipped: {missing}"
 
