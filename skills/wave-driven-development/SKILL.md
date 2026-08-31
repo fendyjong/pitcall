@@ -1004,11 +1004,20 @@ resumed dispatch, so nothing else carries this forward.
 
 ## Automation boundary
 
-The human owns the spec, and the human owns the lane run that validates the branch. From an
-approved spec the skill runs unattended through to a **merged** PR — `wdd merge`, whose
-bound is a lane receipt for the exact commit rather than a human's attention (Phase 3). What is
-automated is *landing already-validated code*; authorising the validation is not. Within that, it
-**interrupts only when human input is genuinely needed**.
+**The human owns the spec. That is the boundary — there is not a second one.** From an approved
+spec the skill runs unattended through to a **merged** PR: it plans, executes, **runs the lane
+itself** (Phase 3), and merges with `wdd merge`, whose bound is a lane receipt for the exact commit
+rather than a human's attention. Within that, it **interrupts only when human input is genuinely
+needed**.
+
+*Earlier revisions of this section gave the human a second gate — "the human owns the lane run
+that validates the branch… authorising the validation is not [automated]". That is retired.* It
+contradicted the argument made three paragraphs below: a merge needs no permission **because** a
+receipt is stronger evidence than asking — and the lane run is what produces that receipt, so
+gating it moved the interrupt one step upstream of where this section had just removed it. Worse,
+it was load-bearing nowhere else: `lane.py` has no prompt and no interactive path, and Phase 3
+listed no lane step, so a session following this skill literally reached `merge`, was refused for
+a missing receipt, and had been given no step that would have produced one.
 
 **Do not pause to check in between tasks or between waves.** Execute the plan
 through to Final Review. "Should I continue?" prompts and progress summaries
@@ -1043,10 +1052,19 @@ and undo; a session parked on a question costs their whole day and buys nothing.
   content: in a codebase where nearly every task touches tenancy, "the diff mentions `org_id`" is
   not a trigger. "I am about to rule that a missing `org_id` filter is acceptable" is.
 
-**A push to a shared branch and a merge are not on that list, deliberately.**
-They would be, for a workflow whose only bound was a human's attention. Here
-`wdd merge` is bound by a lane receipt pinned to the exact commit (Phase 3),
-which is a stronger check than asking — so this skill lands the PR itself.
+**Running the lane, pushing to a shared branch, and merging are not on that
+list, deliberately.** They would be, for a workflow whose only bound was a
+human's attention. Here `wdd merge` is bound by a lane receipt pinned to the
+exact commit (Phase 3), which is a stronger check than asking — so this skill
+validates the branch and lands the PR itself.
+
+Two things about `lane run` to state rather than to stop for. It takes a
+**machine-wide mutex**, so it can queue behind another session and wait its
+turn — that is scheduling, not a decision. And it runs the project's `bringup`
+and `validate`, which in some projects means a live stack with real outbound
+capability; a project that must not be reached unattended constrains that in
+its own config (`validate`, `outbound_allowlist`), where the constraint is
+visible in a diff, rather than in a habit of asking.
 
 **Artifacts hand over as file paths, never pasted through the controller's
 context.** Everything you paste into a dispatch prompt, and everything a
@@ -1104,9 +1122,30 @@ Run `scripts/wdd`, from the **plan worktree**:
 ```bash
 scripts/wdd check   PLAN_FILE   # verify only, no side effects
 scripts/wdd ship    PLAN_FILE   # check, push, open PR
+
+# bringup + validate -> a receipt for this exact commit
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run --session <session-name>
+
 scripts/wdd merge   PLAN_FILE   # receipt + green -> merge, then sync main
 scripts/wdd cleanup PLAN_FILE   # task branches, worktrees, workspace
 ```
+
+**The lane step is yours to run, not the human's** (Automation boundary). Put
+it last before `merge`. The order is not arbitrary and it is not about `ship`:
+the receipt is pinned to a **commit**, so what invalidates it is any push
+between the run and the merge — running the lane immediately before `merge`
+is simply the ordering with the smallest window for one. Run it from the plan
+worktree, and pass `--worktree` explicitly when standing in a submodule's
+worktree, where the caller's checkout is ambiguous. It takes a machine-wide
+mutex and may wait behind another session; that is a queue, not a question.
+**Its exit status is not the verdict** — the receipt's existence is (see
+below), and `lane run` has been observed exiting 0 on a failed `validate`
+(#25).
+
+`lane.py` is spelled from `${CLAUDE_PLUGIN_ROOT}` while `wdd` is bare because
+they live in different places: `wdd` is this skill's own script, and the lane
+belongs to the plugin, which drives projects this skill is not the only entry
+point to.
 
 `check` reads the ledger and refuses on any of: a `Wave N: dispatched` with no
 matching `integrated`; a `BLOCKED` entry; a ledger whose first line names a

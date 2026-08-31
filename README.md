@@ -11,6 +11,20 @@ Add this repository as a plugin source in Claude Code and enable it, or clone it
 point Claude Code's plugin loader at the checkout. See the skills under `skills/` and
 the commands under `commands/` for what each piece does once installed.
 
+### Upgrading to 0.10.0
+
+WDD runs the validation lane itself. Through 0.9.0 the skill named the lane run as
+the human's, and listed no step for it in Phase 3 — so `wdd merge`, which refuses
+without a receipt, could never reach one on its own. The spec is now the only human
+gate: from an approved spec the skill plans, executes, runs `lane run`, and merges.
+
+**What this changes for a project**, and the reason it is a minor bump rather than a
+patch: `bringup` and `validate` now run **unattended**. If either reaches something
+that must not be touched without a person watching — a shared stack, a live endpoint,
+real recipients — say so in that project's config (`validate`, `outbound_allowlist`),
+where the constraint is visible in a diff, rather than relying on a human being asked
+first. Nothing in the plugin ever enforced that asking.
+
 ### Upgrading to 0.7.0
 
 WDD and brainstorm scratch moved from the upstream plugin's directory name into
