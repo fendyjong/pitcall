@@ -119,6 +119,28 @@ def branch_name(cfg, issue, title):
     return f"{require(cfg, 'branch_prefix')}{issue}-{slug(title)}"
 
 
+def issue_from_branch(cfg, branch):
+    """`<branch_prefix><issue>-<slug>` -> `"<issue>"`, or `None`. `branch_name`'s inverse.
+
+    FAILS SOFT, ALWAYS, and that is the whole contract. `branch_prefix` is required
+    only by `claim` (docs/configuration.md), so a plan branch cut by hand legitimately
+    carries no number and `ship` must still ship. Every miss returns `None` for the
+    caller to state; raising would refuse to open a PR over a naming convention the
+    project never promised to follow.
+
+    ANCHORED AT THE PREFIX, never searched for. `feat/rewrite-12-tables` contains a
+    number and is not issue 12, and a `Closes #12` composed from it would close an
+    unrelated issue in whatever repository `gh` happens to resolve to. The remainder
+    must be digits followed by `-` -- exactly the shape `branch_name` writes, which is
+    why the two live side by side: one convention, one definition, both directions.
+    """
+    prefix = (cfg or {}).get("branch_prefix")
+    if not prefix or not branch or not branch.startswith(prefix):
+        return None
+    match = re.match(r"(\d+)-", branch[len(prefix):])
+    return match.group(1) if match else None
+
+
 def resolve_branch(cfg, issue, cwd=None):
     """Issue #<issue>'s branch, local or on `origin` -- or `None`.
 
@@ -279,3 +301,33 @@ def commits_since(branch, base, since, cwd=None):
         1 for line in out.split("\n")
         if line.strip() and datetime.fromisoformat(line.strip()) >= since
     )
+
+
+def _main(argv):
+    """`tracker.py issue-from-branch BRANCH` -- the one entry point a shell needs.
+
+    `wdd ship` is a shell script, and the branch->issue convention is defined by
+    `branch_name`/`issue_from_branch` above. Restating the parse in shell would put
+    one convention in two languages with the edge cases in the untested half, so the
+    shell asks this instead.
+
+    Prints the number and exits 0; prints NOTHING and STILL exits 0 when there is
+    none, including when the config cannot be read at all. A miss is an ordinary
+    answer here rather than an error -- `ship` must ship either way, and a non-zero
+    exit would make a naming convention able to block a release.
+    """
+    if len(argv) != 2 or argv[0] != "issue-from-branch":
+        sys.stderr.write("usage: tracker.py issue-from-branch BRANCH\n")
+        return 2
+    try:
+        cfg = config()
+    except TrackerError:
+        return 0
+    found = issue_from_branch(cfg, argv[1])
+    if found:
+        print(found)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv[1:]))
