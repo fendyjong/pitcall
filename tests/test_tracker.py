@@ -32,6 +32,38 @@ def test_branch_name_refuses_without_a_prefix():
         tracker.branch_name({}, 19, "x")
 
 
+def test_issue_from_branch_is_branch_names_inverse():
+    cfg = {"branch_prefix": "feat/"}
+    assert tracker.issue_from_branch(cfg, tracker.branch_name(cfg, 19, "Claim and file")) == "19"
+    assert tracker.issue_from_branch({"branch_prefix": "wdd/"}, "wdd/1143-consent-pair") == "1143"
+
+
+def test_issue_from_branch_fails_soft_rather_than_raising():
+    """`branch_prefix` is required only for `claim`, so a plan branch cut by hand
+    legitimately carries no number. Ship must still ship: every miss is None, and the
+    caller states the omission. Raising here would refuse to open a PR over a naming
+    convention the project never promised to follow."""
+    # No prefix configured at all -- the key is optional outside `claim`.
+    assert tracker.issue_from_branch({}, "feat/19-x") is None
+    # Configured, but this branch does not use it.
+    assert tracker.issue_from_branch({"branch_prefix": "feat/"}, "hotfix/19-x") is None
+    # Prefix matches, remainder is not a number.
+    assert tracker.issue_from_branch({"branch_prefix": "feat/"}, "feat/rename-the-thing") is None
+    # Digits, but not the `<digits>-` shape -- `feat/43x-...` is not issue 43.
+    assert tracker.issue_from_branch({"branch_prefix": "feat/"}, "feat/43x-thing") is None
+    # Digits with nothing after them: no slug, so not the convention either.
+    assert tracker.issue_from_branch({"branch_prefix": "feat/"}, "feat/43") is None
+
+
+def test_issue_from_branch_does_not_match_a_number_deeper_in_the_name():
+    """Anchored at the prefix, never searched for. `feat/rewrite-12-tables` contains a
+    number and is not issue 12; emitting `Closes #12` there would close an unrelated
+    issue in whatever repo `gh` happens to resolve to."""
+    cfg = {"branch_prefix": "feat/"}
+    assert tracker.issue_from_branch(cfg, "feat/rewrite-12-tables") is None
+    assert tracker.issue_from_branch(cfg, "release/feat/19-x") is None
+
+
 def test_status_label_absent_is_none_not_a_guess():
     assert tracker.status_label({}, "ongoing") is None
     assert tracker.status_label({"status_labels": {}}, "ongoing") is None

@@ -174,6 +174,59 @@ PY
 }
 
 fail=0
+# --- the PR must close the issue its branch was cut for ----------------------
+# `--fill` composes the body from commit subjects and nothing else, so a merged
+# PR never closed the issue the branch was cut for: it stayed OPEN carrying its
+# ongoing label, and only a human noticing ever cleared it. Silent and total --
+# every issue shipped this way had it, and nothing in the workflow reported it.
+#
+# The keyword is APPENDED after creation rather than composed here, because
+# `--fill` and `--body` are mutually exclusive in `gh`: composing would mean
+# reimplementing gh's own title derivation and discarding the commit summary
+# reviewers actually read. Reading the body back before writing also makes this
+# idempotent, which matters because `gh pr create` tolerates an existing PR that
+# may already carry the line.
+#
+# EVERY FAILURE IS SOFT AND SPOKEN. A naming convention must never be able to
+# block a release, so a branch with no number still ships -- with the line it
+# could not add printed, which turns a silent miss into a loud one.
+TRACKER="$HERE/../../../scripts/tracker.py"
+
+attach_closing_keyword() {
+  local pr_ref="${1:-}" issue body
+  [ -n "$pr_ref" ] || return 0
+
+  issue=""
+  [ -f "$TRACKER" ] && issue="$(python3 "$TRACKER" issue-from-branch "$BRANCH" 2>/dev/null || true)"
+
+  if [ -z "$issue" ]; then
+    note "no issue number in '$BRANCH' -- the PR body carries no closing keyword."
+    note "If this branch belongs to an issue, add 'Closes #<n>' before merging."
+    return 0
+  fi
+
+  # The number came from a naming convention, not from this repository. A branch
+  # cut in a fork or a submodule worktree parses identically and would close an
+  # unrelated issue in whatever repo `gh` resolves to, so confirm it exists here
+  # before naming it.
+  if ! gh issue view "$issue" --json number >/dev/null 2>&1; then
+    note "'$BRANCH' names issue #$issue, which does not resolve in this repository."
+    note "PR body left unchanged; add the closing keyword by hand if that is wrong."
+    return 0
+  fi
+
+  body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null || true)"
+  case "$body" in
+    *"Closes #$issue"*) note "PR body already closes #$issue." ; return 0 ;;
+  esac
+
+  if gh pr edit "$BRANCH" --body "$(printf '%s\n\nCloses #%s' "$body" "$issue")" >/dev/null 2>&1; then
+    note "PR body closes #$issue on merge."
+  else
+    note "could not update the PR body; add 'Closes #$issue' before merging."
+  fi
+}
+
 note() { printf '  %s\n' "$*"; }
 bad()  { printf '  FAIL: %s\n' "$*" >&2; fail=1; }
 
@@ -231,6 +284,7 @@ ship)
   if command -v gh >/dev/null 2>&1; then
     gh pr create --base "$BASE" --head "$BRANCH" --fill || note "PR may already exist"
     pr="$(gh pr view "$BRANCH" --json number -q .number 2>/dev/null || true)"
+    attach_closing_keyword "${pr:-}"
   fi
   echo ""
   note "PUSHED (PR ${pr:-<PR>}, base $BASE). Before merging, re-check freshness:"
