@@ -87,8 +87,13 @@ over are different acts. `--milestone` narrows what it considers, as a filter ra
 than a gate; without it an issue carrying no milestone is still a candidate.
 
 `file` opens a new issue straight into `backlog_milestone` — never
-the milestone in flight. Both refuse loudly, rather than guess, when a key they need
-is missing from the config; see [`docs/configuration.md`](docs/configuration.md).
+the milestone in flight. `--notes` files into `notes_milestone` instead, for a decision
+that was **ruled** rather than deferred: closing a backlog issue means the work got done,
+closing a note means the reason it recorded stopped being true. Sharing one milestone makes
+the two indistinguishable and the backlog's open count stops meaning "work outstanding".
+`--notes` is a boolean, not a milestone name, so it cannot reach the one in flight. Both
+refuse loudly, rather than guess, when a key they need is missing from the config; see
+[`docs/configuration.md`](docs/configuration.md).
 
 ## Filing a solution-ready issue
 
