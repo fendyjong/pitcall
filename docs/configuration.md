@@ -95,6 +95,7 @@ branch on it.
 | `branch_prefix` | The prefix a cut branch carries ahead of `<issue>-<slug>`, separator included (`feat/`, `wdd/`). | Yes for `claim`. | `scripts/tracker.py`'s `branch_name()`, to cut one, and `resolve_branch()`, to find one that already exists. | `claim` refuses rather than cutting an unprefixed branch. |
 | `claim_expiry_hours` | Hours a claim is honoured before another session may treat it as abandoned — **one half of the test**, never the whole of it. | Yes for `claim`'s refusal path. | `scripts/tracker.py`'s `is_stale()`, via `scripts/claim.py`. | `claim` cannot judge an existing claim and refuses. |
 | `backlog_milestone` | The milestone holding not-yet-scheduled work. | Yes for `file`. | `scripts/file.py`'s `build_command()`. | `file` refuses rather than filing into the milestone in flight. |
+| `notes_milestone` | The milestone holding **recorded decisions that are not work** — a ruling and its reasoning, kept so a later reader finds the answer rather than assuming an oversight. | Yes for `file --notes`; unused otherwise. | `scripts/file.py`'s `build_command()`. | `file --notes` refuses, naming the key. It never falls back to `backlog_milestone`: a note filed silently into the backlog is the defect the key exists to remove, and the fallback would be indistinguishable from not having the key at all. |
 
 **How to recognise the right value:**
 
@@ -122,6 +123,12 @@ branch on it.
 - `backlog_milestone` — the project's milestone list (e.g. `gh api
   repos/<owner>/<repo>/milestones`) for the one nothing is currently scheduled
   against.
+- `notes_milestone` — a project has one only if it has decided to separate
+  *recorded rulings* from *deferred work*. Most have not, and absent is the
+  correct value then. The test is what closing an issue there would mean: on the
+  backlog it means the work got done, and in a notes milestone it means the
+  reason the ruling rested on stopped being true. If a project cannot say which
+  of those it wants, it does not need this key yet.
 
 ## Declared, but nothing reads them yet
 

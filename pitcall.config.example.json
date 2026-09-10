@@ -8,6 +8,7 @@
   "worktree_dir": "worktrees/",
   "plan_dir": "docs/plans/",
   "backlog_milestone": "Backlog",
+  "notes_milestone": null,
   "claim_expiry_hours": 24,
   "status_labels": {
     "ongoing": "status:in-progress",
