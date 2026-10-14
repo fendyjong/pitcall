@@ -94,6 +94,23 @@ def write_ledger(plan_wt, waves_dispatched, waves_integrated, plan=PLAN, extra="
     return ws
 
 
+def write_verdict(plan_wt, k=1, reviewed=None, since=None, word="CLEAN"):
+    """A full-branch review's verdict file, where the reviewer writes it.
+
+    Defaults describe the ordinary case: review #k covered the plan branch's
+    current HEAD, starting from its merge-base with origin/master. A test that
+    commits after the fixture calls this again, exactly as a run must review a
+    commit before it may ship it.
+    """
+    ws = plan_wt / ".pitcall" / "wdd" / SLUG
+    ws.mkdir(parents=True, exist_ok=True)
+    reviewed = reviewed or git("rev-parse", "HEAD", cwd=plan_wt)
+    since = since or git("merge-base", "origin/master", "HEAD", cwd=plan_wt)
+    p = ws / f"final-review-{k}.md"
+    p.write_text(f"Reviewed: {reviewed}\nSince: {since}\nVerdict: {word}\n\n## Strengths\n")
+    return p
+
+
 @pytest.fixture
 def run(tmp_path):
     """A main checkout, a plan worktree, and two task branches merged into it."""
@@ -131,6 +148,7 @@ def run(tmp_path):
         git("merge", "-q", "--no-edit", b, cwd=plan_wt)
 
     write_ledger(plan_wt, [1], [1])
+    write_verdict(plan_wt)
     return {"main": main, "plan_wt": plan_wt, "origin": origin}
 
 
@@ -349,6 +367,26 @@ GH_STUB = r"""#!/usr/bin/env bash
 # rather than assumed.
 printf '%s\n' "$*" >> "$GH_LOG"
 case "$*" in
+  "pr create"*)
+    ;;
+  "pr view "*"--json number -q .number"*)
+    echo 7
+    ;;
+  "pr view "*"--json body"*)
+    cat "$GH_DIR/body.txt" 2>/dev/null || true
+    ;;
+  "pr edit "*)
+    prev=""
+    for a in "$@"; do
+      [ "$prev" = "--body" ] && printf '%s' "$a" > "$GH_DIR/body.txt"
+      prev="$a"
+    done
+    ;;
+  "issue view "*)
+    # An issue resolves when the test created a marker file for it.
+    [ -f "$GH_DIR/issue-$3" ] || exit 1
+    echo "{\"number\": $3}"
+    ;;
   "pr view "*"--json number"*)
     cat "$GH_DIR/pr.json"
     ;;
@@ -664,6 +702,7 @@ def test_merge_gates_on_the_check_named_by_the_config_not_a_hardcoded_one(run, g
     write_config(run["plan_wt"], required_check="gate-x")
     commit_path(run["plan_wt"], "pitcall.config.json",
                 "this project's required check is gate-x")
+    write_verdict(run["plan_wt"])
     head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
     set_pr_head(gh, head)
     write_receipt(run, head)
@@ -706,6 +745,7 @@ def test_a_failing_refresh_does_not_unwind_the_merge(run, gh):
     write_config(run["plan_wt"], refresh_commands=["exit 3"])
     commit_path(run["plan_wt"], "pitcall.config.json",
                 "this project regenerates something after a pull")
+    write_verdict(run["plan_wt"])
     head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
     set_pr_head(gh, head)
     write_receipt(run, head)
@@ -1028,6 +1068,129 @@ def test_a_pr_retargeted_to_another_base_is_refused(run, gh):
     assert r.returncode == 1, r.stdout + r.stderr
     assert "release-2" in r.stderr and "master" in r.stderr
     assert merges(gh) == []
+
+
+# ---------------------------------------------------------------------------
+# The sweep (#49): stop markers read as lines, one sweep pass, a verdict chain
+# that covers the commit being shipped, and the PR's sweep section.
+# ---------------------------------------------------------------------------
+
+
+def test_blocked_in_prose_does_not_block_the_finish(run):
+    """#10: a ledger that describes a gate reporting BLOCKED is still clean."""
+    write_ledger(run["plan_wt"], [1], [1], extra="\n".join([
+        "| T2 x T4 | ... | T4 Step 1 is a hard gate that reports BLOCKED rather than proceeding |",
+        "Ruling: the implementer should report BLOCKED rather than working around it — x — y",
+    ]))
+    r = finish(run["plan_wt"], "check", PLAN)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_resolved_stop_marker_does_not_block_the_finish(run):
+    write_ledger(run["plan_wt"], [1], [1], extra="\n".join([
+        "Task 2: BLOCKED (fix cap hit)",
+        f"Task 2: complete (commits a..b, review clean, branch {SLUG}-t2)",
+    ]))
+    r = finish(run["plan_wt"], "check", PLAN)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_wave_after_the_sweep_range_blocks_the_finish(run):
+    write_ledger(run["plan_wt"], [1, 2], [1, 2], extra="Sweep plan: waves 1-1")
+    r = finish(run["plan_wt"], "check", PLAN)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "after the sweep range" in r.stderr
+
+
+def test_check_refuses_without_a_full_branch_review(run):
+    (run["plan_wt"] / ".pitcall" / "wdd" / SLUG / "final-review-1.md").unlink()
+    r = finish(run["plan_wt"], "check", PLAN)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "rule 1" in r.stderr
+
+
+def test_check_refuses_a_commit_the_last_review_did_not_see(run):
+    (run["plan_wt"] / "late.txt").write_text("changed after the review\n")
+    commit_path(run["plan_wt"], "late.txt", "a change after the last review")
+    r = finish(run["plan_wt"], "check", PLAN)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "rule 3" in r.stderr
+
+
+def test_check_refuses_a_must_fix_verdict(run):
+    write_verdict(run["plan_wt"], word="MUST-FIX")
+    r = finish(run["plan_wt"], "check", PLAN)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "rule 2" in r.stderr
+
+
+def test_cleanup_does_not_ask_for_a_verdict(run):
+    """`cleanup` runs after the merge; review coverage was settled before it."""
+    (run["plan_wt"] / ".pitcall" / "wdd" / SLUG / "final-review-1.md").unlink()
+    r = finish(run["plan_wt"], "cleanup", PLAN)
+    assert "rule 1" not in r.stderr, r.stdout + r.stderr
+
+
+def test_merge_refuses_a_pr_head_the_last_review_did_not_see(run, gh):
+    """The receipt covers the PR head, the review does not: still refused."""
+    write_verdict(run["plan_wt"], reviewed=git("rev-parse", "HEAD~1", cwd=run["plan_wt"]),
+                  since=git("merge-base", "origin/master", "HEAD", cwd=run["plan_wt"]))
+    write_receipt(run, gh["head"])
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "rule 3" in r.stderr
+    assert merges(gh) == []
+
+
+SWEEP_LEDGER = "\n".join([
+    "Fixed: anchor the stop markers — closes #10",
+    "Seen: #42 — wdd:285",
+    "Filed: #51 — lane run exits 0",
+    "Note: quoting edge — low value",
+])
+
+
+def test_ship_appends_the_sweep_section(run, gh):
+    write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
+    (gh["dir"] / "issue-10").write_text("")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    body = (gh["dir"] / "body.txt").read_text()
+    assert "## Sweep" in body
+    assert "**Sweep:** 1 fixed (closes #10) · 1 filed (#51) · 1 seen again (#42) · 1 noted" in body
+    assert body.count("Closes #10") == 1
+
+
+def test_ship_leaves_out_a_close_that_does_not_resolve(run, gh):
+    write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "does not resolve" in r.stdout
+    assert "Closes #10" not in (gh["dir"] / "body.txt").read_text()
+
+
+def test_a_second_ship_does_not_repeat_the_sweep_section(run, gh):
+    write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
+    (gh["dir"] / "issue-10").write_text("")
+    finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (gh["dir"] / "body.txt").read_text().count("## Sweep") == 1
+
+
+def test_ship_without_sweep_lines_adds_no_section(run, gh):
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (gh["dir"] / "body.txt").exists()
+
+
+def test_ship_refuses_a_commit_no_review_covered(run, gh):
+    (run["plan_wt"] / "late.txt").write_text("changed after the review\n")
+    commit_path(run["plan_wt"], "late.txt", "a change after the last review")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "rule 3" in r.stderr
+    assert not calls(gh, "pr create"), "nothing is pushed or opened for an unreviewed commit"
 
 
 def test_every_script_named_in_the_skill_exists():
