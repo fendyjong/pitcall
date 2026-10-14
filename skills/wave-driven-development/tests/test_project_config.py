@@ -238,3 +238,11 @@ def test_flag_refuses_a_config_that_will_not_parse(repo):
     r = _flag(repo)
     assert r.returncode == 2
     assert r.stdout == ""
+
+
+def test_flag_refuses_a_config_that_exists_but_cannot_be_read(repo):
+    """An OSError on read (here: a directory at the config path) is unreadable, not "no decision"."""
+    (repo.path / "pitcall.config.json").mkdir()
+    r = _flag(repo)
+    assert r.returncode == 2
+    assert r.stdout == ""

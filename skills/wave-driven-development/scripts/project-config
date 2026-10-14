@@ -76,9 +76,11 @@ def read_flag(key: str, checkout: str | None) -> int:
             print("unset")
             return 0
         cfg = load_config(checkout)
-    except (RuntimeError, ValueError) as exc:
-        # ValueError is a config that will not parse as JSON; the loader lets
-        # it through, and here it is the same answer as an unreadable one.
+    except (RuntimeError, ValueError, OSError) as exc:
+        # ValueError is a config that will not parse as JSON; OSError is one
+        # that exists but cannot be read (a directory, a permission). The loader
+        # lets both through, and here both are the same answer: unreadable, not
+        # "no decision".
         sys.stderr.write(f"{exc}\n")
         return 2
 
