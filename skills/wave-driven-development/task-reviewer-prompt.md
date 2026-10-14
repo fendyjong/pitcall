@@ -237,6 +237,24 @@ Subagent (general-purpose):
     a finding even when every file it touched was declared — declared files
     bound what it may touch, not what others may see.
 
+    ## Where Each Finding Came From
+
+    Tag every issue you report with its origin, measured against the
+    branch's merge-base with the default branch — [MERGE_BASE] — and never
+    against this task's base:
+
+    - **introduced** — this branch caused it. A defect an earlier task on
+      this branch added is still introduced.
+    - **pre-existing** — it was already there at [MERGE_BASE]. Give the
+      evidence: the offending lines as `<path>:<line> at <merge-base7>`
+      (checkable with `git show [MERGE_BASE]:<path>`), or a reproduction
+      that fails at [MERGE_BASE], with its command and output.
+
+    A pre-existing tag without evidence is treated as introduced. Report a
+    pre-existing problem you notice in code you read at its real severity:
+    it is not discarded as out of scope — the controller collects it as a
+    `Sweep:` line, routed by the next full-branch review.
+
     ## Output Format
 
     ### Spec Compliance
@@ -257,7 +275,8 @@ Subagent (general-purpose):
     #### Minor (Nice to Have)
 
     For each issue: file:line, what's wrong, why it matters, how to fix
-    (if not obvious).
+    (if not obvious), and its origin — `introduced`, or `pre-existing` with
+    its evidence.
 
     ### Assessment
 
@@ -280,6 +299,9 @@ Subagent (general-purpose):
 - `[REPORT_FILE]` — REQUIRED: the file the implementer wrote its detailed
   report to
 - `[BASE_SHA]` — commit before this task
+- `[MERGE_BASE]` — REQUIRED: `git merge-base origin/<default-branch> HEAD`,
+  the branch's base on the default branch. Origin tags are measured against
+  it, never against `[BASE_SHA]`
 - `[HEAD_SHA]` — current commit
 - `[DIFF_FILE]` — REQUIRED: the path the controller wrote the review
   package to (`scripts/review-package PLAN_FILE BASE HEAD` prints the unique

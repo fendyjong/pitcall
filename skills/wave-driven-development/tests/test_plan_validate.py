@@ -353,3 +353,66 @@ def test_a_duplicate_wave_row_fails(tmp_path):
     r = run_script("plan-tasks", "--validate", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
     assert "more than one row" in r.stderr
+
+
+# --- Rule 8: the sweep is one pass, after every spec wave ----------------------
+
+SWEEP = """
+## Sweep
+
+### Task 4: Sweep item
+
+**Files:**
+- Modify: `app/two.py`
+
+**Interfaces:**
+- Depends: none
+- Model: cheapest
+- Produces: nothing
+"""
+
+
+def _with_sweep(row_for_task_4: str) -> str:
+    """VALID plus one sweep task, placed by the given wave-table row edit."""
+    return VALID.replace("| 2 | 3 | depends on 1 |", row_for_task_4) + SWEEP
+
+
+def test_a_sweep_task_after_every_spec_wave_passes(tmp_path):
+    body = _with_sweep("| 2 | 3 | depends on 1 |\n| 3 | 4 | sweep |")
+    r = run_script("plan-tasks", "--validate", str(_plan(tmp_path, body)), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+
+
+def test_a_sweep_task_in_a_spec_wave_fails(tmp_path):
+    """Wave 2 is already dispatched and integrated by the time the sweep is planned."""
+    body = _with_sweep("| 2 | 3, 4 | depends on 1 |")
+    r = run_script("plan-tasks", "--validate", str(_plan(tmp_path, body)), cwd=tmp_path)
+    assert r.returncode == 1
+    assert "Rule 8" in r.stderr
+    assert "Task 4" in r.stderr
+
+
+def test_a_second_sweep_section_fails(tmp_path):
+    body = _with_sweep("| 2 | 3 | depends on 1 |\n| 3 | 4 | sweep |") + "\n## Sweep\n"
+    r = run_script("plan-tasks", "--validate", str(_plan(tmp_path, body)), cwd=tmp_path)
+    assert r.returncode == 1
+    assert "one sweep pass" in r.stderr
+
+
+def test_a_sweep_heading_inside_a_fence_is_not_a_sweep(tmp_path):
+    """The negative control: a plan quoting the heading in an example has no sweep."""
+    body = VALID + "\n```markdown\n## Sweep\n## Sweep\n```\n"
+    r = run_script("plan-tasks", "--validate", str(_plan(tmp_path, body)), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+
+
+def test_the_sweep_heading_ends_the_previous_tasks_metadata(tmp_path):
+    """Lines under `## Sweep`, before the first sweep task, are nobody's.
+
+    Without the heading closing Task 3's region, the stray Files block below
+    would be read as Task 3's and `app/stray.py` would join its declared set.
+    """
+    body = VALID + "\n## Sweep\n\n**Files:**\n- Create: `app/stray.py`\n"
+    r = run_script("plan-tasks", str(_plan(tmp_path, body)), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "app/stray.py" not in r.stdout

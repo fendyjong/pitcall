@@ -31,7 +31,7 @@
 #
 # Usage:
 #   wdd check   PLAN_FILE   # verify only, no side effects
-#   wdd ship    PLAN_FILE   # check, push, open PR
+#   wdd ship    PLAN_FILE   # check, push, open PR, append the sweep section
 #   wdd merge   PLAN_FILE   # require a lane receipt for the PR's head
 #                           # sha, wait for green, merge server-side,
 #                           # fast-forward the main checkout
@@ -89,8 +89,10 @@ fi
 # SKILL.md already tells the planner to take the base from it and "never a name
 # assumed here". This is the same answer from the same place.
 #
-# `check` never calls this: it compares local refs only, and has no business
-# failing because of a config key it does not use.
+# Every subcommand reads it. `cleanup` gates deletion on it, `ship` pushes
+# against it and `merge` lands into it; and `check`, `ship` and `merge` all
+# check the verdict chain, whose rule 5 asks whether review #1 started on
+# `origin/<default_branch>` -- a question with no answer without the key.
 require_base_branch() {
   # `if !` suppresses `set -e` for the assignment, so the refusal below runs
   # instead of the script dying silently. project-config writes its own
@@ -227,6 +229,58 @@ attach_closing_keyword() {
   fi
 }
 
+# --- the PR says what the run's sweep did to the backlog ----------------------
+# Built from the ledger's `Fixed:` / `Seen:` / `Filed:` / `Note:` lines by
+# `wdd-ledger`, which owns those formats. Appended after the closing keyword,
+# with the same read-back idempotence and the same rule: every failure is soft
+# and spoken, because a summary must never be able to block a release.
+#
+# Each `closes #N` is confirmed to resolve HERE before it is written, for the
+# reason `attach_closing_keyword` gives: a number that resolves to nothing, or
+# to an issue in whatever repository `gh` happens to point at, must not become
+# a live closing keyword.
+#
+# Each reader's exit status is READ, not discarded. Discarded, a reader that
+# failed and one with nothing to say look the same: the PR silently lacks its
+# section -- or worse, a failed `closes` confirms nothing and the section still
+# writes every `Closes #N` unchecked. So a failure says which step and stops.
+# Their stderr flows through, because the diagnosis is the useful part.
+attach_sweep_section() {
+  local pr_ref="${1:-}" body section listed unresolved="" n rc
+  [ -n "$pr_ref" ] || return 0
+
+  rc=0
+  listed="$("$HERE/wdd-ledger" closes "$LEDGER")" || rc=$?
+  if [ "$rc" != 0 ]; then
+    note "the sweep section was not added: 'wdd-ledger closes' exited $rc, so no closing keyword could be confirmed."
+    return 0
+  fi
+  for n in $listed; do
+    if ! gh issue view "$n" --json number >/dev/null 2>&1; then
+      note "the sweep fixed #$n, which does not resolve in this repository -- 'Closes #$n' left out."
+      unresolved="${unresolved:+$unresolved,}$n"
+    fi
+  done
+
+  rc=0
+  section="$("$HERE/wdd-ledger" sweep-section "$LEDGER" --unresolved "$unresolved")" || rc=$?
+  if [ "$rc" != 0 ]; then
+    note "the sweep section was not added: 'wdd-ledger sweep-section' exited $rc."
+    return 0
+  fi
+  [ -n "$section" ] || return 0
+
+  body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null || true)"
+  case "$body" in
+    *"## Sweep"*) note "PR body already carries the sweep section." ; return 0 ;;
+  esac
+  if gh pr edit "$BRANCH" --body "$(printf '%s\n\n%s' "$body" "$section")" >/dev/null 2>&1; then
+    note "PR body carries the sweep section."
+  else
+    note "could not update the PR body; the sweep section was not added."
+  fi
+}
+
 note() { printf '  %s\n' "$*"; }
 bad()  { printf '  FAIL: %s\n' "$*" >&2; fail=1; }
 
@@ -249,7 +303,22 @@ else
   for w in $dispatched; do
     printf '%s\n' "$integrated" | grep -qx "$w" || bad "wave $w was dispatched but never integrated — finish the wave first"
   done
-  grep -q 'BLOCKED' "$LEDGER" && bad "ledger contains a BLOCKED entry; resolve it before finishing"
+  # Stop markers are exact lines (`Task <N>: BLOCKED`, `Final review #<k>:
+  # BLOCKED`), and a later line for the same subject resolves one. The word
+  # anywhere else is prose: matching it as a substring refused clean ledgers
+  # that merely described a gate (#10), and pushed the operator toward the one
+  # repair that must not happen -- editing the ledger until the tool passes.
+  stop_rc=0
+  stops="$("$HERE/wdd-ledger" stops "$LEDGER" 2>&1)" || stop_rc=$?
+  case "$stop_rc" in
+    0) ;;
+    1) bad "ledger has an unresolved stop marker: $(printf '%s' "$stops" | paste -sd ';' -) -- a later line for the same subject resolves it; editing the ledger does not" ;;
+    *) bad "could not read the ledger's stop markers: $stops" ;;
+  esac
+  # One sweep pass per run: no second `Sweep plan:`, no wave after its range.
+  guard_rc=0
+  guard="$("$HERE/wdd-ledger" sweep-guard "$LEDGER" 2>&1)" || guard_rc=$?
+  [ "$guard_rc" = 0 ] || bad "${guard#wdd: }"
   note "waves: $(printf '%s' "$dispatched" | tr '\n' ' ')— all integrated"
 fi
 
@@ -270,6 +339,19 @@ else
   note "task branches: none found for slug '$SLUG'"
 fi
 
+# The last thing to see the code before it ships is a full-branch review of
+# THIS commit, and every commit on the branch sits inside some review's range
+# (SKILL.md, Final Review). `merge` asks the same question about the PR's head
+# rather than local HEAD, below; `cleanup` runs after the merge and does not
+# ask it at all.
+check_verdict_chain() {
+  local sha="$1" chain_rc=0 chain
+  require_base_branch
+  chain="$("$HERE/wdd-ledger" chain "$WORKSPACE" "$sha" "origin/$BASE" 2>&1)" || chain_rc=$?
+  if [ "$chain_rc" = 0 ]; then note "$chain"; else bad "${chain#wdd: }"; fi
+}
+case "$CMD" in check|ship) check_verdict_chain "$(git rev-parse HEAD)" ;; esac
+
 [ "$fail" = 0 ] || { echo "wdd: verification failed." >&2; exit 1; }
 note "verification OK"
 
@@ -285,6 +367,7 @@ ship)
     gh pr create --base "$BASE" --head "$BRANCH" --fill || note "PR may already exist"
     pr="$(gh pr view "$BRANCH" --json number -q .number 2>/dev/null || true)"
     attach_closing_keyword "${pr:-}"
+    attach_sweep_section "${pr:-}"
   fi
   echo ""
   note "PUSHED (PR ${pr:-<PR>}, base $BASE). Before merging, re-check freshness:"
@@ -431,6 +514,13 @@ PY
     exit 1
   fi
 
+  # The verdict chain, against the commit that will actually LAND. Checked
+  # before the local-HEAD guard below so that a refusal here is about review
+  # coverage and nothing else; that guard then catches the different failure
+  # of a checkout that is not on the PR's head.
+  check_verdict_chain "$PR_SHA"
+  [ "$fail" = 0 ] || { echo "wdd: refusing to merge a commit no clean full-branch review covers." >&2; exit 1; }
+
   # Local HEAD against the commit that will actually land.
   #
   # Everything ABOVE this point -- every wave integrated, every task branch an
@@ -570,8 +660,12 @@ PY
         echo "  'require branches to be up to date' in branch protection covers" >&2
         echo "  this, but NOTHING HERE CAN OBSERVE WHETHER IT IS ENABLED, so" >&2
         echo "  this step does not assume it." >&2
-        echo "  Update the branch from $BASE. That changes its head sha, so" >&2
-        echo "  re-run the lane afterwards -- the receipt does not carry across." >&2
+        echo "  Update the branch by merging $BASE into it -- never rebase: a" >&2
+        echo "  rebase rewrites every sha a full-branch review covered. The merge" >&2
+        echo "  changes the head sha, so it needs" >&2
+        echo "  a full-branch review of the new head, then the lane on that commit," >&2
+        echo "  then this step again -- neither the review nor the receipt carries" >&2
+        echo "  across." >&2
         exit 1 ;;
       DIRTY)
         # The COMMON case, not the exotic one: measured 16 DIRTY to 4 BEHIND
@@ -581,8 +675,12 @@ PY
         echo "wdd: PR #$PR_NUM has conflicts with $BASE -- refusing to merge." >&2
         echo "  GitHub will not merge it in this state, so waiting for checks" >&2
         echo "  would only spend the bound to arrive at the same answer." >&2
-        echo "  Resolve the conflict. That changes the head sha, so re-run the" >&2
-        echo "  lane afterwards -- the receipt does not carry across." >&2
+        echo "  Merge $BASE into the branch and resolve the conflict there --" >&2
+        echo "  never rebase: a rebase rewrites every sha a full-branch review" >&2
+        echo "  covered. That changes the head sha, so it needs" >&2
+        echo "  a full-branch review of the new head, then the lane on that commit," >&2
+        echo "  then this step again -- neither the review nor the receipt carries" >&2
+        echo "  across." >&2
         exit 1 ;;
     esac
   }

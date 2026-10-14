@@ -7,7 +7,8 @@ description: Use when taking an approved spec through implementation to a mergea
 
 Take an approved spec to a green branch: plan the work into waves that cannot
 conflict, run each wave's tasks concurrently in isolated worktrees, merge at
-every wave boundary, and finish with one whole-branch review and one PR.
+every wave boundary, and finish with full-branch review, one sweep of what the
+run found, and one PR.
 
 **Core principle:** conflicts are prevented at planning time, not resolved at
 merge time. Within a wave, tasks have disjoint file sets and none depends on a
@@ -400,6 +401,9 @@ the plan branch, ready for Final Review.
    Another plan's directory is never yours to read or write. The workspace is
    git-ignored scratch, so a `git clean -fdx` destroys it; if that happens,
    recover from `git log` and the ledger's surviving copy of the plan name.
+   Record `MERGE_BASE=$(git merge-base origin/<default-branch> HEAD)` here too:
+   every reviewer dispatch passes it as `[MERGE_BASE]`, the point each
+   finding's origin is measured against (Final Review, below).
 4. Check for an existing ledger (`<workspace>/progress.md`). If one exists,
    this run is a resume — follow Resuming an interrupted run, below, in
    full before dispatching anything.
@@ -589,8 +593,9 @@ expensive one. Tiers: see Model Selection, below.
    integrated (...)` to the ledger — this is the line Resuming an
    interrupted run (step 1, below) looks for to know the wave closed cleanly
    rather than stalled mid-run. **Never integrate a wave while any of its
-   tasks has an open Critical or Important finding that is neither fixed nor
-   parked with a ruling at the cap.**
+   tasks has an open Critical or Important finding that is neither fixed,
+   nor parked with a ruling at the cap, nor recorded as a `Sweep:` line at
+   the cap.**
 7. Before removing anything, repeat step 2's restore in each merged task's
    worktree, in case a later hook run re-dirtied it since creation.
 8. `wave-worktree remove <slug> <N>` for each merged task — this deletes
@@ -653,7 +658,8 @@ Build the diff package: `scripts/review-package PLAN_FILE "$BASE"
   task commits onto the plan branch — per-wave step 1.)
 - **Reviewer inputs are three paths plus one block:** the same brief file, the
   report file, and the review package — plus the global constraints that bind
-  the task.
+  the task, and `[MERGE_BASE]`, against which the reviewer tags each finding
+  `introduced` or `pre-existing`.
 - **The global-constraints block is the reviewer's attention lens.** Copy the
   binding requirements verbatim from the plan's Global Constraints section or
   the spec: exact values, exact formats, and the stated relationships between
@@ -684,13 +690,23 @@ other findings.
 
 ### The fix loop
 
-The loop triggers on spec ❌, any Critical or Important finding, or a ⚠️ item
-you confirmed as a real gap. Two routes leave it before it starts:
+The loop triggers on spec ❌, any `introduced` Critical or Important finding,
+or a ⚠️ item you confirmed as a real gap. Three routes leave it before it
+starts:
 
-- **Minor findings never enter the loop.** Record them in the ledger as you go
-  — `Task <N>: minor (deferred): <one-liner>` — and point the final
-  whole-branch review at that list so it can triage which must be fixed before
-  merge. A roll-up nobody reads is a silent discard.
+- **Minor findings never enter the loop.** Record each in the ledger as you go,
+  as a `Sweep:` line carrying its origin tag (Ledger, below) — add `(late)` when
+  the task is a sweep task. The next full-branch review routes that list: during
+  the spec's waves that is review #1, and a small item is fixed in this run's
+  sweep rather than filed (Final Review, below). A roll-up nobody reads is a
+  silent discard.
+- **A `pre-existing` finding, any severity, never enters the loop:** record it as
+  `Sweep: pre-existing — <finding> — from Task <N> review — evidence: <evidence>`,
+  adding `(late)` after `pre-existing` when the task is a sweep task; the next
+  full-branch review routes it. The task did not cause it, so the task's loop is
+  the wrong place to fix it. The evidence rule still holds (Final Review, Where a
+  finding came from): a `pre-existing` tag with no evidence, or evidence that
+  does not hold, is treated as `introduced` — and then it does enter the loop.
 - **A finding labelled plan-mandated** — or any finding that conflicts with
   what the plan's text requires — is yours to rule on: weigh the finding
   against the plan text, decide with the spec as the binding authority, and
@@ -732,11 +748,12 @@ way, which is what makes the loop survivable rather than merely restartable.
 
 **The re-review is scoped:** `scripts/review-package PLAN_FILE "$FIX_BASE_SHA"
 <slug>-t<N>` (third argument still the branch name, never literal `HEAD`) plus
-`re-review-prompt.md`, with the findings list, the brief, and the report file.
+`re-review-prompt.md`, with the findings list, the brief, the report file, and
+`[MERGE_BASE]`.
 The re-reviewer verdicts each finding ADDRESSED or NOT ADDRESSED and flags new
 breakage in the fix diff only. New Critical/Important breakage in the fix diff
 joins the open findings list. Out-of-scope observations go to the ledger as
-deferred minors — they never extend the loop.
+`Sweep:` lines, each with its origin tag — they never extend the loop.
 
 This is why a task's worktree is not removed until after the merge, not merely
 until the implementer's first report.
@@ -749,10 +766,13 @@ dispatching and adjudicate each open finding yourself — you hold the plan and
 the cross-task context the reviewer lacks:
 
 - **The reviewer is wrong, or the point is contestable** → park it:
-  `Task <N>: parked — <finding> — Ruling: <why the code stands>`. The final
-  review sees both sides.
-- **Real, but nothing downstream builds on it** → park it the same way, with a
-  ruling that says it is real and deferred.
+  `Task <N>: parked — <finding> — Ruling: <why the code stands>`. Review #1
+  sees both sides: its sweep list carries every parked line, and it routes
+  each one like any other item (Final Review, below).
+- **Real, but nothing downstream builds on it** → do not park it. Record it as
+  `Sweep: introduced must-fix — <finding> — from Task <N> review` (or as a
+  `pre-existing` line with its evidence, when it was already there). A defect
+  the branch caused is fixed on the branch; it never leaves as a follow-up.
 - **Real and load-bearing** — a later task builds on it, or it reveals a plan
   defect → rule on the smallest change that unblocks the dependent work, ledger
   it as `Task <N>: Ruling: <finding> — <what you decided and why>`, and carry
@@ -765,12 +785,14 @@ silent discard is forbidden.
 
 ### Completing a task
 
-When the review comes back clean — or every open finding is parked with a
-ruling at the cap — append the completion line to the ledger:
+When the review comes back clean — or, at the cap, every open finding is parked
+with a ruling or recorded as a `Sweep:` line — append the completion line to the
+ledger:
 
 - `Task <N>: complete (commits <base7>..<head7>, review clean, branch <slug>-t<N>)`
 - `Task <N>: complete (commits <base7>..<head7>, <K> parked, branch <slug>-t<N>)`
-  after a tripped breaker
+  after a tripped breaker. `<K>` counts parked findings only; a finding the
+  breaker recorded as a `Sweep:` line is visible as that line instead.
 
 Then mark the todo complete.
 
@@ -798,8 +820,8 @@ are chosen by at dispatch. Use the least powerful model that can handle the role
   re-reviews of small fix diffs take a cheap-to-mid tier.
 - **Integrator**: standard tier, always — the role merges and verifies, it never authors code.
 - **Plan review** (Phase 1): standard tier or better — it is reading for gaps, not writing.
-- **Final whole-branch review**: the most capable available model, not the session default (see
-  Final Review, below).
+- **Full-branch reviews** (#1, #2, #3): the most capable available model, not the session default
+  (see Final Review, below).
 - **Fix-loop escalation (rounds 4–5):** at least one tier above the implementer that got stuck.
 
 **Always name the model explicitly at dispatch.** An omitted model inherits the session's own model
@@ -835,15 +857,75 @@ progress.
 Every ruling is a ledger line, written as
 `Ruling: <what you decided> — <why> — <what it costs if wrong>`.
 
-```
+**The sweep's lines** (Final Review, below) are anchored at the start of the line and read by
+`scripts/wdd-ledger`, the one parser of these formats — the example below is fed through it by
+the test suite, so a format changed here and not there fails a test rather than a run:
+
+| Line | Written |
+|---|---|
+| `Sweep: <introduced\|pre-existing>[ must-fix][ (late)] — <one-liner> — from <src>[ — evidence: <evidence>]` | for a finding not fixed in its own loop. `<src>` is `Task <N> review`, `Task <N> re-review`, `final review #<k>`, or `final review #<k> re-review` (the scoped re-review of the fix that follows review #k); `evidence` is required for `pre-existing`; `(late)` marks one raised during the sweep or after it |
+| `Sorting: review #1 at <sha7>` | after the last `Route:` line |
+| `Route: <must-fix\|sweep\|ask\|issue\|note>[ #<N>[ full\|part]] — <one-liner>` | per item, from review #1's routing; an `issue` route without `#<N>` means no duplicate was found |
+| `Owner: <one-liner> — <decision> (<YYYY-MM-DD>)` | per `ask` item, once your human partner answers |
+| `Amendment <K>: written[ (v<N>)]` | once the spec PATCH succeeds |
+| `Sweep plan: waves <A>-<B>` | once the sweep is planned and validated |
+| `Final review #<k>: <CLEAN\|MUST-FIX\|BLOCKED> at <sha7>` | after each full-branch review |
+| `Fixed: <one-liner>[ — closes #<N>\| — part of #<N>]` | when a `sweep` or approved `ask` item's task completes |
+| `Seen: #<N> — <path:line>` | for an `issue` item that matched an open issue |
+| `Filed: #<N> — <title>` | after filing an `issue` item |
+| `Note: <one-liner> — <reason>` | for a `note` item |
+
+Issue numbers appear only from sorting onward; a `Sweep:` line never carries one.
+
+**Stop markers are exactly two lines:** `Task <N>: BLOCKED` and `Final review #<k>: BLOCKED`. The
+word anywhere else in the ledger is prose, and `wdd` ignores it. A stop marker is resolved by a
+later line for the same subject — `Task <N>: complete`, or a `Final review #<j>:` line with
+`j > k` — **never by editing the ledger**. That edit is the one repair that must not happen: the
+ledger is the run's evidence.
+
+```ledger
 # WDD ledger — plan: docs/superpowers/plans/2026-08-02-example.md
 Wave 1: dispatched (BASE a1b2c3d, T1 @ 2026-08-02-example-t1 [cheapest/haiku], T4 @ 2026-08-02-example-t4 [standard/sonnet])
 Task 1: complete (commits a1b2c3d..d4e5f6a, review clean, branch 2026-08-02-example-t1)
 Task 4: fix round 1/5 (2 addressed, 1 open — retry does not clear the idempotency key on failure)
 Task 4: fix round 2/5 (1 addressed, 0 open)
+Sweep: introduced — the retry log line repeats the request id — from Task 4 review
 Task 4: complete (commits e5f6a7b..b7c8d9e, review clean, branch 2026-08-02-example-t4)
 Wave 1: integrated (merge 9f2c1ab, pytest 264 passed / 22 skipped, worktrees removed)
 Wave 2: dispatched (BASE 9f2c1ab, T2 @ 2026-08-02-example-t2 [most-capable/opus], T3 @ 2026-08-02-example-t3 [standard/sonnet], T5 @ 2026-08-02-example-t5 [cheapest/haiku])
+Sweep: pre-existing — the config loader swallows a malformed port — from Task 3 review — evidence: app/config.py:88 at 0c4e2aa
+Task 5: BLOCKED (the retry also failed — the plan's schema lacks the column the spec requires)
+Ruling: add the column to Task 5's declared migration — the spec requires it — one wasted wave if wrong
+Task 5: complete (commits 3d4e5f6..7a8b9c0, review clean, branch 2026-08-02-example-t5)
+Task 2: complete (commits 9f2c1ab..1b2c3d4, review clean, branch 2026-08-02-example-t2)
+Task 3: complete (commits 9f2c1ab..5e6f7a8, review clean, branch 2026-08-02-example-t3)
+Wave 2: integrated (merge 4b5c6d7, pytest 281 passed / 22 skipped, worktrees removed)
+Final review #1: MUST-FIX at 4b5c6d7
+Route: must-fix — Task 2's handler drops the tenant filter on retry
+Route: sweep — the retry log line repeats the request id
+Route: sweep #31 full — the config loader swallows a malformed port
+Route: ask — two defensible names for the exported flag
+Route: issue — the lane exit status hides a failed bringup
+Route: issue #44 — the receipt path is computed twice
+Route: note — a dormant quoting edge in the legacy export
+Sorting: review #1 at 4b5c6d7
+Owner: two defensible names for the exported flag — keep --notes (2026-08-03)
+Amendment 1: written (v3)
+Ruling: amendment 1 sweeps the log line, #31 and the flag name — each has a reproduction and fits one task — one sweep wave if wrong
+Sweep plan: waves 3-3
+Wave 3: dispatched (BASE 4b5c6d7, T6 @ 2026-08-02-example-t6 [standard/sonnet], T7 @ 2026-08-02-example-t7 [cheapest/haiku])
+Sweep: pre-existing (late) — the export path ignores the locale — from Task 7 review — evidence: app/export.py:40 at 0c4e2aa
+Task 6: complete (commits 4b5c6d7..6f7a8b9, review clean, branch 2026-08-02-example-t6)
+Fixed: the config loader swallows a malformed port — closes #31
+Fixed: the retry log line repeats the request id
+Task 7: complete (commits 4b5c6d7..0a1b2c3, review clean, branch 2026-08-02-example-t7)
+Fixed: two defensible names for the exported flag
+Wave 3: integrated (merge 8e9f0a1, pytest 286 passed / 22 skipped, worktrees removed)
+Final review #2: CLEAN at 8e9f0a1
+Filed: #52 — the lane exit status hides a failed bringup
+Seen: #44 — app/receipts.py:12
+Note: a dormant quoting edge in the legacy export — no caller reaches it
+Note: the export path ignores the locale — no locale but en is configured
 ```
 
 `BASE` is in the dispatch line because a resumed session cannot otherwise recover it, and every
@@ -915,13 +997,24 @@ guessing picks somebody's other run.
 **1. Find the open wave** — a `Wave N: dispatched` with no matching `Wave N: integrated`.
 
 - **Found one** → this wave was interrupted; resume it, starting at step 2 below.
-- **None, but the plan's `## Waves` table names a wave after the highest `Wave N: integrated` in
-  the ledger** → the crash landed between that wave's integration and the next wave's dispatch, a
-  wide window since the controller does teardown and next-wave planning there. Resume at that next
-  wave: continue through steps 2–3 below (both are cheap and safe regardless), skip step 4 (nothing
-  in this wave has been dispatched yet, so there is no per-task state to recover), then dispatch it
-  fresh per Phase 2's per-wave step 4. Never re-dispatch a wave that already carries its
-  `integrated` line.
+- **None, no `Final review #1:` line yet, and the plan's `## Waves` table names a wave after the
+  highest `Wave N: integrated` in the ledger** → the crash landed between that wave's integration
+  and the next wave's dispatch, a wide window since the controller does teardown and next-wave
+  planning there. Resume at that next wave: continue through steps 2–3 below (both are cheap and
+  safe regardless), skip step 4 (nothing in this wave has been dispatched yet, so there is no
+  per-task state to recover), then dispatch it fresh per Phase 2's per-wave step 4. Never
+  re-dispatch a wave that already carries its `integrated` line. **Once a `Final review #1:` line
+  exists this bullet no longer applies:** every wave the table names past that point is a sweep
+  wave, and sweep waves reach the table while the sweep is still being planned — before it is
+  validated and before `Sweep plan:` is appended. Dispatching one from the table alone would run an
+  unvalidated sweep. The next bullet decides instead.
+- **No open wave, and either every wave in the table is integrated or a `Final review #1:` line
+  exists** → the crash landed in Final Review or the sweep, and its phase markers say where:
+  `Sorting:` present → sorting is done; `Amendment <K>: written` → the spec is amended;
+  `Sweep plan:` → the sweep is planned and validated, and its waves resume like any other — a
+  sweep wave is dispatched only once this marker exists; `Final review #<k>:` → that review
+  finished. Each marker is appended only after its step completes, so a resumed session never
+  repeats a step whose marker exists — and repeats, whole, one whose marker is missing.
 - **No ledger at all** → not a resume; start normally.
 
 **2. Clear an interrupted merge.** Detect one with `git rev-parse -q --verify MERGE_HEAD` in the
@@ -996,11 +1089,13 @@ resumed dispatch, so nothing else carries this forward.
 
 | Situation | Action |
 |---|---|
-| A task hits the 5-round fix cap with load-bearing findings open | Green siblings merge. The task is re-dispatched in the next wave — fresh implementer, one model tier up, carrying the brief, the report file, and the open findings. Its dependents wait one wave. |
+| A spec task hits the 5-round fix cap with load-bearing findings open | Green siblings merge. The task is re-dispatched in the next wave — fresh implementer, one model tier up, carrying the brief, the report file, and the open findings. Its dependents wait one wave. |
 | The retry also fails | `Task <N>: BLOCKED` in the ledger, stop, report with the findings, the plan text they collide with, and the fix history. |
 | The integrator hits a merge conflict | Hard BLOCKED. Under the core invariant this cannot happen unless the plan violated its own guarantee, so it is a planning defect, not a merge to resolve. Re-validate the plan and surface it. |
 | A task's diff touches an undeclared path | Spec failure for that task; it enters the fix loop. If the file is genuinely needed, the plan is wrong — fix the plan and re-validate before continuing. |
 | An implementer reports NEEDS_CONTEXT | Answer and re-dispatch. Siblings continue unaffected. |
+| A sweep task cannot finish — its 5-round cap, or its item outgrows admission | It is never merged, and no wave runs after the sweep range. A `sweep` or approved `ask` item is re-routed `issue`, its amendment line struck through; a `must-fix` item becomes `Sweep: introduced must-fix (late)` for review #2's fix dispatch. Remove its worktree (`scripts/wave-worktree remove <slug> <N>`, which keeps the branch), rename the branch out of the task namespace with `git branch -m <slug>-t<N> <slug>-dropped-t<N>`, push it (`git push origin <slug>-dropped-t<N>`) so the re-routed issue, which names the branch and its tip sha, links to something that resolves, and record `Ruling: <item> dropped, branch <slug>-dropped-t<N> at <sha7> — <why it could not finish> — <what it costs if wrong>`: `wdd` refuses every unmerged `<slug>-t<N>`, and merging the branch to quiet it would land the work this row exists to keep out. `cleanup` leaves the renamed branch alone — it is the only copy of the attempt. The retry-in-the-next-wave above does not apply. |
+| Review #3, or any later review, leaves a must-fix open | `Final review #<k>: BLOCKED at <sha7>`; stop, and hand over the open findings, every review report, and the fix history. |
 
 ## Automation boundary
 
@@ -1047,6 +1142,8 @@ and undo; a session parked on a question costs their whole day and buys nothing.
 - A genuine design fork — two defensible resolutions with materially different outcomes.
 - A BLOCKED the controller cannot resolve, or a validation failure implying the spec is wrong.
 - A plan so broken that every path forward is a guess.
+- The **batched question** after review #1 routes the sweep list (Final Review, below): every
+  `ask` item in one message, once per run. It is the one planned interrupt.
 - A ruling that would **weaken** an authentication, tenancy, or secrets check, or any action that is
   destructive or irreversible. This is scoped to the controller's own decisions, not to task
   content: in a codebase where nearly every task touches tenancy, "the diff mentions `org_id`" is
@@ -1073,28 +1170,209 @@ on every later turn.
 
 ## Final Review
 
-After the last wave merges:
+After the last spec wave merges, the run ends with full-branch reviews and **one sweep** of what
+it found. Every finding that would once have left as a follow-up issue — a Minor, a finding on
+code the branch did not write, a finding still open at a task's cap — has been accumulating as a
+`Sweep:` line (Ledger, above). The small ones are fixed here, in this run; only what genuinely
+does not fit leaves as an issue.
+
+```
+spec waves
+  -> review #1: whole branch, from scratch (always)              nothing to fix? -> Phase 3
+  -> the batched question, the amendment, the sweep waves
+  -> review #2: what changed since #1, whole branch as context   CLEAN?          -> Phase 3
+  -> one fix dispatch -> one scoped re-review
+  -> review #3: what changed since #2, whole branch as context   CLEAN?          -> Phase 3, else BLOCKED
+```
+
+### Where a finding came from
+
+Every finding carries one origin tag, measured against `MERGE_BASE` — the branch's merge-base
+with `origin/<default-branch>`, not a task's `BASE`, so a defect an earlier task on this branch
+added is still `introduced`:
+
+- **`introduced`** — this branch caused it.
+- **`pre-existing`** — it was already there. It carries evidence: the offending lines as
+  `<path>:<line> at <merge-base7>`, or a reproduction that fails at the merge-base, with its
+  command and output. Check line evidence with one `git show <merge-base>:<path>` before acting
+  on the tag. **No evidence, or evidence that does not hold, means `introduced`** — the expensive
+  mistake is a defect this branch caused leaving it labelled as old.
+
+### Review #1, and sorting
 
 1. `git fetch --no-tags origin <default-branch>`, then
    `MERGE_BASE=$(git merge-base origin/<default-branch> HEAD)`, then
-   `scripts/review-package PLAN_FILE "$MERGE_BASE" HEAD` to build the
-   whole-branch diff package. **The remote ref, never the local one** — the
-   shared checkout's copy of the default branch drifts both ways (ahead by
-   commits nobody pushed, behind by merges nobody pulled), and a merge-base
-   taken against a drifting ref scopes the final review to the wrong range,
-   silently reviewing too much or too little.
-2. Dispatch `final-reviewer-prompt.md` on the most capable available model —
-   not the session default — pointed at the diff package and at the ledger's
-   deferred-minor and parked lines, so it can triage which of those must be
-   fixed before merge.
-3. **One fix dispatch** carrying the complete findings list — never one fixer
-   per finding. Per-finding fixers each rebuild context and re-run suites; a
-   real session's final-review fix wave cost more than all its tasks combined.
-4. Exactly one scoped re-review of the fix diff, using `re-review-prompt.md`.
-5. Adjudicate any residual findings per Automation boundary above, then go to
-   **Phase 3**. **There is no second fix wave** — residual load-bearing
-   findings are ruled on and recorded, and reach your human partner in the
-   rulings list Phase 3 hands over.
+   `scripts/review-package PLAN_FILE "$MERGE_BASE" HEAD` to build the whole-branch package.
+   **The remote ref, never the local one** — the shared checkout's copy of the default branch
+   drifts both ways (ahead by commits nobody pushed, behind by merges nobody pulled), and a
+   merge-base taken against a drifting ref scopes the review to the wrong range, silently
+   reviewing too much or too little.
+2. Write `<workspace>/open-issues.json` with
+   `gh issue list --state open --limit 500 --json number,title,labels`. Rewrite it before every
+   full-branch review: every one can route `issue`, and each checks for duplicates first.
+3. Dispatch `final-reviewer-prompt.md` on the most capable available model — not the session
+   default — as review #1: `[SINCE_SHA]` is `$MERGE_BASE`, `[REVIEWED_SHA]` is
+   `git rev-parse HEAD`, `[REPORT_FILE]` is `<workspace>/final-review-1.md`, `[SWEEP_LINES]`
+   carries every `Sweep:` line **and every `Task <N>: parked` line** in the ledger, copied in
+   full, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABEL]` (`status_labels.ongoing`, or `none`) and
+   `[SPEC_ISSUE]` are filled as the template's placeholder list says. A parked line is the
+   breaker's ruling that a reviewer was wrong; this is its whole-branch second look, and it is
+   routed like any other item — `note` when the reviewer agrees with the ruling. The reviewer
+   writes its report there, verdict header first; append `Final review #1: <verdict> at <sha7>`.
+4. Transcribe every item's route as a `Route:` line, then append `Sorting: review #1 at <sha7>`.
+   Check mechanically, and nothing more: every item has a route, no `introduced` item is routed
+   `issue`, and every `pre-existing` tag's evidence holds. You do not re-judge routes.
+
+| Route | When |
+|---|---|
+| `must-fix` | `introduced` and Critical/Important, or already marked `must-fix`. It takes precedence: a fix that is a design fork goes through the Automation boundary's design-fork interrupt, not `ask`. |
+| `sweep` | all three hold: a reproduction or a check that fails today; fits one task with declared paths; not a design fork. A matched `#N` is `full` or `part`. |
+| `ask` | the first two sweep conditions hold, but it is a design fork |
+| `issue` | `pre-existing`, real, and fails the sweep conditions; it names its duplicate `#N`, or `none` |
+| `note` | dormant or low value; or it matches an issue another session claimed — one carrying `status_labels.ongoing`, other than this run's own spec issue. With that label unset, nothing reads as claimed. |
+
+`introduced` is never routed `issue`: a Critical/Important one is fixed on the branch or the run
+stops; a Minor one is swept or noted.
+
+**Nothing to fix** — nothing routed `must-fix` or `sweep`, and no `ask` item approved — means
+review #1 was the last review. Go to Phase 3.
+
+### The batched question
+
+If any item is routed `ask`, ask your human partner **once**, every `ask` item in one message: the
+finding, the two options, and the reviewer's recommendation. Wait. Each answer is an option — the
+item is swept with that decision, recorded as an `Owner:` line — or "not now", which makes the
+item `issue` (or `note`, when it is `introduced`). This is the one planned interrupt in a run.
+
+### The amendment
+
+If anything is routed `sweep` or approved from `ask`, amend the spec before planning the sweep.
+Find the spec comment by its `# Spec:` first line — never by position, never `--edit-last` — and
+PATCH it in place, appending:
+
+```markdown
+## Amendment <K> (v<N>)
+_Written by the WDD controller during the run; not reviewed before it ran._
+- <what changes> — <why> — origin: <introduced|pre-existing> — <closes #N | part of #N | no issue> — decided by: <controller ruling | owner, YYYY-MM-DD>
+```
+
+and bump `**Version:**` to `<N>`. Leave `**Status:**` alone: approval still names the version it
+was given at. `<K>` is one more than the amendments already on the spec, from any run. On a
+**solution-ready** issue the body is the spec and the gate reads it, so it is never edited: post
+the amendment as its own comment headed `# Spec amendment <K>: <issue title>`, with no version,
+and write the ledger line without `(v<N>)`.
+
+`must-fix` items are not listed — fixing a defect the branch caused does not change what the spec
+asked for. Each amendment line is also a `Ruling:` line, so it reaches your human partner in
+Phase 3. Append `Amendment <K>: written (v<N>)` once the PATCH succeeds.
+
+### The sweep waves
+
+Extend the **same plan file**: append a `## Sweep` section holding the sweep tasks, numbered on
+from the last spec task, and add their waves to the existing `## Waves` table, numbered on from
+the last spec wave. Each task has `Files:`, `Depends:` and `Model:` as usual, and **its Step 1 is
+the item's reproduction or failing check, written as the failing test** — a sweep item never ships
+without the test that would have caught it. `must-fix` items are planned the same way. Items that
+share a file may share a task, if it stays right-sized.
+
+Then the usual self-review, one plan review, and `scripts/plan-tasks --validate`, whose Rule 8
+refuses a second `## Sweep` section and a sweep task in any wave at or before the last spec wave.
+Append `Sweep plan: waves <A>-<B>`, and run those waves exactly as Phase 2 runs any wave. Write a
+`Fixed:` line as each `sweep` or approved `ask` item's task completes.
+
+**One pass.** Nothing found during or after the sweep starts another:
+
+| During a sweep task | Goes to |
+|---|---|
+| `introduced`, Critical/Important | the task's fix loop |
+| `introduced`, Minor | `Sweep: introduced (late)` → review #2 routes it `note`, or `must-fix` if it re-grades it |
+| `pre-existing` | `Sweep: pre-existing (late)` → review #2 routes it `issue` or `note` only |
+
+**A sweep task that cannot finish** — its 5-round cap with findings open, or an item that outgrows
+admission (undeclared paths, or a design fork after all) — **is never merged**, so nothing it
+introduced lands. A `sweep` or approved `ask` item is dropped, not grown: re-routed `issue` (a
+`Seen:` line if it carried `#N`), its amendment line struck through with the reason, the version
+bumped, and a `Ruling:` line recording it. A `must-fix` item cannot be dropped: it becomes
+`Sweep: introduced must-fix (late)`, and review #2's fix dispatch takes it. **No wave runs after
+the sweep range** — `wdd` refuses a wave dispatched after `<B>`, and a second `Sweep plan:` line.
+
+**Either way, its branch leaves the task namespace.** `wdd` refuses every `<slug>-t<N>` branch that
+is not merged into the plan branch, and merging this one to quiet it would land exactly the work
+this paragraph keeps out. Remove the task's worktree with `scripts/wave-worktree remove <slug> <N>`
+(which keeps the branch), rename the branch with
+`git branch -m <slug>-t<N> <slug>-dropped-t<N>`, push it with
+`git push origin <slug>-dropped-t<N>` — task branches are otherwise local, and a link to a ref in
+this clone resolves for nobody else — and record
+`Ruling: <item> dropped, branch <slug>-dropped-t<N> at <sha7> — <why it could not finish> — <what it costs if wrong>`.
+`cleanup` does not delete it: it is the only copy of the dropped attempt, and the `issue` a `sweep`
+or `ask` item is re-routed to names the branch and its tip sha, so the attempt can be picked up.
+
+### Reviews #2 and #3
+
+Each is `final-reviewer-prompt.md` on the most capable model, given:
+
+- the **delta** to review: `scripts/review-package PLAN_FILE <Since> HEAD`, where `<Since>` is the
+  previous review's `Reviewed:` sha;
+- a **fresh** whole-branch package, `scripts/review-package PLAN_FILE "$MERGE_BASE" HEAD`, as
+  context — the reviewer must check every caller and user, anywhere on the branch, of what the
+  delta changed;
+- the previous review's `must-fix` items as `[PRIOR_FINDINGS]`, each to be verdicted ADDRESSED or
+  NOT ADDRESSED;
+- as `[SWEEP_LINES]`, only the `(late)` `Sweep:` lines written since the previous full-branch
+  review — everything older was routed by a review already;
+- `open-issues.json` rewritten first, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABEL]` and `[SPEC_ISSUE]`
+  as for review #1; `[REPORT_FILE]` is `<workspace>/final-review-<k>.md` — after an
+  owner-directed chain restart, the file name set out in The verdict chain, below.
+
+Their routes are `must-fix`, `issue` and `note` only. If review #2 routes anything `must-fix`:
+**one fix dispatch** carrying the complete list — never one fixer per finding; per-finding fixers
+each rebuild context and re-run suites, and a real session's final-review fix wave cost more than
+all its tasks combined — then **one scoped re-review** of the fix diff (`re-review-prompt.md`),
+then review #3, whatever the re-review said. The re-review's out-of-scope observations become
+`(late)` `Sweep:` lines `from final review #2 re-review`, and review #3 routes them.
+
+**Review #3, or any later review, with a `must-fix` open** → `Final review #<k>: BLOCKED at
+<sha7>`; stop and ask, handing over the open findings, every review report, and the fix history.
+Your human partner either directs another fix — one fix dispatch, one scoped re-review, then
+review `#<k+1>`, the same shape — or rules a finding acceptable, which reaches that next review in
+`[PRIOR_FINDINGS]`. Either way, **merge still needs a `CLEAN` full-branch review of the final
+commit. There is no override flag.**
+
+### The verdict chain
+
+Each full-branch review writes `<workspace>/final-review-<k>.md`, opening with
+`Reviewed: <sha>`, `Since: <sha>` and `Verdict: CLEAN | MUST-FIX`. `wdd check` and `ship` refuse
+unless the chain covers `HEAD`, and `merge` unless it covers the PR head:
+
+1. `final-review-1.md` … `final-review-<n>.md` exist with no gap, and every header parses — a
+   malformed header is an absent verdict, never a permitted one;
+2. review `<n>` is `CLEAN`;
+3. review `<n>` reviewed `HEAD` — for `merge`, the PR head it is about to land;
+4. from review #2 on, each `Since:` is the previous review's `Reviewed:`, and an ancestor of its
+   own;
+5. review #1's `Since:` is an ancestor of `origin/<default-branch>` and of its own `Reviewed:`.
+
+So **anything that changes the code after the last review needs another review before it can
+ship**, and every commit on the branch sits inside some review's range — evidence pinned to a
+commit, for the same reason as the lane receipt.
+
+**A branch with a full-branch review is never rebased.** Bring it up to date by merging the default
+branch in — GitHub's default "Update branch", or `gh pr update-branch` without `--rebase`. The old
+head stays an ancestor of the new one, so rule 4 holds and the chain simply extends: the new head
+gets the next full-branch review under the rules above, numbered on from the last, and it counts
+against the three-review budget like any other. A rebase rewrites every reviewed sha, so no later
+review can link to the chain. **If one happens anyway, stop and ask** your human partner; never
+restart the chain on your own.
+
+On an owner-directed restart, rename the existing verdict files to
+`final-review-<k>.superseded-<sha7>.md` (`<sha7>` being each file's old `Reviewed:` sha), so the
+chain, which reads only names that are exactly `final-review-<k>.md`, no longer sees them while
+their history stays on disk. The restarted chain's **file** names begin again at
+`final-review-1.md` — the chain rules need that, and its first review starts from a fresh
+`$MERGE_BASE` — passed to the reviewer explicitly as `[REPORT_FILE]`. Its **ledger** lines and the
+reviewer's `[REVIEW_NUMBER]` continue the run's count: `Final review #4:` resolves
+`Final review #3: BLOCKED`, routing from #2 on stays `must-fix`, `issue` and `note`, and the budget
+is your human partner's call, because they directed the restart.
 
 The whole-branch review is load-bearing, not a formality. **This is the second
 of the two review stages, and the one that catches what the first cannot:** on
@@ -1104,8 +1382,8 @@ not.
 
 ## Phase 3 — Ship and clean up
 
-Input: a plan branch whose every wave integrated and whose whole-branch review
-is clean. Output: a merged PR and nothing left behind.
+Input: a plan branch whose every wave integrated and whose last full-branch
+review is `CLEAN` on `HEAD`. Output: a merged PR and nothing left behind.
 
 **Before anything is deleted, hand over the rulings.** Collect every ledger
 line containing `Ruling:` — pre-flight rulings, parked findings, breaker
@@ -1117,11 +1395,21 @@ they read it and rework whatever you got wrong. `cleanup` deletes the
 workspace, so **a ruling that dies with the workspace was a decision made in
 secret.**
 
+**Then file what the sweep did not take, before `ship`.** Each `issue` item with no duplicate is
+filed with `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/file.py "<title>" --body-file <path>` — the
+finding, its evidence pinned to a commit, its reproduction if any, **which sweep condition it
+failed**, and `found during #<spec issue>, review #<k>` — then a `Filed:` line. If `file` refuses
+for want of `backlog_milestone`, use `gh issue create` with no milestone, and say so. A matched
+item gets a `Seen:` line and no new issue; a `note` item, a `Note:` line. No comments are posted on
+issues: `ship` writes a `## Sweep` section into the PR body from these lines, and GitHub puts each
+mention on the issue's timeline. After the rulings, your final message lists the issues the sweep
+closed, filed and noted. A `BLOCKED` run files nothing.
+
 Run `scripts/wdd`, from the **plan worktree**:
 
 ```bash
 scripts/wdd check   PLAN_FILE   # verify only, no side effects
-scripts/wdd ship    PLAN_FILE   # check, push, open PR
+scripts/wdd ship    PLAN_FILE   # check, push, open PR, sweep section
 
 # bringup + validate -> a receipt for this exact commit
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run --session <session-name>
@@ -1148,20 +1436,27 @@ belongs to the plugin, which drives projects this skill is not the only entry
 point to.
 
 `check` reads the ledger and refuses on any of: a `Wave N: dispatched` with no
-matching `integrated`; a `BLOCKED` entry; a ledger whose first line names a
-different plan. It then verifies, against git rather than against the ledger,
+matching `integrated`; an unresolved stop marker (Ledger, above); a second
+`Sweep plan:` line, one that does not parse, or a wave dispatched after its
+range; a ledger whose first
+line names a different plan. `check` and `ship` also refuse unless the verdict
+chain covers `HEAD`, and `merge` unless it covers the PR head (Final Review,
+above). It then verifies, against git rather than against the ledger,
 that **every task branch is an ancestor of the plan branch** — an integrator
 that died after writing its line leaves the claim without the merge, and
 nothing else in the workflow would notice.
 
-`ship` and `cleanup` take the base branch from the project config's
-`default_branch` — the same source Phase 2 step 1 uses, and never `origin/HEAD`,
-which is a clone-time cache that survives a remote renaming its default branch
-and is absent entirely from an `init`+`fetch` checkout. `cleanup` gates branch
-deletion on that ref, so a stale name that is still a live branch would decide
-the fate of the only copy of a task's work. Both refuse rather than guess.
+`check`, `ship`, `merge` and `cleanup` all take the base branch from the
+project config's `default_branch` — every one but `cleanup` needs it for the
+verdict chain's rule 5 — the same source Phase 2 step 1 uses, and never
+`origin/HEAD`, which is a clone-time cache that survives a remote renaming its
+default branch and is absent entirely from an `init`+`fetch` checkout.
+`cleanup` gates branch deletion on that ref, so a stale name that is still a
+live branch would decide the fate of the only copy of a task's work. All four
+refuse rather than guess.
 
-`ship` pushes and opens the PR, and stops there. `merge` is what lands it, and
+`ship` pushes, opens the PR, appends its closing keyword and the `## Sweep`
+section, and stops there. `merge` is what lands it, and
 what it replaces is a human remembering that the branch was validated. That
 bound holds until the first time it does not, and nothing observes the failure
 — so `merge` is gated on **evidence** instead.
@@ -1189,15 +1484,18 @@ and any push in between means running the lane again.
 1. resolves the PR for the branch and takes **the head sha GitHub reports now**
    — not this checkout's HEAD, not a sha resolved earlier in the run. It
    refuses if the PR targets a base other than the config's `default_branch`
-   (retargeting happens on GitHub, where nothing here can see it), and if this
-   checkout's `HEAD` is not the commit the PR would merge — everything `check`
-   verified was verified against local `HEAD`, so a merge landing something
-   else means that verification was about the wrong commit, and reporting
-   *merged* would describe work this run never examined;
-2. checks the receipt for that sha **before waiting on anything**. Refusing
+   (retargeting happens on GitHub, where nothing here can see it);
+2. checks the verdict chain (Final Review, The verdict chain) against **that
+   head sha**, and refuses a commit no clean full-branch review covered — the
+   commit that lands is the one the last review must have seen;
+3. refuses if this checkout's `HEAD` is not the commit the PR would merge —
+   everything `check` verified was verified against local `HEAD`, so a merge
+   landing something else means that verification was about the wrong commit,
+   and reporting *merged* would describe work this run never examined;
+4. checks the receipt for that sha **before waiting on anything**. Refusing
    early costs nothing; refusing after the wait means having spent ten minutes
    on checks for a branch that could never have merged;
-3. waits for the config's `required_check` to go green, **bounded** — 30
+5. waits for the config's `required_check` to go green, **bounded** — 30
    minutes, polled every 20s, overridable in seconds with `WDD_CHECK_TIMEOUT`
    and `WDD_CHECK_POLL`. A bound that expires reports *not merged, still
    running* and exits 3, having changed nothing. Anything that is not an
@@ -1206,13 +1504,13 @@ and any push in between means running the lane again.
    external app's commit status colliding with a workflow job's name or two
    workflow files each defining one, **every match is judged and the worst
    wins**: a green entry listed first cannot carry a red or still-running one;
-4. merges with `gh pr merge --merge --match-head-commit <sha>`,
+6. merges with `gh pr merge --merge --match-head-commit <sha>`,
    **server-side**. A local `git merge` runs zero checks and moves HEAD in a
    checkout other sessions are reading. Not a squash: that mints a new commit,
    so what lands is a sha nothing validated, and it also makes `cleanup`'s
    ancestry test permanently false. **The head pin is the other half of the
    receipt** — see below;
-5. fast-forwards the main checkout, then runs the project's optional
+7. fast-forwards the main checkout, then runs the project's optional
    `refresh_commands` there **best-effort** — the merge has already happened
    and a regeneration failing must not unwind it.
 
@@ -1233,8 +1531,10 @@ one produces a merge commit combining two states nothing validated, the
 migration-number hazard described below; a `DIRTY` one GitHub will not merge at
 all, so waiting on it only spends the bound to arrive at the same answer.
 `DIRTY` is the commoner of the two — measured 16 to 4 across 20 open PRs.
-Either remedy changes the head sha, so the lane has to run again: the receipt
-does not carry across.
+The remedy for either is to **merge the default branch in, never rebase** (Final
+Review, The verdict chain), resolving any conflict in that merge. That changes
+the head sha, so the new head needs a full-branch review, then the lane on that
+commit, then `merge` again: neither the review nor the receipt carries across.
 
 **That guard is best-effort, and the reason is GitHub's rather than this
 script's.** `mergeStateStatus` is computed lazily, and the first view of a PR is
@@ -1264,8 +1564,9 @@ green check alone was never enough — CI proved the branch clean against the
 base *as of when it ran*, and two branches can each add a differently-named
 migration claiming the same number, which git merges cleanly and leaves broken.
 Requiring the branch to be **up to date with the base** is what closes that, and
-it also keeps the receipt honest: updating a stale branch changes its head sha,
-which invalidates the receipt along with it.
+it also keeps the receipt honest: updating a stale branch — by merging the base
+in, never by rebasing — changes its head sha, which invalidates the receipt and
+needs a full-branch review of the new head.
 
 `cleanup` runs only once the plan branch is an ancestor of the default branch
 on `origin`; before that, deleting a task branch would destroy the only copy of
@@ -1330,3 +1631,7 @@ repository: 33 task branches on disk, 20 of them already merged.
 | "Ledger bookkeeping is overhead" | The ledger is what survives compaction. Controllers without one have re-dispatched entire completed task sequences. |
 | "The implementer spawned its own reviewer — free extra assurance" | It is a duplicate seat reviewing the same diff; the task review is the gate. A worker-spawned reviewer is a defect to flag, not rigor. |
 | "The push was rejected — a force-push will fix it" | A rejected push means the remote moved. Investigate what landed; force-pushing a shared branch is never this skill's own call. |
+| "It's not part of the spec — I'll file a follow-up" | That sentence is how the backlog grew faster than it shrank. Tag it, put it on the sweep list, and let review #1 route it: a small one is fixed in this run. |
+| "It's only a Minor this branch introduced — I'll file it" | An `introduced` finding never leaves as an issue. It is fixed, or noted in the PR. |
+| "The sweep turned up more — one more sweep will finish it" | One pass. A second is how the growth moves from the backlog into the branch; what the sweep finds goes to `issue` or `note`. |
+| "The review was clean an hour ago, and this fix is tiny" | `wdd` refuses a commit no clean full-branch review covers. Review it, or do not ship it. |
