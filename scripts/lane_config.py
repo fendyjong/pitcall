@@ -21,6 +21,15 @@ CONFIG_NAME = "pitcall.config.json"          # legacy location, repo root
 CONFIG_DIR = ".pitcall"
 CONFIG_BASENAME = "config.json"
 
+
+class ConfigNotFound(RuntimeError):
+    """The checkout has no config file at all.
+
+    A RuntimeError, so every caller that treats a missing config as a loud
+    failure still does. `project-config --flag` alone catches it by name: for an
+    optional setting, a project with no config has simply made no decision.
+    """
+
 #: Keys the workflow reads and cannot guess. Most are consumed by the skills
 #: rather than by this module; the check lives here because this is the one
 #: place the config is parsed, and a project is configured once rather than
@@ -272,10 +281,22 @@ def load_config(checkout: Path | str | None = None) -> dict:
         # the checkout itself; `path.parent` is NOT — once neither location
         # exists it is `.pitcall/`, a directory inside the checkout, and naming
         # it here would be exactly the mistake this comment describes.
-        raise RuntimeError(
+        raise ConfigNotFound(
             f"lane: no {CONFIG_DIR}/{CONFIG_BASENAME} or {CONFIG_NAME} in {root} "
             f"— that is the checkout resolved from the current directory"
         ) from None
+    except (OSError, ValueError) as exc:
+        # A config that exists but cannot be read (a directory at the path, a
+        # permission) or parsed (malformed JSON, undecodable bytes) is the same
+        # loud failure, with a message rather than a traceback: every caller
+        # already turns a RuntimeError into one.
+        raise RuntimeError(f"{path}: cannot be read as JSON — {exc}") from None
+    if not isinstance(cfg, dict):
+        # `k not in cfg` below would raise TypeError on a number or null, and a
+        # caller's `cfg.get` an AttributeError on a list or string.
+        raise RuntimeError(
+            f"{path}: the config must be a JSON object, not {type(cfg).__name__}"
+        )
     missing = [k for k in REQUIRED_KEYS if k not in cfg]
     if missing:
         # Every missing key at once: one per run means one edit, one re-run and
