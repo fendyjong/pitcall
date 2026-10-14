@@ -32,6 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
+from urllib.parse import unquote
 
 import pytest
 
@@ -42,7 +43,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import lane_config  # noqa: E402
 
 # A file directly inside any directory named `scripts`, at any depth. The repo
-# has two such directories today and must not need editing when it has three.
+# has three such directories today and must not need editing when it has four.
 SCRIPT_PATH = re.compile(r"(?:^|/)scripts/[^/]+$")
 
 # The same shape as written in prose: a cited path whose last segment is a
@@ -52,7 +53,7 @@ SCRIPT_PATH = re.compile(r"(?:^|/)scripts/[^/]+$")
 CITED_PATH = re.compile(r"(?:^|/)scripts/[^/\s]+$")
 
 # Markdown inline code spans, and the body of fenced blocks. The leading
-# `[ \t]*` is load-bearing: three of SKILL.md's ten fenced blocks are indented
+# `[ \t]*` is load-bearing: three of SKILL.md's fenced blocks are indented
 # under numbered steps, and one of them cites `scripts/project-config` and
 # nothing else. Anchoring the fence at column 0 makes those invisible -- the
 # gate would skip exactly the citation shape it calls the strongest.
@@ -82,15 +83,12 @@ GITHUB_REPO = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?"
 
 # A git ref in a GitHub link, captured as one segment -- with the
 # `refs/heads/` or `refs/tags/` qualifier GitHub's own Raw button writes,
-# e.g. `raw/refs/heads/main/README.md`.
-REF = r"((?:refs/(?:heads|tags)/)?[^/]+)/"
+# e.g. `raw/refs/heads/main/README.md`. A placeholder like `<sha>` is no ref.
+REF = r"((?:refs/(?:heads|tags)/)?[^/<>\s]+)/"
 
 # An abbreviated or full commit id: the one bare ref read as a commit
 # rather than a name -- see `exists_at()`.
 SHA = re.compile(r"[0-9a-f]{7,40}")
-
-# Markdown's autolink, `<https://...>`: brackets around a concrete URL.
-AUTOLINK = re.compile(r"<([a-z][a-z0-9+.-]*://[^<>\s]+)>", re.IGNORECASE)
 
 # Punctuation a name picks up from the sentence around it. Stripped from
 # both ends by `clean()`'s trailing half; the leading half deliberately
@@ -193,10 +191,16 @@ def repo_link(token, slug):
     `URL=https://...`, `--url=https://...` and `[text](https://...)` are
     still read; `clean()` then drops what the sentence left on its end.
 
+    The path ends at a `#L10` line anchor or `?plain=1`, and at the quote or
+    bracket that closes `<https://...>`, `[t](<https://...>)` or
+    `href="https://..."`. It is percent-decoded, as GitHub decodes it.
+
     None means there is no claim to judge: the URL points anywhere else --
     another repository, another host, `http://host:port` -- whose tree this
-    checkout cannot see, or it is a link into this repository in a shape not
-    listed above (a `blame/` page, say).
+    checkout cannot see; it is a link into this repository in a shape not
+    listed above (a `blame/` page, say); its path holds a placeholder like
+    `<name>`; or its path holds a `.` or `..` segment, which a browser
+    resolves before GitHub ever sees it and neither judge here resolves.
 
     `<ref>` is read as one segment (see `REF`). A branch holding a slash
     (`feat/x`) is read as the ref `feat` with `x/` left on the path -- a
@@ -215,18 +219,19 @@ def repo_link(token, slug):
     if link is None:
         return None
     ref = link[1] or link[2]
-    # A `#L10` line anchor or `?plain=1` is not part of the path.
-    return ref, clean(re.split(r"[?#]", token[link.end():], maxsplit=1)[0])
+    path = unquote(re.split(r"[?#\"'>]", token[link.end():], maxsplit=1)[0])
+    if "<" in path or any(part in (".", "..") for part in path.split("/")):
+        return None
+    return ref, clean(path)
 
 
 def link_resolves(ref, path, tracked_paths, repo):
     """True or False for whether a link's `path` exists at its `ref`, or None
     when the gate cannot know and the link is skipped.
 
-    Either way the path starts at the repository root, so only an exact
-    match resolves it: `blob/main/scripts/wdd` names a root-level
-    `scripts/wdd`, and GitHub serves a 404 for it whatever lives under
-    `skills/`.
+    Either way the path starts at the repository root and must name a file
+    exactly: `blob/main/scripts/wdd` names a root-level `scripts/wdd`, and
+    GitHub serves a 404 for it whatever lives under `skills/`.
 
     A link to the default branch or `HEAD` names the files this branch will
     merge, so it is judged against the tracked paths -- not git's copy of
@@ -250,27 +255,41 @@ def exists_at(root):
     depends on what was fetched, so the same document could pass here and
     fail in CI. So is a sha git does not know: a typo, or a commit only an
     unmerged pull request holds, which GitHub still serves -- flagging it
-    would fail CI on what may be a correct link. A known sha or tag answers
-    the same here and in CI, since `require_full_history` already holds.
+    would fail CI on what may be a correct link. Two clones that both know a
+    sha or tag answer alike; one that does not (`git clone --no-tags`, say)
+    skips the link rather than contradicting the other.
+
+    A tag link whose first path segment is missing at that tag is skipped
+    too: with a tag `v2` and a branch `v2/hotfix`, `blob/v2/hotfix/...` is a
+    link to the branch, which `REF` reads as the tag with `hotfix/` on the
+    path. Only a file counts, as in the tracked-paths judge: `cat-file -e`
+    alone would also pass a directory.
     """
     def commit(ref):
-        # A `refs/heads/` ref, or any branch name, is neither candidate.
+        """`(sha, tagged)`, or None. A branch name is neither candidate."""
         name = ref.removeprefix("refs/tags/")
-        candidates = [f"refs/tags/{name}"]
+        candidates = [(f"refs/tags/{name}", True)]
         if name == ref and SHA.fullmatch(name):
-            candidates.append(name)
-        for candidate in candidates:
+            candidates.append((name, False))
+        for candidate, tagged in candidates:
             result = _git(root, "rev-parse", "--verify", "--quiet",
                           f"{candidate}^{{commit}}")
             if result.returncode == 0:
-                return result.stdout.strip()
+                return result.stdout.strip(), tagged
         return None
 
+    def kind(sha, path):
+        result = _git(root, "cat-file", "-t", f"{sha}:{path}")
+        return result.stdout.strip() if result.returncode == 0 else None
+
     def answer(ref, path):
-        sha = commit(ref)
-        if sha is None:
+        found = commit(ref)
+        if found is None:
             return None
-        return _git(root, "cat-file", "-e", f"{sha}:{path}").returncode == 0
+        sha, tagged = found
+        if tagged and kind(sha, path.split("/", 1)[0]) is None:
+            return None
+        return kind(sha, path) == "blob"
 
     return answer
 
@@ -404,30 +423,15 @@ def problems_in(text, path, dead, tracked_paths, repo=None):
     found = []
     for span in spans(text):
         for raw in tokens(span):
-            autolink = AUTOLINK.fullmatch(raw)
-            if autolink:
-                # Markdown's autolink: the brackets wrap a concrete URL, not
-                # a placeholder, so they must not reach the guard below.
-                raw = autolink[1]
-            if "<" in raw or ">" in raw:
-                # A token holding a placeholder like `<name>`, or wrapped
-                # whole in angle brackets like `<scripts/name>`, is prose
-                # showing the SHAPE of a path, not a claim that one exists.
-                # Checked on `raw`, before any stripping: `TRIM` would eat a
-                # bracket sitting at the token's own edge and leave this
-                # guard blind to `<scripts/name>` specifically. This idiom
-                # is already live and correct in this repo:
-                # `wdd/<plan-slug>/progress.md` (SKILL.md:817),
-                # `.pitcall/receipts/<sha>.json` (SKILL.md:1131), and
-                # `repos/<owner>` (commands/spec-review.md:28). A false positive on correct
-                # prose is how a check gets switched off rather than fixed,
-                # which is the failure this gate exists to avoid.
-                continue
             if "://" in raw:
-                # A URL into this repository is a claim about this tree and
+                # A URL into this repository is a claim about its tree and
                 # is checked; any other URL is not, and is skipped. Skipping
                 # every URL, as this once did, kept a correct link quiet but
-                # swallowed a wrong one too (#17) -- see `repo_link()`.
+                # swallowed a wrong one too (#17) -- see `repo_link()`. This
+                # runs before the placeholder guard below, which would
+                # swallow it again: the brackets and quotes around a link
+                # (`<https://...>`, `href="..."`) are no placeholder, and
+                # `repo_link()` finds one inside the link itself.
                 link = repo_link(raw, repo.slug) if repo else None
                 if link is None:
                     continue
@@ -438,6 +442,20 @@ def problems_in(text, path, dead, tracked_paths, repo=None):
                         f"{path}: `{raw}` names a path under scripts/ that "
                         f"does not exist at {ref}"
                     )
+                continue
+            if "<" in raw or ">" in raw:
+                # A token holding a placeholder like `<name>`, or wrapped
+                # whole in angle brackets like `<scripts/name>`, is prose
+                # showing the SHAPE of a path, not a claim that one exists.
+                # Checked on `raw`, before any stripping: `TRIM` would eat a
+                # bracket sitting at the token's own edge and leave this
+                # guard blind to `<scripts/name>` specifically. This idiom
+                # is already live and correct in this repo:
+                # `wdd/<plan-slug>/progress.md` and
+                # `.pitcall/receipts/<sha>.json` (both in WDD's SKILL.md),
+                # and `repos/<owner>` (commands/spec-review.md). A false positive on correct
+                # prose is how a check gets switched off rather than fixed,
+                # which is the failure this gate exists to avoid.
                 continue
             token = clean(normalize(raw))
             if token in dead:
@@ -518,7 +536,7 @@ def test_a_fenced_block_is_scanned():
 
 
 def test_an_indented_fenced_block_is_scanned():
-    """Three of SKILL.md's ten fences sit indented under numbered steps."""
+    """Three of SKILL.md's fences sit indented under numbered steps."""
     found = problems_in("1. run it:\n\n   ```bash\n   wdd-finish check\n   ```\n",
                         "SKILL.md", {"wdd-finish"}, [])
     assert found, "a fence indented under a list item is still a fence"
@@ -783,6 +801,10 @@ LINK_SHAPES = [
     "see `https://github.com/{repo}/raw/refs/heads/main/{path}`",
     "see `https://raw.githubusercontent.com/{repo}/refs/heads/main/{path}`",
     "see `<https://github.com/{repo}/blob/main/{path}>`",
+    "```markdown\nsee <https://github.com/{repo}/blob/main/{path}>.\n```\n",
+    "see `(<https://github.com/{repo}/blob/main/{path}>)`",
+    "see `[it](<https://github.com/{repo}/blob/main/{path}>)`",
+    '```html\n<a href="https://github.com/{repo}/blob/main/{path}">it</a>\n```\n',
     "```markdown\nsee [it](https://github.com/{repo}/blob/main/{path})\n```\n",
     "```bash\nURL=https://raw.githubusercontent.com/{repo}/main/{path}\n```\n",
     "```bash\ntool --url=https://raw.githubusercontent.com/{repo}/main/{path}\n```\n",
@@ -803,6 +825,42 @@ def test_every_link_shape_is_read(shape):
         tracked_paths, repo=REPO,
     )
     assert found and "nope.py" in found[0], "a wrong link must fail"
+
+
+def test_a_placeholder_inside_a_link_is_not_a_claim():
+    """The same idiom as `scripts/<name>` in a path, written inside a link.
+    The lookup would call every one of these missing, so a placeholder that
+    reached it would fail CI on correct prose."""
+    repo = Repo(REPO.slug, "main", lambda ref, path: False)
+    for link in (f"{BLOB}/scripts/<name>", f"{BLOB}/scripts/run-<name>",
+                 f"https://github.com/{REPO.slug}/blob/<sha>/scripts/x"):
+        assert problems_in(f"see `{link}`", "docs/x.md", set(), [], repo=repo) == [], link
+
+
+def test_a_dot_segment_is_skipped_by_both_judges():
+    """A browser resolves `./` before GitHub sees the path; neither judge
+    here does, and they would disagree if either tried."""
+    repo = Repo(REPO.slug, "main", lambda ref, path: False)
+    for ref in ("main", "0123abcd"):
+        for rest in ("./scripts/nope.py", "x/../scripts/nope.py"):
+            link = f"https://github.com/{REPO.slug}/blob/{ref}/{rest}"
+            assert problems_in(f"`{link}`", "d.md", set(), [], repo=repo) == [], link
+
+
+def test_a_percent_encoded_path_is_decoded():
+    tracked_paths = ["scripts/lane.py"]
+    assert problems_in(f"`{BLOB}/scripts/lane%2Epy`", "d.md", set(),
+                       tracked_paths, repo=REPO) == []
+    found = problems_in(f"`{BLOB}/scripts/nope%2Epy`", "d.md", set(),
+                        tracked_paths, repo=REPO)
+    assert found and "nope%2Epy" in found[0]
+
+
+def test_a_link_to_a_missing_file_outside_scripts_is_not_this_gates_claim():
+    """The gate is about scripts; a missing doc is another check's business,
+    and flagging it here would say `under scripts/` about a path that isn't."""
+    assert problems_in(f"see `{BLOB}/docs/missing.md`", "d.md", set(), [],
+                       repo=REPO) == []
 
 
 def test_a_dot_in_the_repo_name_matches_only_a_dot():
@@ -975,6 +1033,7 @@ def test_this_repo_reads_the_slug_and_the_default_branch(tmp_path):
     {k: v for k, v in CONFIG.items() if k != "default_branch"},
     {**CONFIG, "default_branch": ""},
     {**CONFIG, "default_branch": None},
+    {**CONFIG, "default_branch": 5},
 ])
 def test_an_unreadable_default_branch_fails_loudly(tmp_path, data):
     """Without it a link to the default branch cannot be told from a pinned
@@ -1006,6 +1065,19 @@ def test_exists_at_answers_for_a_sha_or_tag_and_skips_the_rest(tmp_path):
     assert answer(branch, "scripts/new-name") is None, "a branch is skipped"
     assert answer(f"refs/heads/{branch}", "scripts/new-name") is None
     assert answer("deadbeefdeadbeef", "scripts/old-name") is None, "an unknown sha"
+    assert answer(first[:4], "scripts/old-name") is None, "too short to be read as a sha"
+    assert answer(f"refs/tags/{first}", "scripts/old-name") is None, "no such tag"
+    assert answer(first, "scripts") is False, "a directory is not a file"
+
+    blob = _out(root, "rev-parse", "HEAD:scripts/new-name").strip()
+    tree = _out(root, "rev-parse", "HEAD:scripts").strip()
+    assert answer(blob, "scripts/new-name") is None, "a blob sha names no commit"
+    assert answer(tree, "scripts/new-name") is None, "a tree sha names no commit"
+
+    # A branch `v1/hotfix` beside the tag `v1`: `REF` reads the link as the
+    # tag with `hotfix/` on the path, which cannot exist there.
+    assert answer("v1", "hotfix/scripts/new-name") is None
+    assert answer("v1", "scripts/nope") is False, "a wrong path at a tag still fails"
 
 
 def test_the_gate_itself_checks_urls(tmp_path):
