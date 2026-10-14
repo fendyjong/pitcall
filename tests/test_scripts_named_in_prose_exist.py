@@ -26,6 +26,7 @@ carve-out excludes it from its own scan -- `test_the_scan_skips_this_file`
 pins that rather than leaving it to be rediscovered.
 """
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -66,6 +67,11 @@ FENCED = re.compile(r"^[ \t]*(`{3,})[^\n]*\n(.*?)^[ \t]*\1`*[ \t]*$", re.M | re.
 
 # A `${VAR}/` prefix, any variable name -- see `normalize()`.
 VAR_PREFIX = re.compile(r"^\$\{[^}]*\}/")
+
+# Where `repo_slug()` reads this repository's identity, and the one shape it
+# accepts there.
+MANIFEST = ".claude-plugin/plugin.json"
+GITHUB_REPO = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?")
 
 # Punctuation a name picks up from the sentence around it. Stripped from
 # both ends by `clean()`'s trailing half; the leading half deliberately
@@ -114,6 +120,64 @@ def require_full_history(root):
             "clone shortens it and a renamed script stops being tracked. This "
             "is a failure, not a reason to skip -- CI must fetch full history."
         )
+
+
+def repo_slug(root):
+    """`owner/name` from the manifest's `repository`, or a loud failure.
+
+    Read from a tracked file rather than `git remote get-url origin`, so the
+    answer does not depend on how a clone's remote happens to be configured.
+    Failing rather than returning None is the point: without a slug every URL
+    reads as foreign, and the gate would pass while checking none of them --
+    the same reasoning as `require_full_history`.
+    """
+    path = Path(root) / MANIFEST
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise AssertionError(f"cannot read {MANIFEST}: {exc}") from exc
+    url = data.get("repository") if isinstance(data, dict) else None
+    match = GITHUB_REPO.fullmatch(url) if isinstance(url, str) else None
+    if match is None:
+        raise AssertionError(
+            f"{MANIFEST} `repository` is {url!r}, not a "
+            f"https://github.com/<owner>/<name> URL. A URL citation is checked "
+            f"only when it points into this repository, so without that field "
+            f"every one would pass unchecked."
+        )
+    return f"{match[1]}/{match[2]}"
+
+
+def repo_relative(url, repo):
+    """The path a URL into `repo` names from the repository root, or None.
+
+    None means the URL points anywhere else -- another repository, another
+    host, `http://host:port` -- and this checkout cannot see that tree, so
+    the URL is no claim the gate can judge. A link into this repository is
+    one: its known prefix is stripped whole, the way `normalize()` strips
+    `${VAR}/` and `~/`, and nothing past the prefix is touched, so a wrong
+    intermediate segment still fails to resolve.
+
+    `<ref>` is read as one segment. A ref holding a slash (`feat/x`) leaves
+    part of itself on the path and the link fails to resolve; a branch link
+    rots when the branch is deleted anyway, so cite `main` or a commit sha.
+
+    The match ignores case because GitHub resolves owner and repository
+    names that way -- `FendyJong/Pitcall` is still this repository. The path
+    after the prefix keeps its case; `resolves()` compares it exactly.
+    """
+    if repo is None:
+        return None
+    owner, name = (re.escape(part) for part in repo.split("/"))
+    prefix = re.match(
+        rf"https?://(?:github\.com/{owner}/{name}/(?:blob|tree|raw)/[^/]+/"
+        rf"|raw\.githubusercontent\.com/{owner}/{name}/[^/]+/)",
+        url, re.IGNORECASE,
+    )
+    if prefix is None:
+        return None
+    # A `#L10` line anchor or `?plain=1` is not part of the path.
+    return re.split(r"[?#]", url[prefix.end():], maxsplit=1)[0]
 
 
 def tracked(root):
@@ -198,7 +262,7 @@ def normalize(token):
     return token
 
 
-def resolves(token, tracked_paths):
+def resolves(token, tracked_paths, anchored=False):
     """A cited path resolves if a tracked path is it, or ends with it.
 
     Documents cite `scripts/plan-tasks` relative to the skill that owns it,
@@ -208,12 +272,24 @@ def resolves(token, tracked_paths):
     the mirror case -- a citation LONGER than the tracked path, e.g.
     `${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd` --
     that plain suffix matching alone cannot.
+
+    An `anchored` token -- the path out of a URL into this repository --
+    starts at the repository root, so only an exact match resolves it:
+    `blob/main/scripts/wdd` names a root-level `scripts/wdd`, and GitHub
+    serves a 404 for it whatever lives under `skills/`.
     """
+    if anchored:
+        return token in tracked_paths
     return any(p == token or p.endswith("/" + token) for p in tracked_paths)
 
 
-def problems_in(text, path, dead, tracked_paths):
-    """The gate's whole judgement, over one document's text."""
+def problems_in(text, path, dead, tracked_paths, repo=None):
+    """The gate's whole judgement, over one document's text.
+
+    `repo` is this repository's `owner/name`, which decides which URLs are
+    claims about this checkout. Without it every URL reads as foreign;
+    `problems()` always passes one.
+    """
     found = []
     for span in spans(text):
         for raw in tokens(span):
@@ -232,15 +308,19 @@ def problems_in(text, path, dead, tracked_paths):
                 # prose is how a check gets switched off rather than fixed,
                 # which is the failure this gate exists to avoid.
                 continue
-            if "://" in raw:
-                # A URL names a remote resource, not a path in this
-                # checkout. Stripping the scheme and host would leave a tail
-                # like `fendyjong/pitcall/blob/main/scripts/lane.py`, which
-                # resolves against nothing anyway -- skip it outright rather
-                # than flag a citation that was never a claim about this
-                # checkout's own tree.
-                continue
-            token = clean(normalize(raw))
+            anchored = "://" in raw
+            if anchored:
+                # A URL into this repository is a claim about this tree and
+                # is checked; any other URL is not, and is skipped. Skipping
+                # every URL, as this once did, kept a correct link quiet but
+                # swallowed a wrong one too (#17) -- see `repo_relative()`.
+                # `clean()` runs first, so a parenthesis or quote at the
+                # token's edge cannot hide the scheme from the prefix match.
+                token = repo_relative(clean(raw), repo)
+                if token is None:
+                    continue
+            else:
+                token = clean(normalize(raw))
             if token in dead:
                 found.append(
                     f"{path}: `{raw}` is named here but no longer exists in "
@@ -249,7 +329,7 @@ def problems_in(text, path, dead, tracked_paths):
                     f"entry), write it unbackticked -- this check exists "
                     f"because a backticked name reads as a live instruction."
                 )
-            elif CITED_PATH.search(token) and not resolves(token, tracked_paths):
+            elif CITED_PATH.search(token) and not resolves(token, tracked_paths, anchored):
                 found.append(
                     f"{path}: `{raw}` names a path under scripts/ that no "
                     f"tracked file matches, or is not yet tracked"
@@ -264,6 +344,7 @@ def scanned_files(tracked_paths):
 def problems(root):
     """Empty list when every script named in prose exists."""
     require_full_history(root)
+    repo = repo_slug(root)
     tracked_paths = tracked(root)
     scanned = scanned_files(tracked_paths)
     assert scanned, "no non-.py tracked files to scan - the enumeration did not run"
@@ -274,7 +355,7 @@ def problems(root):
             text = (Path(root) / rel).read_text(encoding="utf-8")
         except (UnicodeDecodeError, IsADirectoryError):
             continue  # a binary blob or a submodule gitlink names no scripts
-        found.extend(problems_in(text, rel, dead, tracked_paths))
+        found.extend(problems_in(text, rel, dead, tracked_paths, repo=repo))
     return found
 
 
@@ -486,12 +567,151 @@ def test_a_unified_diff_path_prefix_resolves():
     assert found == []
 
 
-def test_a_url_citing_a_script_path_is_not_flagged():
+# --- URLs: a link into this repository names a path from its root ------------
+
+REPO = "fendyjong/pitcall"
+BLOB = f"https://github.com/{REPO}/blob/main"
+
+
+def test_a_correct_url_into_this_repo_is_not_flagged():
     found = problems_in(
-        "see `https://github.com/fendyjong/pitcall/blob/main/scripts/lane.py`",
-        "docs/x.md", set(), [],
+        f"see `{BLOB}/scripts/lane.py`", "docs/x.md", set(), ["scripts/lane.py"],
+        repo=REPO,
     )
     assert found == []
+
+
+def test_a_url_into_this_repo_naming_a_missing_script_is_caught():
+    """The negative control #17 found missing: every URL test asserted a
+    correct citation stays quiet, and none asserted a wrong one still fails --
+    which is how a skip that swallowed both survived its own round."""
+    found = problems_in(
+        f"see `{BLOB}/scripts/totally-made-up-name`", "docs/x.md", set(),
+        ["skills/w/scripts/real"], repo=REPO,
+    )
+    assert found and "totally-made-up-name" in found[0]
+
+
+def test_a_url_into_this_repo_with_a_wrong_intermediate_path_is_caught():
+    """Resolving only the `scripts/<name>` tail would let this through:
+    `wdd` is real, but under `wave-driven-development`, not `brainstorming`."""
+    found = problems_in(
+        f"see `{BLOB}/skills/brainstorming/scripts/wdd`", "docs/x.md", set(),
+        ["skills/wave-driven-development/scripts/wdd"], repo=REPO,
+    )
+    assert found and "wdd" in found[0]
+
+
+def test_a_url_is_anchored_at_the_repo_root():
+    """A prose citation is relative to its own skill, so it may be a tracked
+    path's tail. A URL is not: `blob/main/scripts/wdd` names a root-level
+    `scripts/wdd`, which does not exist, and GitHub would serve a 404."""
+    found = problems_in(
+        f"see `{BLOB}/scripts/wdd`", "docs/x.md", set(),
+        ["skills/wave-driven-development/scripts/wdd"], repo=REPO,
+    )
+    assert found and "wdd" in found[0]
+
+
+def test_a_line_anchor_or_query_does_not_hide_the_path():
+    tracked_paths = ["scripts/lane.py"]
+    for suffix in ("#L10-L20", "?plain=1", "?plain=1#L3"):
+        found = problems_in(
+            f"see `{BLOB}/scripts/lane.py{suffix}`", "docs/x.md", set(),
+            tracked_paths, repo=REPO,
+        )
+        assert found == [], f"a correct link with {suffix!r} must stay quiet"
+
+    found = problems_in(
+        f"see `{BLOB}/scripts/nope.py#L10`", "docs/x.md", set(),
+        tracked_paths, repo=REPO,
+    )
+    assert found and "nope.py" in found[0], "a wrong link with an anchor must still fail"
+
+
+def test_a_raw_content_url_is_checked_the_same_way():
+    raw = f"https://raw.githubusercontent.com/{REPO}/main"
+    found = problems_in(
+        f"fetch `{raw}/scripts/lane.py`", "docs/x.md", set(), ["scripts/lane.py"],
+        repo=REPO,
+    )
+    assert found == []
+
+    found = problems_in(
+        f"fetch `{raw}/scripts/nope.py`", "docs/x.md", set(), ["scripts/lane.py"],
+        repo=REPO,
+    )
+    assert found and "nope.py" in found[0]
+
+    # Quoted, as a fenced `curl` line writes it: the quote must not hide the
+    # scheme from the prefix match and turn a wrong link into a foreign one.
+    found = problems_in(
+        f'```bash\ncurl -fsSL "{raw}/scripts/nope.py"\n```\n', "docs/x.md", set(),
+        ["scripts/lane.py"], repo=REPO,
+    )
+    assert found and "nope.py" in found[0]
+
+
+def test_owner_case_does_not_turn_this_repo_into_another():
+    """GitHub resolves owner and repo names case-insensitively, so this is
+    still a link into this repository -- reading it as foreign would skip it."""
+    found = problems_in(
+        "see `https://github.com/FendyJong/Pitcall/blob/main/scripts/nope.py`",
+        "docs/x.md", set(), ["scripts/lane.py"], repo=REPO,
+    )
+    assert found and "nope.py" in found[0]
+
+
+def test_a_url_into_another_repository_is_not_checked():
+    """This checkout cannot see another repository's tree, so a link into one
+    is not a claim the gate can judge -- flagging it would fail CI on a correct
+    citation, e.g. of the upstream project `ATTRIBUTION.md` credits."""
+    found = problems_in(
+        "see `https://github.com/obra/superpowers/blob/main/skills/x/scripts/y`",
+        "docs/x.md", set(), ["scripts/lane.py"], repo=REPO,
+    )
+    assert found == []
+
+
+def test_without_a_repo_every_url_is_foreign():
+    """The rule tests above that predate URLs pass no repo; `problems()`
+    always passes one, read from the manifest."""
+    found = problems_in(
+        f"see `{BLOB}/scripts/totally-made-up-name`", "docs/x.md", set(), [],
+    )
+    assert found == []
+
+
+def _manifest(tmp_path, data):
+    (tmp_path / ".claude-plugin").mkdir()
+    (tmp_path / ".claude-plugin" / "plugin.json").write_text(json.dumps(data))
+    return tmp_path
+
+
+@pytest.mark.parametrize("url", [
+    "https://github.com/acme/widget",
+    "https://github.com/acme/widget/",
+    "https://github.com/acme/widget.git",
+])
+def test_repo_slug_reads_the_manifest(tmp_path, url):
+    assert repo_slug(_manifest(tmp_path, {"repository": url})) == "acme/widget"
+
+
+@pytest.mark.parametrize("data", [
+    {},
+    {"repository": "https://gitlab.com/acme/widget"},
+    {"repository": {"type": "git", "url": "https://github.com/acme/widget"}},
+])
+def test_an_unreadable_repository_fails_rather_than_skipping_urls(tmp_path, data):
+    """Every URL would read as foreign, and the gate would pass while checking
+    none of them -- the same shape `require_full_history` refuses."""
+    with pytest.raises(AssertionError, match="repository"):
+        repo_slug(_manifest(tmp_path, data))
+
+
+def test_a_missing_manifest_fails_rather_than_skipping_urls(tmp_path):
+    with pytest.raises(AssertionError, match="plugin.json"):
+        repo_slug(tmp_path)
 
 
 def test_a_wrong_intermediate_path_still_fails_to_resolve():
