@@ -593,8 +593,9 @@ expensive one. Tiers: see Model Selection, below.
    integrated (...)` to the ledger — this is the line Resuming an
    interrupted run (step 1, below) looks for to know the wave closed cleanly
    rather than stalled mid-run. **Never integrate a wave while any of its
-   tasks has an open Critical or Important finding that is neither fixed nor
-   parked with a ruling at the cap.**
+   tasks has an open Critical or Important finding that is neither fixed,
+   nor parked with a ruling at the cap, nor recorded as a `Sweep:` line at
+   the cap.**
 7. Before removing anything, repeat step 2's restore in each merged task's
    worktree, in case a later hook run re-dirtied it since creation.
 8. `wave-worktree remove <slug> <N>` for each merged task — this deletes
@@ -689,13 +690,20 @@ other findings.
 
 ### The fix loop
 
-The loop triggers on spec ❌, any Critical or Important finding, or a ⚠️ item
-you confirmed as a real gap. Two routes leave it before it starts:
+The loop triggers on spec ❌, any `introduced` Critical or Important finding,
+or a ⚠️ item you confirmed as a real gap. Three routes leave it before it
+starts:
 
 - **Minor findings never enter the loop.** Record each in the ledger as you go,
   as a `Sweep:` line carrying its origin tag (Ledger, below). Review #1 routes
   that list, and a small item is fixed in this run's sweep rather than filed
   (Final Review, below). A roll-up nobody reads is a silent discard.
+- **A `pre-existing` finding, any severity, never enters the loop:** record it as
+  `Sweep: pre-existing — <finding> — from Task <N> review — evidence: <evidence>`;
+  review #1 routes it. The task did not cause it, so the task's loop is the
+  wrong place to fix it. The evidence rule still holds (Final Review, Where a
+  finding came from): a `pre-existing` tag with no evidence, or evidence that
+  does not hold, is treated as `introduced` — and then it does enter the loop.
 - **A finding labelled plan-mandated** — or any finding that conflicts with
   what the plan's text requires — is yours to rule on: weigh the finding
   against the plan text, decide with the spec as the binding authority, and
@@ -755,8 +763,9 @@ dispatching and adjudicate each open finding yourself — you hold the plan and
 the cross-task context the reviewer lacks:
 
 - **The reviewer is wrong, or the point is contestable** → park it:
-  `Task <N>: parked — <finding> — Ruling: <why the code stands>`. The final
-  review sees both sides.
+  `Task <N>: parked — <finding> — Ruling: <why the code stands>`. Review #1
+  sees both sides: its sweep list carries every parked line, and it routes
+  each one like any other item (Final Review, below).
 - **Real, but nothing downstream builds on it** → do not park it. Record it as
   `Sweep: introduced must-fix — <finding> — from Task <N> review` (or as a
   `pre-existing` line with its evidence, when it was already there). A defect
@@ -779,7 +788,8 @@ ledger:
 
 - `Task <N>: complete (commits <base7>..<head7>, review clean, branch <slug>-t<N>)`
 - `Task <N>: complete (commits <base7>..<head7>, <K> parked, branch <slug>-t<N>)`
-  after a tripped breaker
+  after a tripped breaker. `<K>` counts parked findings only; a finding the
+  breaker recorded as a `Sweep:` line is visible as that line instead.
 
 Then mark the todo complete.
 
@@ -850,7 +860,7 @@ the test suite, so a format changed here and not there fails a test rather than 
 
 | Line | Written |
 |---|---|
-| `Sweep: <introduced\|pre-existing>[ must-fix][ (late)] — <one-liner> — from <src>[ — evidence: <evidence>]` | for a finding not fixed in its own loop. `<src>` is `Task <N> review`, `Task <N> re-review` or `final review #<k>`; `evidence` is required for `pre-existing`; `(late)` marks one raised during the sweep |
+| `Sweep: <introduced\|pre-existing>[ must-fix][ (late)] — <one-liner> — from <src>[ — evidence: <evidence>]` | for a finding not fixed in its own loop. `<src>` is `Task <N> review`, `Task <N> re-review`, `final review #<k>`, or `final review #<k> re-review` (the scoped re-review of the fix that follows review #k); `evidence` is required for `pre-existing`; `(late)` marks one raised during the sweep or after it |
 | `Sorting: review #1 at <sha7>` | after the last `Route:` line |
 | `Route: <must-fix\|sweep\|ask\|issue\|note>[ #<N>[ full\|part]] — <one-liner>` | per item, from review #1's routing; an `issue` route without `#<N>` means no duplicate was found |
 | `Owner: <one-liner> — <decision> (<YYYY-MM-DD>)` | per `ask` item, once your human partner answers |
@@ -984,19 +994,24 @@ guessing picks somebody's other run.
 **1. Find the open wave** — a `Wave N: dispatched` with no matching `Wave N: integrated`.
 
 - **Found one** → this wave was interrupted; resume it, starting at step 2 below.
-- **None, but the plan's `## Waves` table names a wave after the highest `Wave N: integrated` in
-  the ledger** → the crash landed between that wave's integration and the next wave's dispatch, a
-  wide window since the controller does teardown and next-wave planning there. Resume at that next
-  wave: continue through steps 2–3 below (both are cheap and safe regardless), skip step 4 (nothing
-  in this wave has been dispatched yet, so there is no per-task state to recover), then dispatch it
-  fresh per Phase 2's per-wave step 4. Never re-dispatch a wave that already carries its
-  `integrated` line.
-- **No open wave, and every wave in the table is integrated** → the crash landed in Final Review
-  or the sweep, and its phase markers say where: `Sorting:` present → sorting is done;
-  `Amendment <K>: written` → the spec is amended; `Sweep plan:` → the sweep is planned, and its
-  waves resume like any other; `Final review #<k>:` → that review finished. Each marker is
-  appended only after its step completes, so a resumed session never repeats a step whose marker
-  exists — and repeats, whole, one whose marker is missing.
+- **None, no `Final review #1:` line yet, and the plan's `## Waves` table names a wave after the
+  highest `Wave N: integrated` in the ledger** → the crash landed between that wave's integration
+  and the next wave's dispatch, a wide window since the controller does teardown and next-wave
+  planning there. Resume at that next wave: continue through steps 2–3 below (both are cheap and
+  safe regardless), skip step 4 (nothing in this wave has been dispatched yet, so there is no
+  per-task state to recover), then dispatch it fresh per Phase 2's per-wave step 4. Never
+  re-dispatch a wave that already carries its `integrated` line. **Once a `Final review #1:` line
+  exists this bullet no longer applies:** every wave the table names past that point is a sweep
+  wave, and sweep waves reach the table while the sweep is still being planned — before it is
+  validated and before `Sweep plan:` is appended. Dispatching one from the table alone would run an
+  unvalidated sweep. The next bullet decides instead.
+- **No open wave, and either every wave in the table is integrated or a `Final review #1:` line
+  exists** → the crash landed in Final Review or the sweep, and its phase markers say where:
+  `Sorting:` present → sorting is done; `Amendment <K>: written` → the spec is amended;
+  `Sweep plan:` → the sweep is planned and validated, and its waves resume like any other — a
+  sweep wave is dispatched only once this marker exists; `Final review #<k>:` → that review
+  finished. Each marker is appended only after its step completes, so a resumed session never
+  repeats a step whose marker exists — and repeats, whole, one whose marker is missing.
 - **No ledger at all** → not a resume; start normally.
 
 **2. Clear an interrupted merge.** Detect one with `git rev-parse -q --verify MERGE_HEAD` in the
@@ -1076,7 +1091,7 @@ resumed dispatch, so nothing else carries this forward.
 | The integrator hits a merge conflict | Hard BLOCKED. Under the core invariant this cannot happen unless the plan violated its own guarantee, so it is a planning defect, not a merge to resolve. Re-validate the plan and surface it. |
 | A task's diff touches an undeclared path | Spec failure for that task; it enters the fix loop. If the file is genuinely needed, the plan is wrong — fix the plan and re-validate before continuing. |
 | An implementer reports NEEDS_CONTEXT | Answer and re-dispatch. Siblings continue unaffected. |
-| A sweep task cannot finish — its 5-round cap, or its item outgrows admission | It is never merged, and no wave runs after the sweep range. A `sweep` or approved `ask` item is re-routed `issue`, its amendment line struck through; a `must-fix` item becomes `Sweep: introduced must-fix (late)` for review #2's fix dispatch. The retry-in-the-next-wave above does not apply. |
+| A sweep task cannot finish — its 5-round cap, or its item outgrows admission | It is never merged, and no wave runs after the sweep range. A `sweep` or approved `ask` item is re-routed `issue`, its amendment line struck through; a `must-fix` item becomes `Sweep: introduced must-fix (late)` for review #2's fix dispatch. Remove its worktree (`scripts/wave-worktree remove <slug> <N>`, which keeps the branch), rename the branch out of the task namespace with `git branch -m <slug>-t<N> <slug>-dropped-t<N>`, and record `Ruling: <item> dropped — branch <slug>-dropped-t<N> at <sha7> — <why>`: `wdd` refuses every unmerged `<slug>-t<N>`, and merging the branch to quiet it would land the work this row exists to keep out. `cleanup` leaves the renamed branch alone — it is the only copy of the attempt. The retry-in-the-next-wave above does not apply. |
 | Review #3, or any later review, leaves a must-fix open | `Final review #<k>: BLOCKED at <sha7>`; stop, and hand over the open findings, every review report, and the fix history. |
 
 ## Automation boundary
@@ -1194,11 +1209,13 @@ added is still `introduced`:
    full-branch review: every one can route `issue`, and each checks for duplicates first.
 3. Dispatch `final-reviewer-prompt.md` on the most capable available model — not the session
    default — as review #1: `[SINCE_SHA]` is `$MERGE_BASE`, `[REVIEWED_SHA]` is
-   `git rev-parse HEAD`, `[REPORT_FILE]` is `<workspace>/final-review-1.md`, the ledger's
-   `Sweep:` lines are copied in full, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABEL]`
-   (`status_labels.ongoing`, or `none`) and `[SPEC_ISSUE]` are filled as the template's placeholder
-   list says. The reviewer writes its report there, verdict header first; append
-   `Final review #1: <verdict> at <sha7>`.
+   `git rev-parse HEAD`, `[REPORT_FILE]` is `<workspace>/final-review-1.md`, `[SWEEP_LINES]`
+   carries every `Sweep:` line **and every `Task <N>: parked` line** in the ledger, copied in
+   full, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABEL]` (`status_labels.ongoing`, or `none`) and
+   `[SPEC_ISSUE]` are filled as the template's placeholder list says. A parked line is the
+   breaker's ruling that a reviewer was wrong; this is its whole-branch second look, and it is
+   routed like any other item — `note` when the reviewer agrees with the ruling. The reviewer
+   writes its report there, verdict header first; append `Final review #1: <verdict> at <sha7>`.
 4. Transcribe every item's route as a `Route:` line, then append `Sorting: review #1 at <sha7>`.
    Check mechanically, and nothing more: every item has a route, no `introduced` item is routed
    `issue`, and every `pre-existing` tag's evidence holds. You do not re-judge routes.
@@ -1276,6 +1293,15 @@ bumped, and a `Ruling:` line recording it. A `must-fix` item cannot be dropped: 
 `Sweep: introduced must-fix (late)`, and review #2's fix dispatch takes it. **No wave runs after
 the sweep range** — `wdd` refuses a wave dispatched after `<B>`, and a second `Sweep plan:` line.
 
+**Either way, its branch leaves the task namespace.** `wdd` refuses every `<slug>-t<N>` branch that
+is not merged into the plan branch, and merging this one to quiet it would land exactly the work
+this paragraph keeps out. Remove the task's worktree with `scripts/wave-worktree remove <slug> <N>`
+(which keeps the branch), rename the branch with
+`git branch -m <slug>-t<N> <slug>-dropped-t<N>`, and record
+`Ruling: <item> dropped — branch <slug>-dropped-t<N> at <sha7> — <why>`. `cleanup` does not delete
+it: it is the only copy of the dropped attempt, and the `issue` a `sweep` or `ask` item is
+re-routed to names the branch, so the attempt can be picked up.
+
 ### Reviews #2 and #3
 
 Each is `final-reviewer-prompt.md` on the most capable model, given:
@@ -1286,7 +1312,9 @@ Each is `final-reviewer-prompt.md` on the most capable model, given:
   context — the reviewer must check every caller and user, anywhere on the branch, of what the
   delta changed;
 - the previous review's `must-fix` items as `[PRIOR_FINDINGS]`, each to be verdicted ADDRESSED or
-  NOT ADDRESSED, and the `(late)` sweep lines;
+  NOT ADDRESSED;
+- as `[SWEEP_LINES]`, only the `(late)` `Sweep:` lines written since the previous full-branch
+  review — everything older was routed by a review already;
 - `open-issues.json` rewritten first, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABEL]` and `[SPEC_ISSUE]`
   as for review #1; `[REPORT_FILE]` is `<workspace>/final-review-<k>.md`.
 
@@ -1294,7 +1322,8 @@ Their routes are `must-fix`, `issue` and `note` only. If review #2 routes anythi
 **one fix dispatch** carrying the complete list — never one fixer per finding; per-finding fixers
 each rebuild context and re-run suites, and a real session's final-review fix wave cost more than
 all its tasks combined — then **one scoped re-review** of the fix diff (`re-review-prompt.md`),
-then review #3, whatever the re-review said.
+then review #3, whatever the re-review said. The re-review's out-of-scope observations become
+`(late)` `Sweep:` lines `from final review #2 re-review`, and review #3 routes them.
 
 **Review #3, or any later review, with a `must-fix` open** → `Final review #<k>: BLOCKED at
 <sha7>`; stop and ask, handing over the open findings, every review report, and the fix history.
@@ -1313,12 +1342,16 @@ unless the chain covers `HEAD`, and `merge` unless it covers the PR head:
    malformed header is an absent verdict, never a permitted one;
 2. review `<n>` is `CLEAN`;
 3. review `<n>` reviewed `HEAD` — for `merge`, the PR head it is about to land;
-4. each `Since:` is the previous review's `Reviewed:`, and an ancestor of its own;
+4. from review #2 on, each `Since:` is the previous review's `Reviewed:`, and an ancestor of its
+   own;
 5. review #1's `Since:` is an ancestor of `origin/<default-branch>` and of its own `Reviewed:`.
 
 So **anything that changes the code after the last review needs another review before it can
 ship**, and every commit on the branch sits inside some review's range — evidence pinned to a
-commit, for the same reason as the lane receipt.
+commit, for the same reason as the lane receipt. That includes rebasing the branch, or GitHub's
+"Update branch": either produces a new head no review covered, and a rebase also rewrites every
+reviewed sha and so breaks rule 4's link — after a rebase the chain restarts from review #1, and
+that review counts against the three-review budget.
 
 The whole-branch review is load-bearing, not a formality. **This is the second
 of the two review stages, and the one that catches what the first cannot:** on
@@ -1383,7 +1416,8 @@ point to.
 
 `check` reads the ledger and refuses on any of: a `Wave N: dispatched` with no
 matching `integrated`; an unresolved stop marker (Ledger, above); a second
-`Sweep plan:` line, or a wave dispatched after its range; a ledger whose first
+`Sweep plan:` line, one that does not parse, or a wave dispatched after its
+range; a ledger whose first
 line names a different plan. `check` and `ship` also refuse unless the verdict
 chain covers `HEAD`, and `merge` unless it covers the PR head (Final Review,
 above). It then verifies, against git rather than against the ledger,
@@ -1391,12 +1425,14 @@ that **every task branch is an ancestor of the plan branch** — an integrator
 that died after writing its line leaves the claim without the merge, and
 nothing else in the workflow would notice.
 
-`ship` and `cleanup` take the base branch from the project config's
-`default_branch` — the same source Phase 2 step 1 uses, and never `origin/HEAD`,
-which is a clone-time cache that survives a remote renaming its default branch
-and is absent entirely from an `init`+`fetch` checkout. `cleanup` gates branch
-deletion on that ref, so a stale name that is still a live branch would decide
-the fate of the only copy of a task's work. Both refuse rather than guess.
+`check`, `ship`, `merge` and `cleanup` all take the base branch from the
+project config's `default_branch` — every one but `cleanup` needs it for the
+verdict chain's rule 5 — the same source Phase 2 step 1 uses, and never
+`origin/HEAD`, which is a clone-time cache that survives a remote renaming its
+default branch and is absent entirely from an `init`+`fetch` checkout.
+`cleanup` gates branch deletion on that ref, so a stale name that is still a
+live branch would decide the fate of the only copy of a task's work. All four
+refuse rather than guess.
 
 `ship` pushes, opens the PR, appends its closing keyword and the `## Sweep`
 section, and stops there. `merge` is what lands it, and
@@ -1427,15 +1463,18 @@ and any push in between means running the lane again.
 1. resolves the PR for the branch and takes **the head sha GitHub reports now**
    — not this checkout's HEAD, not a sha resolved earlier in the run. It
    refuses if the PR targets a base other than the config's `default_branch`
-   (retargeting happens on GitHub, where nothing here can see it), and if this
-   checkout's `HEAD` is not the commit the PR would merge — everything `check`
-   verified was verified against local `HEAD`, so a merge landing something
-   else means that verification was about the wrong commit, and reporting
-   *merged* would describe work this run never examined;
-2. checks the receipt for that sha **before waiting on anything**. Refusing
+   (retargeting happens on GitHub, where nothing here can see it);
+2. checks the verdict chain (Final Review, The verdict chain) against **that
+   head sha**, and refuses a commit no clean full-branch review covered — the
+   commit that lands is the one the last review must have seen;
+3. refuses if this checkout's `HEAD` is not the commit the PR would merge —
+   everything `check` verified was verified against local `HEAD`, so a merge
+   landing something else means that verification was about the wrong commit,
+   and reporting *merged* would describe work this run never examined;
+4. checks the receipt for that sha **before waiting on anything**. Refusing
    early costs nothing; refusing after the wait means having spent ten minutes
    on checks for a branch that could never have merged;
-3. waits for the config's `required_check` to go green, **bounded** — 30
+5. waits for the config's `required_check` to go green, **bounded** — 30
    minutes, polled every 20s, overridable in seconds with `WDD_CHECK_TIMEOUT`
    and `WDD_CHECK_POLL`. A bound that expires reports *not merged, still
    running* and exits 3, having changed nothing. Anything that is not an
@@ -1444,13 +1483,13 @@ and any push in between means running the lane again.
    external app's commit status colliding with a workflow job's name or two
    workflow files each defining one, **every match is judged and the worst
    wins**: a green entry listed first cannot carry a red or still-running one;
-4. merges with `gh pr merge --merge --match-head-commit <sha>`,
+6. merges with `gh pr merge --merge --match-head-commit <sha>`,
    **server-side**. A local `git merge` runs zero checks and moves HEAD in a
    checkout other sessions are reading. Not a squash: that mints a new commit,
    so what lands is a sha nothing validated, and it also makes `cleanup`'s
    ancestry test permanently false. **The head pin is the other half of the
    receipt** — see below;
-5. fast-forwards the main checkout, then runs the project's optional
+7. fast-forwards the main checkout, then runs the project's optional
    `refresh_commands` there **best-effort** — the merge has already happened
    and a regeneration failing must not unwind it.
 

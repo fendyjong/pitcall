@@ -101,8 +101,8 @@ Subagent (general-purpose):
     ### Out-of-Scope Observations
 
     Issues you noticed entirely outside the fix diff, each with its origin
-    tag. Non-blocking; the controller records each as a `Sweep:` line for
-    the sweep that follows the spec's waves. "None" if none.
+    tag. Non-blocking; the controller records each as a `Sweep:` line,
+    routed by the next full-branch review. "None" if none.
 
     ### Verdict
 

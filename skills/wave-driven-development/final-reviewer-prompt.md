@@ -52,13 +52,24 @@ Subagent (general-purpose):
 
     [SWEEP_LINES]
 
-    These are findings earlier reviews raised that, before this workflow had
-    a sweep, would have left the run as follow-up issues: Minor findings,
-    findings on code the branch did not write, findings still open when a
-    task hit its fix cap. Each carries its origin. Route every one (Routing,
-    below); your own findings join the list. Where a ruling is recorded
-    against a finding, you are reading the controller's reasoning, not a
-    verdict you must accept.
+    For review #1 this is every `Sweep:` line and every `Task <N>: parked`
+    line in the ledger. From review #2 on it is only the `(late)` `Sweep:`
+    lines written since the previous full-branch review — everything older
+    was routed already.
+
+    A `Sweep:` line is a finding an earlier review raised that, before this
+    workflow had a sweep, would have left the run as a follow-up issue: a
+    Minor finding, a finding on code the branch did not write, a finding
+    still open when a task hit its fix cap. Each carries its origin.
+
+    A `Task <N>: parked` line is a finding the controller ruled on at a
+    task's fix cap — the reviewer wrong, or the point contestable — with
+    its ruling beside it. You are reading the controller's reasoning, not a
+    verdict you must accept: this is the finding's whole-branch second
+    look. Give it an origin as you would your own finding, and route it like
+    any other item; if you agree with the ruling, route it note.
+
+    Route every item (Routing, below); your own findings join the list.
 
     ## Prior Findings (review #2 onward)
 
@@ -235,7 +246,9 @@ Subagent (general-purpose):
         Since: [SINCE_SHA]
         Verdict: CLEAN
 
-    with `Verdict: MUST-FIX` instead when anything is routed must-fix. Full
+    with `Verdict: MUST-FIX` instead when anything is routed must-fix. The
+    example is indented only to set it apart here: in the file, each of the
+    three lines starts at column 0, with no leading spaces. Full
     40-character shas, nothing else on those lines: `wdd` reads them to
     decide whether this commit may ship, and a header it cannot parse counts
     as no review at all. Then a blank line, then the report above. Your
@@ -274,7 +287,9 @@ Subagent (general-purpose):
   printed for `[MERGE_BASE]..HEAD`, built fresh for this review. `none` for
   review #1
 - `[REPORT_FILE]` — REQUIRED: `<workspace>/final-review-[REVIEW_NUMBER].md`
-- `[SWEEP_LINES]` — the ledger's `Sweep:` lines, copied in full. `none` if
+- `[SWEEP_LINES]` — copied from the ledger in full. Review #1: every `Sweep:`
+  line and every `Task <N>: parked` line. Review #2 onward: only the `(late)`
+  `Sweep:` lines written since the previous full-branch review. `none` if
   there are none
 - `[PRIOR_FINDINGS]` — review #2 onward: the previous review's must-fix items
   and any ruling on one. `none` for review #1
