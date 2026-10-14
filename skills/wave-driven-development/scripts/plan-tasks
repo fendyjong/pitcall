@@ -26,6 +26,7 @@ BACKTICKED_RE = re.compile(r"`([^`]+)`")
 LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
 EXTENSION_RE = re.compile(r"\.\w+$")
 WAVES_HEADING_RE = re.compile(r"^##\s+Waves\s*$")
+SWEEP_HEADING_RE = re.compile(r"^##\s+Sweep\s*$")
 HEADING_RE = re.compile(r"^#{1,6}\s")
 WAVE_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|\s*([0-9,\s]*?)\s*\|")
 DEPENDS_RE = re.compile(r"^\s*-\s*Depends:\s*(.*?)\s*$", re.IGNORECASE)
@@ -116,8 +117,19 @@ def parse(text: str) -> tuple[list[dict], list[str]]:
     warnings: list[str] = []
     current: dict | None = None
     section: str | None = None
+    in_sweep = False
 
     for line in unfenced_lines(text):
+        if SWEEP_HEADING_RE.match(line):
+            # Every task below this heading belongs to the run's one sweep
+            # pass (SKILL.md, Final Review). The heading also ends the
+            # previous task's metadata region, so nothing under it is read as
+            # that task's Files or Interfaces.
+            in_sweep = True
+            current = None
+            section = None
+            continue
+
         heading = TASK_RE.match(line)
         if heading:
             current = {
@@ -125,6 +137,7 @@ def parse(text: str) -> tuple[list[dict], list[str]]:
                 "title": heading.group(2),
                 "files": [],
                 "interfaces": [],
+                "sweep": in_sweep,
             }
             tasks.append(current)
             section = None
@@ -304,7 +317,16 @@ def find_cycle(edges: dict[int, set[int]]) -> list[int] | None:
     return None
 
 
-def validate(tasks: list[dict], rows: list[tuple[int, list[int]]] | None) -> list[str]:
+def sweep_heading_count(text: str) -> int:
+    """How many `## Sweep` sections the plan has, fenced examples excluded."""
+    return sum(1 for line in unfenced_lines(text) if SWEEP_HEADING_RE.match(line))
+
+
+def validate(
+    tasks: list[dict],
+    rows: list[tuple[int, list[int]]] | None,
+    sweep_headings: int = 0,
+) -> list[str]:
     """Every rule reads a declared field. None interprets prose."""
     problems: list[str] = []
 
@@ -433,6 +455,26 @@ def validate(tasks: list[dict], rows: list[tuple[int, list[int]]] | None) -> lis
                 f"Task {n} declares Model: {tier!r} — must be one of {', '.join(MODEL_TIERS)}"
             )
 
+    # Rule 8 — the sweep is ONE pass, appended after the spec's waves
+    # (SKILL.md, Final Review). A second `## Sweep` section is a second pass,
+    # and a sweep task placed in a spec wave would be dispatched into a wave
+    # `wdd check` already counts as finished. Both are refused here rather
+    # than left to an instruction a controller can skip.
+    if sweep_headings > 1:
+        problems.append(
+            f"Rule 8: the plan has {sweep_headings} '## Sweep' sections — "
+            "a run gets one sweep pass"
+        )
+    spec_waves = [placed[n] for n in numbers if n in placed and not by_number[n]["sweep"]]
+    if spec_waves:
+        last_spec_wave = max(spec_waves)
+        for n in sorted(numbers):
+            if by_number[n]["sweep"] and n in placed and placed[n] <= last_spec_wave:
+                problems.append(
+                    f"Rule 8: sweep Task {n} is in wave {placed[n]}, but the last spec "
+                    f"wave is {last_spec_wave} — every sweep task runs after every spec wave"
+                )
+
     return problems
 
 
@@ -470,7 +512,7 @@ def main() -> int:
         return 0
 
     rows = parse_waves(text)
-    problems = validate(tasks, rows)
+    problems = validate(tasks, rows, sweep_heading_count(text))
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)
