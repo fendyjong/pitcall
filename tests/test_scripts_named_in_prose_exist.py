@@ -29,12 +29,17 @@ pins that rather than leaving it to be rediscovered.
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
+from typing import Callable, NamedTuple, Optional
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SELF_REL = "tests/test_scripts_named_in_prose_exist.py"
+
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import lane_config  # noqa: E402
 
 # A file directly inside any directory named `scripts`, at any depth. The repo
 # has two such directories today and must not need editing when it has three.
@@ -75,10 +80,14 @@ VAR_PREFIX = re.compile(r"^\$\{[^}]*\}/")
 MANIFEST = ".claude-plugin/plugin.json"
 GITHUB_REPO = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
 
-# A git ref in a GitHub link, as one segment -- with the `refs/heads/` or
-# `refs/tags/` qualifier GitHub's own Raw button writes, e.g.
-# `raw/refs/heads/main/README.md`.
-REF = r"(?:refs/(?:heads|tags)/)?[^/]+/"
+# A git ref in a GitHub link, captured as one segment -- with the
+# `refs/heads/` or `refs/tags/` qualifier GitHub's own Raw button writes,
+# e.g. `raw/refs/heads/main/README.md`.
+REF = r"((?:refs/(?:heads|tags)/)?[^/]+)/"
+
+# An abbreviated or full commit id: the one bare ref read as a commit
+# rather than a name -- see `exists_at()`.
+SHA = re.compile(r"[0-9a-f]{7,40}")
 
 # Markdown's autolink, `<https://...>`: brackets around a concrete URL.
 AUTOLINK = re.compile(r"<([a-z][a-z0-9+.-]*://[^<>\s]+)>", re.IGNORECASE)
@@ -158,10 +167,24 @@ def repo_slug(root):
     return f"{match[1]}/{match[2]}"
 
 
-def repo_relative(token, repo):
-    """The path a link into `repo` names from the repository root, or None.
+class Repo(NamedTuple):
+    """What a link into this repository is judged against.
 
-    A link into this repository is a claim about this tree. Its known
+    `slug` is `owner/name` (see `repo_slug()`) and `branch` the default
+    branch. `exists_at(ref, path)` answers for a link pinned to any other
+    ref -- see `link_resolves()`. Without it every pinned link is skipped.
+    """
+
+    slug: str
+    branch: str
+    exists_at: Optional[Callable[[str, str], Optional[bool]]] = None
+
+
+def repo_link(token, slug):
+    """`(ref, path)` for a link into `slug`, the path from the repository
+    root, or None.
+
+    A link into this repository is a claim this checkout can judge. Its known
     prefix -- `github.com/<owner>/<name>/(blob|tree|raw)/<ref>/` or
     `raw.githubusercontent.com/<owner>/<name>/<ref>/` -- is stripped whole,
     the way `normalize()` strips `${VAR}/` and `~/`, and no path segment past
@@ -170,23 +193,20 @@ def repo_relative(token, repo):
     `URL=https://...`, `--url=https://...` and `[text](https://...)` are
     still read; `clean()` then drops what the sentence left on its end.
 
-    None means there is no claim to judge: no repo was given, the URL points
-    anywhere else -- another repository, another host, `http://host:port` --
-    whose tree this checkout cannot see, or it is a link into this
-    repository in a shape not listed above (a `blame/` page, say).
+    None means there is no claim to judge: the URL points anywhere else --
+    another repository, another host, `http://host:port` -- whose tree this
+    checkout cannot see, or it is a link into this repository in a shape not
+    listed above (a `blame/` page, say).
 
-    `<ref>` is read as one segment (see `REF`), and every ref is checked
-    against this checkout's tree. A ref holding a slash beyond `refs/heads/`
-    (`feat/x`) leaves part of itself on the path and the link fails to
-    resolve; a branch link rots when the branch is deleted anyway.
+    `<ref>` is read as one segment (see `REF`). A branch holding a slash
+    (`feat/x`) is read as the ref `feat` with `x/` left on the path -- a
+    branch name either way, so the link is skipped (see `exists_at()`).
 
     The match ignores case because GitHub resolves owner and repository
     names that way -- `FendyJong/Pitcall` is still this repository. The path
-    after the prefix keeps its case; `resolves()` compares it exactly.
+    after the prefix keeps its case; `link_resolves()` compares it exactly.
     """
-    if repo is None:
-        return None
-    owner, name = (re.escape(part) for part in repo.split("/"))
+    owner, name = (re.escape(part) for part in slug.split("/"))
     link = re.search(
         rf"https?://(?:(?:www\.)?github\.com/{owner}/{name}/(?:blob|tree|raw)/{REF}"
         rf"|raw\.githubusercontent\.com/{owner}/{name}/{REF})",
@@ -194,8 +214,84 @@ def repo_relative(token, repo):
     )
     if link is None:
         return None
+    ref = link[1] or link[2]
     # A `#L10` line anchor or `?plain=1` is not part of the path.
-    return clean(re.split(r"[?#]", token[link.end():], maxsplit=1)[0])
+    return ref, clean(re.split(r"[?#]", token[link.end():], maxsplit=1)[0])
+
+
+def link_resolves(ref, path, tracked_paths, repo):
+    """True or False for whether a link's `path` exists at its `ref`, or None
+    when the gate cannot know and the link is skipped.
+
+    Either way the path starts at the repository root, so only an exact
+    match resolves it: `blob/main/scripts/wdd` names a root-level
+    `scripts/wdd`, and GitHub serves a 404 for it whatever lives under
+    `skills/`.
+
+    A link to the default branch or `HEAD` names the files this branch will
+    merge, so it is judged against the tracked paths -- not git's copy of
+    the default branch, which lacks a script this same branch adds and
+    links. Any other ref names the files at that ref, which `exists_at`
+    looks up: a permalink to a script renamed since stays quiet, and a wrong
+    path in one still fails.
+    """
+    if ref in (repo.branch, "HEAD", f"refs/heads/{repo.branch}"):
+        return path in tracked_paths
+    if repo.exists_at is None:
+        return None
+    return repo.exists_at(ref, path)
+
+
+def exists_at(root):
+    """`Repo.exists_at` for a real checkout: git's answer at a commit or tag.
+
+    None -- skip the link -- for a ref that is neither. A branch other than
+    the default is skipped even when this clone has it: whether it does
+    depends on what was fetched, so the same document could pass here and
+    fail in CI. So is a sha git does not know: a typo, or a commit only an
+    unmerged pull request holds, which GitHub still serves -- flagging it
+    would fail CI on what may be a correct link. A known sha or tag answers
+    the same here and in CI, since `require_full_history` already holds.
+    """
+    def commit(ref):
+        # A `refs/heads/` ref, or any branch name, is neither candidate.
+        name = ref.removeprefix("refs/tags/")
+        candidates = [f"refs/tags/{name}"]
+        if name == ref and SHA.fullmatch(name):
+            candidates.append(name)
+        for candidate in candidates:
+            result = _git(root, "rev-parse", "--verify", "--quiet",
+                          f"{candidate}^{{commit}}")
+            if result.returncode == 0:
+                return result.stdout.strip()
+        return None
+
+    def answer(ref, path):
+        sha = commit(ref)
+        if sha is None:
+            return None
+        return _git(root, "cat-file", "-e", f"{sha}:{path}").returncode == 0
+
+    return answer
+
+
+def this_repo(root):
+    """The `Repo` a real checkout's links are judged against.
+
+    `default_branch` is read through `lane_config`, the plugin's own config
+    reader, rather than a second one here; it fails loudly for the same
+    reason `repo_slug()` does.
+    """
+    try:
+        branch = lane_config.load_config(root)["default_branch"]
+    except RuntimeError as exc:
+        raise AssertionError(f"cannot read default_branch: {exc}") from exc
+    if not isinstance(branch, str) or not branch:
+        raise AssertionError(
+            f"default_branch is {branch!r}: a link to the default branch "
+            f"cannot be told from a pinned one without it."
+        )
+    return Repo(repo_slug(root), branch, exists_at(root))
 
 
 def tracked(root):
@@ -241,7 +337,7 @@ def clean(token):
     not a stray, so the leading strip uses `LEADING_TRIM` instead of `TRIM`.
     Trailing punctuation carries no such ambiguity.
 
-    `repo_relative()` calls it without `normalize()`: the path it cuts out of
+    `repo_link()` calls it without `normalize()`: the path it cuts out of
     a URL starts at the repository root, so there is no prefix to read.
     """
     return token.lstrip(LEADING_TRIM).rstrip(TRIM)
@@ -283,33 +379,27 @@ def normalize(token):
     return token
 
 
-def resolves(token, tracked_paths, anchored=False):
+def resolves(token, tracked_paths):
     """A cited path resolves if a tracked path is it, or ends with it.
 
     Documents cite `scripts/plan-tasks` relative to the skill that owns it,
     while git tracks `skills/wave-driven-development/scripts/plan-tasks`.
     Requiring an exact match would flag every correct citation in the repo.
-    An unanchored token has already been through `normalize()`, which handles
+    Callers pass a token already run through `normalize()`, which handles
     the mirror case -- a citation LONGER than the tracked path, e.g.
     `${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd` --
-    that plain suffix matching alone cannot.
-
-    An `anchored` token -- the path out of a URL into this repository --
-    starts at the repository root, so only an exact match resolves it:
-    `blob/main/scripts/wdd` names a root-level `scripts/wdd`, and GitHub
-    serves a 404 for it whatever lives under `skills/`.
+    that plain suffix matching alone cannot. A path out of a URL is judged by
+    `link_resolves()` instead: it starts at the repository root.
     """
-    if anchored:
-        return token in tracked_paths
     return any(p == token or p.endswith("/" + token) for p in tracked_paths)
 
 
 def problems_in(text, path, dead, tracked_paths, repo=None):
     """The gate's whole judgement, over one document's text.
 
-    `repo` is this repository's `owner/name`, which decides which URLs are
-    claims about this checkout. Without it every URL reads as foreign;
-    `problems()` always passes one.
+    `repo` is the `Repo` that decides which URLs are claims about this
+    checkout. Without it every URL reads as foreign; `problems()` always
+    passes one.
     """
     found = []
     for span in spans(text):
@@ -322,28 +412,34 @@ def problems_in(text, path, dead, tracked_paths, repo=None):
             if "<" in raw or ">" in raw:
                 # A token holding a placeholder like `<name>`, or wrapped
                 # whole in angle brackets like `<scripts/name>`, is prose
-                # showing the SHAPE of a path, not a claim that one exists. Checked on `raw`, before any
-                # stripping: `TRIM` would eat a bracket sitting at the
-                # token's own edge and leave this guard blind to
-                # `<scripts/name>` specifically. This idiom is already live
-                # and correct in this repo: `wdd/<plan-slug>/progress.md`
-                # (SKILL.md:817), `.pitcall/receipts/<sha>.json`
-                # (SKILL.md:1131), and `repos/<owner>`
-                # (commands/spec-review.md:28). A false positive on correct
+                # showing the SHAPE of a path, not a claim that one exists.
+                # Checked on `raw`, before any stripping: `TRIM` would eat a
+                # bracket sitting at the token's own edge and leave this
+                # guard blind to `<scripts/name>` specifically. This idiom
+                # is already live and correct in this repo:
+                # `wdd/<plan-slug>/progress.md` (SKILL.md:817),
+                # `.pitcall/receipts/<sha>.json` (SKILL.md:1131), and
+                # `repos/<owner>` (commands/spec-review.md:28). A false positive on correct
                 # prose is how a check gets switched off rather than fixed,
                 # which is the failure this gate exists to avoid.
                 continue
-            anchored = "://" in raw
-            if anchored:
+            if "://" in raw:
                 # A URL into this repository is a claim about this tree and
                 # is checked; any other URL is not, and is skipped. Skipping
                 # every URL, as this once did, kept a correct link quiet but
-                # swallowed a wrong one too (#17) -- see `repo_relative()`.
-                token = repo_relative(raw, repo)
-                if token is None:
+                # swallowed a wrong one too (#17) -- see `repo_link()`.
+                link = repo_link(raw, repo.slug) if repo else None
+                if link is None:
                     continue
-            else:
-                token = clean(normalize(raw))
+                ref, target = link
+                if (CITED_PATH.search(target)
+                        and link_resolves(ref, target, tracked_paths, repo) is False):
+                    found.append(
+                        f"{path}: `{raw}` names a path under scripts/ that "
+                        f"does not exist at {ref}"
+                    )
+                continue
+            token = clean(normalize(raw))
             if token in dead:
                 found.append(
                     f"{path}: `{raw}` is named here but no longer exists in "
@@ -352,7 +448,7 @@ def problems_in(text, path, dead, tracked_paths, repo=None):
                     f"entry), write it unbackticked -- this check exists "
                     f"because a backticked name reads as a live instruction."
                 )
-            elif CITED_PATH.search(token) and not resolves(token, tracked_paths, anchored):
+            elif CITED_PATH.search(token) and not resolves(token, tracked_paths):
                 found.append(
                     f"{path}: `{raw}` names a path under scripts/ that no "
                     f"tracked file matches, or is not yet tracked"
@@ -367,7 +463,7 @@ def scanned_files(tracked_paths):
 def problems(root):
     """Empty list when every script named in prose exists."""
     require_full_history(root)
-    repo = repo_slug(root)
+    repo = this_repo(root)
     tracked_paths = tracked(root)
     scanned = scanned_files(tracked_paths)
     assert scanned, "no non-.py tracked files to scan - the enumeration did not run"
@@ -529,10 +625,10 @@ def test_a_scripts_placeholder_is_not_a_path_claim():
 
 def test_a_whole_placeholder_wrapped_in_angle_brackets_is_not_a_path_claim():
     """`<scripts/name>` is the same placeholder idiom wrapped whole, not
-    `scripts/<name>` with the brackets on the last segment. `TRIM` strips a bracket sitting at either edge of a
-    token BEFORE the placeholder guard used to look, so this shape tokenized
-    to a clean `scripts/name` and fired. The guard must check `raw`, not the
-    trimmed form.
+    `scripts/<name>` with the brackets on the last segment. `TRIM` strips a
+    bracket sitting at either edge of a token BEFORE the placeholder guard
+    used to look, so this shape tokenized to a clean `scripts/name` and fired.
+    The guard must check `raw`, not the trimmed form.
     """
     found = problems_in("see `<scripts/name>` in the loader", "docs/x.md", set(), [])
     assert found == [], "a whole-token placeholder is not a claim that a file exists"
@@ -591,8 +687,8 @@ def test_a_unified_diff_path_prefix_resolves():
 
 # --- URLs: a link into this repository names a path from its root ------------
 
-REPO = "fendyjong/pitcall"
-BLOB = f"https://github.com/{REPO}/blob/main"
+REPO = Repo("fendyjong/pitcall", "main")
+BLOB = f"https://github.com/{REPO.slug}/blob/main"
 
 
 def test_a_correct_url_into_this_repo_is_not_flagged():
@@ -652,7 +748,7 @@ def test_a_line_anchor_or_query_does_not_hide_the_path():
 
 
 def test_a_raw_content_url_is_checked_the_same_way():
-    raw = f"https://raw.githubusercontent.com/{REPO}/main"
+    raw = f"https://raw.githubusercontent.com/{REPO.slug}/main"
     found = problems_in(
         f"fetch `{raw}/scripts/lane.py`", "docs/x.md", set(), ["scripts/lane.py"],
         repo=REPO,
@@ -697,13 +793,13 @@ LINK_SHAPES = [
 def test_every_link_shape_is_read(shape):
     tracked_paths = ["scripts/lane.py"]
     found = problems_in(
-        shape.format(repo=REPO, path="scripts/lane.py"), "docs/x.md", set(),
+        shape.format(repo=REPO.slug, path="scripts/lane.py"), "docs/x.md", set(),
         tracked_paths, repo=REPO,
     )
     assert found == [], "a correct link must stay quiet"
 
     found = problems_in(
-        shape.format(repo=REPO, path="scripts/nope.py"), "docs/x.md", set(),
+        shape.format(repo=REPO.slug, path="scripts/nope.py"), "docs/x.md", set(),
         tracked_paths, repo=REPO,
     )
     assert found and "nope.py" in found[0], "a wrong link must fail"
@@ -712,9 +808,10 @@ def test_every_link_shape_is_read(shape):
 def test_a_dot_in_the_repo_name_matches_only_a_dot():
     """Unescaped, `.` in `acme/w.x` would read `acme/wXx` -- another
     repository -- as this one, and judge its links against this tree."""
+    repo = Repo("acme/w.x", "main")
     wrong = "see `https://github.com/{}/blob/main/scripts/nope`"
-    assert problems_in(wrong.format("acme/wXx"), "docs/x.md", set(), [], repo="acme/w.x") == []
-    found = problems_in(wrong.format("acme/w.x"), "docs/x.md", set(), [], repo="acme/w.x")
+    assert problems_in(wrong.format("acme/wXx"), "docs/x.md", set(), [], repo=repo) == []
+    found = problems_in(wrong.format("acme/w.x"), "docs/x.md", set(), [], repo=repo)
     assert found and "nope" in found[0]
 
 
@@ -735,6 +832,60 @@ def test_a_url_into_another_repository_is_not_checked():
     found = problems_in(
         "see `https://github.com/obra/superpowers/blob/main/skills/x/scripts/y`",
         "docs/x.md", set(), ["scripts/lane.py"], repo=REPO,
+    )
+    assert found == []
+
+
+# --- the ref: the default branch is this tree, a pinned ref is its own -------
+
+
+def test_the_default_branch_is_the_tracked_tree():
+    """`main` is no constant: the `Repo` says which branch is the default,
+    and `HEAD` and `refs/heads/<default>` name the same tree."""
+    repo = Repo("acme/widget", "trunk")
+    for ref in ("trunk", "HEAD", "refs/heads/trunk"):
+        url = f"https://github.com/acme/widget/blob/{ref}/scripts/{{}}"
+        assert problems_in(f"`{url.format('real')}`", "d.md", set(),
+                           ["scripts/real"], repo=repo) == [], ref
+        found = problems_in(f"`{url.format('nope')}`", "d.md", set(),
+                            ["scripts/real"], repo=repo)
+        assert found and f"at {ref}" in found[0], ref
+
+
+def test_a_pinned_link_is_judged_at_its_own_ref():
+    """A sha or tag link names the files at that ref, not this tree's: a
+    permalink to a script renamed since stays quiet, a wrong path in one
+    still fails, and a ref the lookup cannot place is skipped."""
+    asked = []
+
+    def exists_at(ref, path):
+        asked.append((ref, path))
+        return {"scripts/old-name": True, "scripts/nope": False}.get(path)
+
+    repo = Repo("acme/widget", "main", exists_at)
+    url = "https://github.com/acme/widget/blob/{}/scripts/{}"
+    tracked_paths = ["scripts/new-name"]
+
+    def judge(ref, name):
+        return problems_in(f"`{url.format(ref, name)}`", "d.md", set(),
+                           tracked_paths, repo=repo)
+
+    assert judge("0123abcd", "old-name") == [], "renamed since: still a correct permalink"
+    found = judge("v1.0.0", "nope")
+    assert found and "at v1.0.0" in found[0]
+    assert judge("refs/tags/v1.0.0", "unknown") == [], "None skips the link"
+    assert judge("feat/x", "old-name") == [], "a slashed branch is the ref `feat`"
+    assert asked == [("0123abcd", "scripts/old-name"), ("v1.0.0", "scripts/nope"),
+                     ("refs/tags/v1.0.0", "scripts/unknown"),
+                     ("feat", "x/scripts/old-name")]
+
+
+def test_without_a_lookup_every_pinned_link_is_skipped():
+    """A pinned link is never judged against this tree: here the path is
+    missing from it, and the link must still stay quiet."""
+    found = problems_in(
+        f"see `https://github.com/{REPO.slug}/blob/0123abcd/scripts/old-name`",
+        "docs/x.md", set(), ["scripts/new-name"], repo=REPO,
     )
     assert found == []
 
@@ -788,26 +939,98 @@ def test_a_missing_manifest_fails_rather_than_skipping_urls(tmp_path):
         repo_slug(tmp_path)
 
 
-def test_the_gate_itself_checks_urls(tmp_path):
-    """`problems()` must read the slug AND pass it on. The tests above drive
-    `problems_in()` directly, and this repository cites no script by URL, so
-    dropping either half would make every URL foreign again with CI green --
-    #17's false negative one level up."""
+CONFIG = {"bringup": None, "validate": None, "default_branch": "trunk",
+          "required_check": "ci"}
+
+
+def _config(root, data=CONFIG):
+    (root / ".pitcall").mkdir(parents=True)
+    (root / ".pitcall" / "config.json").write_text(json.dumps(data))
+    return root
+
+
+def _repo(tmp_path):
     root = tmp_path / "r"
-    (root / "scripts").mkdir(parents=True)
-    (root / "scripts" / "real").write_text("x\n")
-    _manifest(root, {"repository": "https://github.com/acme/widget"})
-    (root / "README.md").write_text(
-        "see `https://github.com/acme/widget/blob/main/scripts/real`\n"
-        "and `https://github.com/acme/widget/blob/main/scripts/nope`\n"
-    )
+    root.mkdir()
     _out(tmp_path, "init", "-q", str(root))
     _out(root, "config", "user.email", "t@example.com")
     _out(root, "config", "user.name", "t")
+    return root
+
+
+def _commit(root, message):
     _out(root, "add", "-A")
-    _out(root, "commit", "-qm", "one")
+    _out(root, "commit", "-qm", message)
+    return _out(root, "rev-parse", "HEAD").strip()
+
+
+def test_this_repo_reads_the_slug_and_the_default_branch(tmp_path):
+    root = _config(_manifest(tmp_path, {"repository": "https://github.com/acme/widget"}))
+    repo = this_repo(root)
+    assert (repo.slug, repo.branch) == ("acme/widget", "trunk")
+
+
+@pytest.mark.parametrize("data", [
+    None,
+    {k: v for k, v in CONFIG.items() if k != "default_branch"},
+    {**CONFIG, "default_branch": ""},
+    {**CONFIG, "default_branch": None},
+])
+def test_an_unreadable_default_branch_fails_loudly(tmp_path, data):
+    """Without it a link to the default branch cannot be told from a pinned
+    one. An AssertionError, like every other refusal here, never a bare
+    RuntimeError from the config reader."""
+    _manifest(tmp_path, {"repository": "https://github.com/acme/widget"})
+    if data is not None:
+        _config(tmp_path, data)
+    with pytest.raises(AssertionError, match="default_branch"):
+        this_repo(tmp_path)
+
+
+def test_exists_at_answers_for_a_sha_or_tag_and_skips_the_rest(tmp_path):
+    root = _repo(tmp_path)
+    (root / "scripts").mkdir()
+    (root / "scripts" / "old-name").write_text("x\n")
+    first = _commit(root, "add")
+    _out(root, "tag", "v1")
+    _out(root, "mv", "scripts/old-name", "scripts/new-name")
+    _commit(root, "rename")
+    branch = _out(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    answer = exists_at(root)
+
+    assert answer(first, "scripts/old-name") is True
+    assert answer(first[:7], "scripts/old-name") is True, "an abbreviated sha"
+    assert answer(first, "scripts/new-name") is False, "not there yet at that sha"
+    assert answer("v1", "scripts/old-name") is True
+    assert answer("refs/tags/v1", "scripts/new-name") is False
+    assert answer(branch, "scripts/new-name") is None, "a branch is skipped"
+    assert answer(f"refs/heads/{branch}", "scripts/new-name") is None
+    assert answer("deadbeefdeadbeef", "scripts/old-name") is None, "an unknown sha"
+
+
+def test_the_gate_itself_checks_urls(tmp_path):
+    """`problems()` must build the `Repo` AND pass it on. The tests above
+    drive `problems_in()` directly, and this repository cites no script by
+    URL, so dropping any part of it would make URLs foreign again with CI
+    green -- #17's false negative one level up. The default branch is not
+    `main` here, so a hard-coded `main` fails this too."""
+    root = _config(_manifest(_repo(tmp_path), {"repository": "https://github.com/acme/widget"}))
+    (root / "scripts").mkdir()
+    (root / "scripts" / "old-name").write_text("x\n")
+    first = _commit(root, "add")
+    _out(root, "mv", "scripts/old-name", "scripts/real")
+    blob = "https://github.com/acme/widget/blob"
+    (root / "README.md").write_text(
+        f"see `{blob}/trunk/scripts/real`\n"
+        f"and `{blob}/trunk/scripts/nope`\n"
+        f"and `{blob}/{first}/scripts/old-name`\n"
+        f"and `{blob}/{first}/scripts/nope`\n"
+    )
+    _commit(root, "rename")
     found = problems(root)
-    assert len(found) == 1 and "scripts/nope" in found[0], found
+    assert len(found) == 2, found
+    assert "trunk/scripts/nope" in found[0] and "at trunk" in found[0]
+    assert f"{first}/scripts/nope" in found[1] and f"at {first}" in found[1]
 
 
 def test_a_wrong_intermediate_path_still_fails_to_resolve():
