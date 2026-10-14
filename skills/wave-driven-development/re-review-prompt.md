@@ -71,6 +71,15 @@ Subagent (general-purpose):
     specific doubt that no existing run answers — and then a focused test,
     never a package-wide suite.
 
+    ## Where Each Finding Came From
+
+    New breakage in the fix diff is **introduced** by definition. Tag each
+    Out-of-Scope Observation **introduced** or **pre-existing**, measured
+    against the branch's merge-base, [MERGE_BASE]. A pre-existing one
+    carries its evidence — `<path>:<line> at <merge-base7>`, or a
+    reproduction that fails at [MERGE_BASE] — and without it the controller
+    treats the observation as introduced.
+
     ## Output Format
 
     Your final message is the report itself: begin directly with the first
@@ -91,8 +100,9 @@ Subagent (general-purpose):
 
     ### Out-of-Scope Observations
 
-    Issues you noticed entirely outside the fix diff. Non-blocking; the
-    controller ledgers these for the final review. "None" if none.
+    Issues you noticed entirely outside the fix diff, each with its origin
+    tag. Non-blocking; the controller records each as a `Sweep:` line for
+    the sweep that follows the spec's waves. "None" if none.
 
     ### Verdict
 
@@ -108,6 +118,8 @@ Subagent (general-purpose):
   previous review, copied verbatim, one per bullet
 - `[REPORT_FILE]` — the implementer's report file (fix reports appended)
 - `[FIX_BASE_SHA]` — the head the previous review saw
+- `[MERGE_BASE]` — REQUIRED: `git merge-base origin/<default-branch> HEAD`;
+  origin tags are measured against it
 - `[HEAD_SHA]` — current commit
 - `[DIFF_FILE]` — the path `scripts/review-package PLAN_FILE FIX_BASE HEAD` printed
 
