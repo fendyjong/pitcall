@@ -193,7 +193,9 @@ def repo_link(token, slug):
 
     The path ends at a `#L10` line anchor or `?plain=1`, and at the quote or
     bracket that closes `<https://...>`, `[t](<https://...>)` or
-    `href="https://..."`. It is percent-decoded, as GitHub decodes it.
+    `href="https://..."`. It is percent-decoded, as GitHub decodes it --
+    after the cut, so a `%3F` stays part of a name -- and a run of slashes
+    reads as one.
 
     None means there is no claim to judge: the URL points anywhere else --
     another repository, another host, `http://host:port` -- whose tree this
@@ -220,6 +222,8 @@ def repo_link(token, slug):
         return None
     ref = link[1] or link[2]
     path = unquote(re.split(r"[?#\"'>]", token[link.end():], maxsplit=1)[0])
+    # GitHub serves `blob/main//scripts/x` as `blob/main/scripts/x`.
+    path = re.sub(r"/{2,}", "/", path).lstrip("/")
     if "<" in path or any(part in (".", "..") for part in path.split("/")):
         return None
     return ref, clean(path)
@@ -262,8 +266,9 @@ def exists_at(root):
     A tag link whose first path segment is missing at that tag is skipped
     too: with a tag `v2` and a branch `v2/hotfix`, `blob/v2/hotfix/...` is a
     link to the branch, which `REF` reads as the tag with `hotfix/` on the
-    path. Only a file counts, as in the tracked-paths judge: `cat-file -e`
-    alone would also pass a directory.
+    path. Only what `git ls-files` would list counts, as in the tracked-paths
+    judge -- a file, or a submodule's gitlink: `cat-file -e` alone would also
+    pass a directory.
     """
     def commit(ref):
         """`(sha, tagged)`, or None. A branch name is neither candidate."""
@@ -279,6 +284,8 @@ def exists_at(root):
         return None
 
     def kind(sha, path):
+        if "\0" in path:
+            return None  # a decoded `%00`: no object, and no argv either
         result = _git(root, "cat-file", "-t", f"{sha}:{path}")
         return result.stdout.strip() if result.returncode == 0 else None
 
@@ -289,7 +296,7 @@ def exists_at(root):
         sha, tagged = found
         if tagged and kind(sha, path.split("/", 1)[0]) is None:
             return None
-        return kind(sha, path) == "blob"
+        return kind(sha, path) in ("blob", "commit")
 
     return answer
 
@@ -805,6 +812,10 @@ LINK_SHAPES = [
     "see `(<https://github.com/{repo}/blob/main/{path}>)`",
     "see `[it](<https://github.com/{repo}/blob/main/{path}>)`",
     '```html\n<a href="https://github.com/{repo}/blob/main/{path}">it</a>\n```\n',
+    '```html\n<img src="https://github.com/{repo}/raw/main/{path}"/>\n```\n',
+    "```html\n<img src='https://github.com/{repo}/raw/main/{path}'/>\n```\n",
+    "```html\n<td><https://github.com/{repo}/blob/main/{path}></td>\n```\n",
+    "see `https://github.com/{repo}/blob/main//{path}`",
     "```markdown\nsee [it](https://github.com/{repo}/blob/main/{path})\n```\n",
     "```bash\nURL=https://raw.githubusercontent.com/{repo}/main/{path}\n```\n",
     "```bash\ntool --url=https://raw.githubusercontent.com/{repo}/main/{path}\n```\n",
@@ -854,6 +865,11 @@ def test_a_percent_encoded_path_is_decoded():
     found = problems_in(f"`{BLOB}/scripts/nope%2Epy`", "d.md", set(),
                         tracked_paths, repo=REPO)
     assert found and "nope%2Epy" in found[0]
+
+    # Decoded after the cut: `%3F` is a `?` in the file name, not a query.
+    found = problems_in(f"`{BLOB}/scripts/lane.py%3Fx`", "d.md", set(),
+                        tracked_paths, repo=REPO)
+    assert found and "lane.py%3Fx" in found[0]
 
 
 def test_a_link_to_a_missing_file_outside_scripts_is_not_this_gates_claim():
@@ -1065,9 +1081,10 @@ def test_exists_at_answers_for_a_sha_or_tag_and_skips_the_rest(tmp_path):
     assert answer(branch, "scripts/new-name") is None, "a branch is skipped"
     assert answer(f"refs/heads/{branch}", "scripts/new-name") is None
     assert answer("deadbeefdeadbeef", "scripts/old-name") is None, "an unknown sha"
-    assert answer(first[:4], "scripts/old-name") is None, "too short to be read as a sha"
+    assert answer(first[:6], "scripts/old-name") is None, "too short to be read as a sha"
     assert answer(f"refs/tags/{first}", "scripts/old-name") is None, "no such tag"
     assert answer(first, "scripts") is False, "a directory is not a file"
+    assert answer(first, "scripts/old-name\0") is False, "a decoded %00 is no crash"
 
     blob = _out(root, "rev-parse", "HEAD:scripts/new-name").strip()
     tree = _out(root, "rev-parse", "HEAD:scripts").strip()
@@ -1078,6 +1095,16 @@ def test_exists_at_answers_for_a_sha_or_tag_and_skips_the_rest(tmp_path):
     # tag with `hotfix/` on the path, which cannot exist there.
     assert answer("v1", "hotfix/scripts/new-name") is None
     assert answer("v1", "scripts/nope") is False, "a wrong path at a tag still fails"
+    assert answer(first, "nope/scripts/old-name") is False, "a sha holds no slash: judged"
+
+    # A submodule's gitlink is listed by `git ls-files`, so the tracked-paths
+    # judge resolves it; the pinned judge must agree.
+    # Committed straight from the index: `_commit`'s `add -A` would stage the
+    # gitlink's missing directory as a deletion.
+    _out(root, "update-index", "--add", "--cacheinfo", f"160000,{first},scripts/sub")
+    _out(root, "commit", "-qm", "gitlink")
+    linked = _out(root, "rev-parse", "HEAD").strip()
+    assert answer(linked, "scripts/sub") is True
 
 
 def test_the_gate_itself_checks_urls(tmp_path):
