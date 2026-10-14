@@ -1351,7 +1351,11 @@ ship**, and every commit on the branch sits inside some review's range — evide
 commit, for the same reason as the lane receipt. That includes rebasing the branch, or GitHub's
 "Update branch": either produces a new head no review covered, and a rebase also rewrites every
 reviewed sha and so breaks rule 4's link — after a rebase the chain restarts from review #1, and
-that review counts against the three-review budget.
+that review counts against the three-review budget. Before the restarted review #1 writes
+`final-review-1.md`, rename every existing `final-review-<k>.md` to
+`final-review-<k>.superseded-<sha7>.md`, `<sha7>` being that file's old `Reviewed:` sha: the chain
+reads only names that are exactly `final-review-<k>.md`, so the old verdicts drop out of it while
+their history stays on disk.
 
 The whole-branch review is load-bearing, not a formality. **This is the second
 of the two review stages, and the one that catches what the first cannot:** on

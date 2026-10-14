@@ -437,6 +437,21 @@ def test_a_lone_review_zero_is_no_review_at_all(repo):
     assert "rule 1" in r.stderr
 
 
+def test_superseded_verdicts_beside_a_restarted_chain_are_not_read(repo):
+    """After a rebase the chain restarts at review #1, and the old verdict files
+    are renamed `final-review-<k>.superseded-<sha7>.md` (SKILL.md, The verdict
+    chain). Read as part of the chain, the old #2 would make the fresh #1 look
+    like a chain of two whose newest review saw a commit HEAD no longer is."""
+    base, one, two = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base, "MUST-FIX").rename(ws / f"final-review-1.superseded-{one[:7]}.md")
+    verdict(ws, 2, one, one).rename(ws / f"final-review-2.superseded-{one[:7]}.md")
+    verdict(ws, 1, two, base)
+    r = chain(repo, ws, two)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "1 full-branch review(s)" in r.stdout
+
+
 def test_an_unknown_command_is_a_usage_error(tmp_path):
     assert ledger_cmd(tmp_path, "bogus", "x").returncode == 2
 

@@ -252,8 +252,8 @@ Subagent (general-purpose):
 
     A pre-existing tag without evidence is treated as introduced. Report a
     pre-existing problem you notice in code you read at its real severity:
-    it is not discarded as out of scope — the controller collects it for the
-    sweep that follows the spec's waves.
+    it is not discarded as out of scope — the controller collects it as a
+    `Sweep:` line, routed by the next full-branch review.
 
     ## Output Format
 
