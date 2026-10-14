@@ -89,8 +89,10 @@ fi
 # SKILL.md already tells the planner to take the base from it and "never a name
 # assumed here". This is the same answer from the same place.
 #
-# `check` never calls this: it compares local refs only, and has no business
-# failing because of a config key it does not use.
+# Every subcommand reads it. `cleanup` gates deletion on it, `ship` pushes
+# against it and `merge` lands into it; and `check`, `ship` and `merge` all
+# check the verdict chain, whose rule 5 asks whether review #1 started on
+# `origin/<default_branch>` -- a question with no answer without the key.
 require_base_branch() {
   # `if !` suppresses `set -e` for the assignment, so the refusal below runs
   # instead of the script dying silently. project-config writes its own
@@ -237,18 +239,35 @@ attach_closing_keyword() {
 # reason `attach_closing_keyword` gives: a number that resolves to nothing, or
 # to an issue in whatever repository `gh` happens to point at, must not become
 # a live closing keyword.
+#
+# Each reader's exit status is READ, not discarded. Discarded, a reader that
+# failed and one with nothing to say look the same: the PR silently lacks its
+# section -- or worse, a failed `closes` confirms nothing and the section still
+# writes every `Closes #N` unchecked. So a failure says which step and stops.
+# Their stderr flows through, because the diagnosis is the useful part.
 attach_sweep_section() {
-  local pr_ref="${1:-}" body section unresolved="" n
+  local pr_ref="${1:-}" body section listed unresolved="" n rc
   [ -n "$pr_ref" ] || return 0
 
-  for n in $("$HERE/wdd-ledger" closes "$LEDGER" 2>/dev/null || true); do
+  rc=0
+  listed="$("$HERE/wdd-ledger" closes "$LEDGER")" || rc=$?
+  if [ "$rc" != 0 ]; then
+    note "the sweep section was not added: 'wdd-ledger closes' exited $rc, so no closing keyword could be confirmed."
+    return 0
+  fi
+  for n in $listed; do
     if ! gh issue view "$n" --json number >/dev/null 2>&1; then
       note "the sweep fixed #$n, which does not resolve in this repository -- 'Closes #$n' left out."
       unresolved="${unresolved:+$unresolved,}$n"
     fi
   done
 
-  section="$("$HERE/wdd-ledger" sweep-section "$LEDGER" --unresolved "$unresolved" 2>/dev/null || true)"
+  rc=0
+  section="$("$HERE/wdd-ledger" sweep-section "$LEDGER" --unresolved "$unresolved")" || rc=$?
+  if [ "$rc" != 0 ]; then
+    note "the sweep section was not added: 'wdd-ledger sweep-section' exited $rc."
+    return 0
+  fi
   [ -n "$section" ] || return 0
 
   body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null || true)"

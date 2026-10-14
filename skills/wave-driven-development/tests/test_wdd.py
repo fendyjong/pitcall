@@ -8,6 +8,7 @@ failure mode nothing downstream would notice.
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -1181,6 +1182,50 @@ def test_a_second_ship_does_not_repeat_the_sweep_section(run, gh):
 def test_ship_without_sweep_lines_adds_no_section(run, gh):
     r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
+    assert not (gh["dir"] / "body.txt").exists()
+
+
+def fail_ledger_step(gh, step, status=7):
+    """Make ONE `wdd-ledger` subcommand exit non-zero, and nothing else.
+
+    No ledger content can do this: `wdd` reads the same ledger with `stops`
+    and `sweep-guard` while verifying, so input that breaks the sweep-section
+    reader breaks verification first and `ship` never reaches the PR.
+    `wdd-ledger` runs under `#!/usr/bin/env python3`, so a `python3` first on
+    PATH intercepts exactly the call named and hands every other one on.
+    """
+    real = shutil.which("python3")
+    shim = Path(gh["env"]["PATH"].split(":")[0]) / "python3"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        f'case " $* " in *"/wdd-ledger {step} "*)\n'
+        f'  echo "wdd-ledger: injected failure" >&2; exit {status} ;;\n'
+        "esac\n"
+        f'exec "{real}" "$@"\n'
+    )
+    shim.chmod(0o755)
+
+
+def test_ship_says_so_when_the_sweep_section_cannot_be_built(run, gh):
+    """Soft, but spoken: a reader that failed must not look like one with nothing to say."""
+    write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
+    (gh["dir"] / "issue-10").write_text("")
+    fail_ledger_step(gh, "sweep-section")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "'wdd-ledger sweep-section' exited 7" in r.stdout, r.stdout
+    assert not (gh["dir"] / "body.txt").exists()
+
+
+def test_ship_writes_no_unconfirmed_close_when_the_closes_cannot_be_listed(run, gh):
+    """Every `Closes #N` is confirmed to resolve before it is written. With the
+    list unreadable none can be, so no section is written -- not one that closes
+    #10 unchecked."""
+    write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
+    fail_ledger_step(gh, "closes")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "'wdd-ledger closes' exited 7" in r.stdout, r.stdout
     assert not (gh["dir"] / "body.txt").exists()
 
 
