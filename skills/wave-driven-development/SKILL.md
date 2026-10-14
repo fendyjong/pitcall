@@ -695,13 +695,16 @@ or a ⚠️ item you confirmed as a real gap. Three routes leave it before it
 starts:
 
 - **Minor findings never enter the loop.** Record each in the ledger as you go,
-  as a `Sweep:` line carrying its origin tag (Ledger, below). Review #1 routes
-  that list, and a small item is fixed in this run's sweep rather than filed
-  (Final Review, below). A roll-up nobody reads is a silent discard.
+  as a `Sweep:` line carrying its origin tag (Ledger, below) — add `(late)` when
+  the task is a sweep task. The next full-branch review routes that list: during
+  the spec's waves that is review #1, and a small item is fixed in this run's
+  sweep rather than filed (Final Review, below). A roll-up nobody reads is a
+  silent discard.
 - **A `pre-existing` finding, any severity, never enters the loop:** record it as
-  `Sweep: pre-existing — <finding> — from Task <N> review — evidence: <evidence>`;
-  review #1 routes it. The task did not cause it, so the task's loop is the
-  wrong place to fix it. The evidence rule still holds (Final Review, Where a
+  `Sweep: pre-existing — <finding> — from Task <N> review — evidence: <evidence>`,
+  adding `(late)` after `pre-existing` when the task is a sweep task; the next
+  full-branch review routes it. The task did not cause it, so the task's loop is
+  the wrong place to fix it. The evidence rule still holds (Final Review, Where a
   finding came from): a `pre-existing` tag with no evidence, or evidence that
   does not hold, is treated as `introduced` — and then it does enter the loop.
 - **A finding labelled plan-mandated** — or any finding that conflicts with
@@ -1091,7 +1094,7 @@ resumed dispatch, so nothing else carries this forward.
 | The integrator hits a merge conflict | Hard BLOCKED. Under the core invariant this cannot happen unless the plan violated its own guarantee, so it is a planning defect, not a merge to resolve. Re-validate the plan and surface it. |
 | A task's diff touches an undeclared path | Spec failure for that task; it enters the fix loop. If the file is genuinely needed, the plan is wrong — fix the plan and re-validate before continuing. |
 | An implementer reports NEEDS_CONTEXT | Answer and re-dispatch. Siblings continue unaffected. |
-| A sweep task cannot finish — its 5-round cap, or its item outgrows admission | It is never merged, and no wave runs after the sweep range. A `sweep` or approved `ask` item is re-routed `issue`, its amendment line struck through; a `must-fix` item becomes `Sweep: introduced must-fix (late)` for review #2's fix dispatch. Remove its worktree (`scripts/wave-worktree remove <slug> <N>`, which keeps the branch), rename the branch out of the task namespace with `git branch -m <slug>-t<N> <slug>-dropped-t<N>`, and record `Ruling: <item> dropped — branch <slug>-dropped-t<N> at <sha7> — <why>`: `wdd` refuses every unmerged `<slug>-t<N>`, and merging the branch to quiet it would land the work this row exists to keep out. `cleanup` leaves the renamed branch alone — it is the only copy of the attempt. The retry-in-the-next-wave above does not apply. |
+| A sweep task cannot finish — its 5-round cap, or its item outgrows admission | It is never merged, and no wave runs after the sweep range. A `sweep` or approved `ask` item is re-routed `issue`, its amendment line struck through; a `must-fix` item becomes `Sweep: introduced must-fix (late)` for review #2's fix dispatch. Remove its worktree (`scripts/wave-worktree remove <slug> <N>`, which keeps the branch), rename the branch out of the task namespace with `git branch -m <slug>-t<N> <slug>-dropped-t<N>`, push it (`git push origin <slug>-dropped-t<N>`) so the re-routed issue, which names the branch and its tip sha, links to something that resolves, and record `Ruling: <item> dropped, branch <slug>-dropped-t<N> at <sha7> — <why it could not finish> — <what it costs if wrong>`: `wdd` refuses every unmerged `<slug>-t<N>`, and merging the branch to quiet it would land the work this row exists to keep out. `cleanup` leaves the renamed branch alone — it is the only copy of the attempt. The retry-in-the-next-wave above does not apply. |
 | Review #3, or any later review, leaves a must-fix open | `Final review #<k>: BLOCKED at <sha7>`; stop, and hand over the open findings, every review report, and the fix history. |
 
 ## Automation boundary
@@ -1297,10 +1300,12 @@ the sweep range** — `wdd` refuses a wave dispatched after `<B>`, and a second 
 is not merged into the plan branch, and merging this one to quiet it would land exactly the work
 this paragraph keeps out. Remove the task's worktree with `scripts/wave-worktree remove <slug> <N>`
 (which keeps the branch), rename the branch with
-`git branch -m <slug>-t<N> <slug>-dropped-t<N>`, and record
-`Ruling: <item> dropped — branch <slug>-dropped-t<N> at <sha7> — <why>`. `cleanup` does not delete
-it: it is the only copy of the dropped attempt, and the `issue` a `sweep` or `ask` item is
-re-routed to names the branch, so the attempt can be picked up.
+`git branch -m <slug>-t<N> <slug>-dropped-t<N>`, push it with
+`git push origin <slug>-dropped-t<N>` — task branches are otherwise local, and a link to a ref in
+this clone resolves for nobody else — and record
+`Ruling: <item> dropped, branch <slug>-dropped-t<N> at <sha7> — <why it could not finish> — <what it costs if wrong>`.
+`cleanup` does not delete it: it is the only copy of the dropped attempt, and the `issue` a `sweep`
+or `ask` item is re-routed to names the branch and its tip sha, so the attempt can be picked up.
 
 ### Reviews #2 and #3
 
@@ -1316,7 +1321,8 @@ Each is `final-reviewer-prompt.md` on the most capable model, given:
 - as `[SWEEP_LINES]`, only the `(late)` `Sweep:` lines written since the previous full-branch
   review — everything older was routed by a review already;
 - `open-issues.json` rewritten first, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABEL]` and `[SPEC_ISSUE]`
-  as for review #1; `[REPORT_FILE]` is `<workspace>/final-review-<k>.md`.
+  as for review #1; `[REPORT_FILE]` is `<workspace>/final-review-<k>.md` — after an
+  owner-directed chain restart, the file name set out in The verdict chain, below.
 
 Their routes are `must-fix`, `issue` and `note` only. If review #2 routes anything `must-fix`:
 **one fix dispatch** carrying the complete list — never one fixer per finding; per-finding fixers
@@ -1348,14 +1354,25 @@ unless the chain covers `HEAD`, and `merge` unless it covers the PR head:
 
 So **anything that changes the code after the last review needs another review before it can
 ship**, and every commit on the branch sits inside some review's range — evidence pinned to a
-commit, for the same reason as the lane receipt. That includes rebasing the branch, or GitHub's
-"Update branch": either produces a new head no review covered, and a rebase also rewrites every
-reviewed sha and so breaks rule 4's link — after a rebase the chain restarts from review #1, and
-that review counts against the three-review budget. Before the restarted review #1 writes
-`final-review-1.md`, rename every existing `final-review-<k>.md` to
-`final-review-<k>.superseded-<sha7>.md`, `<sha7>` being that file's old `Reviewed:` sha: the chain
-reads only names that are exactly `final-review-<k>.md`, so the old verdicts drop out of it while
-their history stays on disk.
+commit, for the same reason as the lane receipt.
+
+**A branch with a full-branch review is never rebased.** Bring it up to date by merging the default
+branch in — GitHub's default "Update branch", or `gh pr update-branch` without `--rebase`. The old
+head stays an ancestor of the new one, so rule 4 holds and the chain simply extends: the new head
+gets the next full-branch review under the rules above, numbered on from the last, and it counts
+against the three-review budget like any other. A rebase rewrites every reviewed sha, so no later
+review can link to the chain. **If one happens anyway, stop and ask** your human partner; never
+restart the chain on your own.
+
+On an owner-directed restart, rename the existing verdict files to
+`final-review-<k>.superseded-<sha7>.md` (`<sha7>` being each file's old `Reviewed:` sha), so the
+chain, which reads only names that are exactly `final-review-<k>.md`, no longer sees them while
+their history stays on disk. The restarted chain's **file** names begin again at
+`final-review-1.md` — the chain rules need that, and its first review starts from a fresh
+`$MERGE_BASE` — passed to the reviewer explicitly as `[REPORT_FILE]`. Its **ledger** lines and the
+reviewer's `[REVIEW_NUMBER]` continue the run's count: `Final review #4:` resolves
+`Final review #3: BLOCKED`, routing from #2 on stays `must-fix`, `issue` and `note`, and the budget
+is your human partner's call, because they directed the restart.
 
 The whole-branch review is load-bearing, not a formality. **This is the second
 of the two review stages, and the one that catches what the first cannot:** on
@@ -1514,8 +1531,10 @@ one produces a merge commit combining two states nothing validated, the
 migration-number hazard described below; a `DIRTY` one GitHub will not merge at
 all, so waiting on it only spends the bound to arrive at the same answer.
 `DIRTY` is the commoner of the two — measured 16 to 4 across 20 open PRs.
-Either remedy changes the head sha, so the lane has to run again: the receipt
-does not carry across.
+The remedy for either is to **merge the default branch in, never rebase** (Final
+Review, The verdict chain), resolving any conflict in that merge. That changes
+the head sha, so the new head needs a full-branch review, then the lane on that
+commit, then `merge` again: neither the review nor the receipt carries across.
 
 **That guard is best-effort, and the reason is GitHub's rather than this
 script's.** `mergeStateStatus` is computed lazily, and the first view of a PR is
@@ -1545,8 +1564,9 @@ green check alone was never enough — CI proved the branch clean against the
 base *as of when it ran*, and two branches can each add a differently-named
 migration claiming the same number, which git merges cleanly and leaves broken.
 Requiring the branch to be **up to date with the base** is what closes that, and
-it also keeps the receipt honest: updating a stale branch changes its head sha,
-which invalidates the receipt along with it.
+it also keeps the receipt honest: updating a stale branch — by merging the base
+in, never by rebasing — changes its head sha, which invalidates the receipt and
+needs a full-branch review of the new head.
 
 `cleanup` runs only once the plan branch is an ancestor of the default branch
 on `origin`; before that, deleting a task branch would destroy the only copy of

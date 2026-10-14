@@ -87,6 +87,29 @@ def test_an_earlier_numbered_review_does_not_resolve_a_review_stop(tmp_path):
     assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 1
 
 
+def test_an_owner_directed_restart_resolves_a_stop_by_continuing_the_count(tmp_path):
+    """After a rebase the owner may direct a chain restart (SKILL.md, The verdict
+    chain). Its verdict FILES begin again at final-review-1.md, but its ledger
+    line continues the run's count -- which is what resolves the stop, with no
+    edit to the ledger."""
+    p = ledger(tmp_path, "Final review #3: BLOCKED at 3333333",
+               "Ruling: restart the verdict chain after the rebase — the owner directed it — one more review",
+               "Final review #4: CLEAN at 4444444")
+    r = ledger_cmd(tmp_path, "stops", str(p))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_restart_that_numbers_its_ledger_line_from_one_stays_stopped(tmp_path):
+    """Numbering the restarted review's LEDGER line #1, like its file, leaves the
+    #3 stop open for good: no later line can resolve it, and the only way past is
+    the ledger edit the skill forbids."""
+    p = ledger(tmp_path, "Final review #3: BLOCKED at 3333333",
+               "Final review #1: CLEAN at 4444444")
+    r = ledger_cmd(tmp_path, "stops", str(p))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.stdout.strip() == "Final review #3: BLOCKED at 3333333"
+
+
 @pytest.mark.parametrize("marker", ["Task 2: BLOCKED", "Final review #3: BLOCKED at abc1234"])
 def test_an_unterminated_stop_marker_still_stops(tmp_path, marker):
     """A crash mid-append leaves a fragment. It may RAISE a stop: failing closed

@@ -286,7 +286,10 @@ Subagent (general-purpose):
 - `[WHOLE_BRANCH_PACKAGE]` — review #2 onward: the path `review-package`
   printed for `[MERGE_BASE]..HEAD`, built fresh for this review. `none` for
   review #1
-- `[REPORT_FILE]` — REQUIRED: `<workspace>/final-review-[REVIEW_NUMBER].md`
+- `[REPORT_FILE]` — REQUIRED: normally `<workspace>/final-review-[REVIEW_NUMBER].md`;
+  after an owner-directed chain restart, the file name the controller gives
+  (the restarted chain numbers its files from 1, while `[REVIEW_NUMBER]`
+  continues the run's count — SKILL.md, The verdict chain)
 - `[SWEEP_LINES]` — copied from the ledger in full. Review #1: every `Sweep:`
   line and every `Task <N>: parked` line. Review #2 onward: only the `(late)`
   `Sweep:` lines written since the previous full-branch review. `none` if
