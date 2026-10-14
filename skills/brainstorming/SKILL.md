@@ -48,7 +48,7 @@ override it:
   "quick and dirty is fine") whose output is an answer, not code you
   keep. Present the question and what you'll try in 2-3 sentences, get
   a nod, then find out as cheaply as correctness allows. No design
-  doc, no spec file. Report findings as a recommendation; anything you
+  doc, no spec comment. Report findings as a recommendation; anything you
   built stays labeled throwaway.
 - **Bounded** — a well-scoped change to code that already exists in
   this repo: a new flag, a small endpoint, a one-file fix.
@@ -59,7 +59,11 @@ override it:
   sentences to a few short paragraphs), and STOP. Implementation
   starts only after your human partner says yes to that design — a
   bounded task's approval is as hard a gate as an architectural
-  one. No spec file, no implementation plan document.
+  one. Its ending comes from the project's config, and your
+  classification sentence names it (Bounded Endings, below):
+  **directly** writes no spec comment and no plan document; **through
+  WDD** posts the approved design as the spec comment
+  pitcall:wave-driven-development plans from.
 - **Architectural** — new projects, new subsystems, changes that
   restructure how components fit together or alter interfaces others
   depend on. Follow the full process: questions, approaches, sectioned
@@ -70,11 +74,75 @@ When in doubt between two paths, take the heavier one. The ratchet is
 one-way: hidden complexity discovered mid-task upgrades the path —
 stop, say so, and step up. Nothing downgrades mid-task.
 
+**A bounded task upgraded to architectural starts the architectural
+path from scratch,** clarifying questions first; the bounded design is
+not an approved input to it. Code already committed when the upgrade
+happens stays on the branch: the architectural spec decides whether it
+is kept, reworked or reverted, and wave-driven-development's plan
+treats it as existing code. A bounded task already going through WDD
+has a v1 spec comment; the architectural spec replaces it in that same
+comment as `**Version:** 2` with `**Status:** draft`. Any edit after
+approval re-opens the gate, so the WDD run stops until your human
+partner approves the new version, and wave-driven-development then
+plans again from it — the plan argues from the spec, and the v1 plan
+argued from a spec that no longer stands.
+
 Solution-ready sits outside that ordering rather than at the bottom of it:
 it is decided by the script, on evidence, not by your judgement of how big
 the work looks. A `spec-review` DECISION finding on such an issue is proof
 the label was wrong, and demotes it to a brainstorming session with your
 human partner.
+
+## Bounded Endings
+
+When you classify a task as bounded, read the project's setting and name
+the ending in the same sentence as the classification:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/project-config --flag bounded_via_wdd
+```
+
+| It prints | Ending |
+|---|---|
+| `true` | **through WDD** |
+| `false` | **directly** — the project decided |
+| `unset` | **directly** — and if the project's own instructions in context (`CLAUDE.md`, `AGENTS.md`) require wave-driven-development, or a reviewed plan, for a change like this one, your short design message carries one line: *"This project's rules require WDD, but `bounded_via_wdd` is unset — set it, or run `/pitcall:init --force`."* |
+| an error (exit 2: a malformed value, or a config that cannot be read) | say so and ask which ending to use; do not guess |
+
+**Per-task override, heavier only.** Whatever the key says, your human
+partner may answer "through WDD" for a task — the heavier ending, as with
+paths. Nobody takes "directly" when the key says `true`: that is a
+downgrade, and nothing downgrades.
+
+After your human partner approves the short design:
+
+- **Directly** — implement through the normal development workflow (TDD
+  applies). No spec comment, no plan document.
+- **Through WDD:**
+  1. If the task has no work issue, create one — `gh issue create` with
+     no milestone, a title naming the change, and a body of one or two
+     sentences stating the request — and claim it:
+     `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/claim.py <n> --session <session-url>`.
+     The claim cuts `<branch_prefix><n>-<slug>` from the default branch;
+     the WDD run works on that branch, so `wdd ship` derives the issue
+     from the branch name and the PR closes it. If `claim` refuses (for
+     example, no `branch_prefix` configured), say so and ask how to
+     proceed; do not guess a branch name.
+  2. Post the approved design, verbatim, as a comment on that issue:
+
+     ```markdown
+     # Spec: <title>
+
+     **Version:** 1
+     **Issue:** #<n>
+     **Status:** approved (v1, YYYY-MM-DD) — bounded design approved in chat
+
+     <the design as approved>
+     ```
+
+  3. Invoke pitcall:wave-driven-development. No `spec-review` pass is
+     required — the design is short and already approved — though your
+     human partner may still ask for one.
 
 ## Anti-Pattern: "Too Simple To Need Approval"
 
@@ -99,6 +167,8 @@ artifact, never the approval.
 | "It grew, but I'm almost done — no need to re-classify" | Hidden complexity upgrades the path mid-task. Stop and say so. |
 | "They approved the spike, so the follow-up change is approved too" | Each task gets its own classification and its own approval. |
 | "This issue looks small, I'll label it solution-ready" | Size is a self-assessment, and the cheap answer and the self-serving answer are the same answer. The label requires a named check that fails today — a property of the issue, not a judgement about effort. |
+| "It's bounded, so I'll skip the spec comment even though this project requires WDD." | `bounded_via_wdd` decides. When it says WDD, the approved design is posted as the spec comment WDD plans from. |
+| "It grew mid-task, so I'll keep the bounded design as the spec." | An upgrade starts the architectural path from scratch. Committed code stays, and the new spec decides what happens to it. |
 
 ## Checklist
 
@@ -123,9 +193,9 @@ your path and complete them in order.
 **Bounded:**
 1. **Explore project context** — check files, docs, recent commits
 2. **Ask clarifying questions** — one at a time, the ones that matter
-3. **Present short design in chat** — approach, files touched, testing
+3. **Present short design in chat** — approach, files touched, testing, and the ending (Bounded Endings, above)
 4. **Get approval** — STOP and wait for an explicit yes; presenting the design and starting in the same breath is skipping the gate
-5. **Implement** — proceed with the normal development workflow (TDD applies); no plan document
+5. **Take the ending** — **directly**: implement through the normal development workflow (TDD applies), with no spec comment and no plan document; **through WDD**: create and claim the work issue if there is none, post the approved design as the spec comment, and invoke pitcall:wave-driven-development
 
 **Architectural:**
 1. **Explore project context** — check files, docs, recent commits
@@ -155,6 +225,7 @@ digraph brainstorming {
     "Human approves?" [shape=diamond];
     "Investigate; report recommendation" [shape=doublecircle];
     "Implement via normal workflow (no plan doc)" [shape=doublecircle];
+    "Post the design as the spec comment" [shape=box];
     "Explore project context" [shape=box];
     "Ask clarifying questions" [shape=box];
     "Propose 2-3 approaches" [shape=box];
@@ -174,7 +245,9 @@ digraph brainstorming {
     "Ask clarifying questions (bounded)" -> "Present short design in chat";
     "Present short design in chat" -> "Human approves?";
     "Human approves?" -> "Investigate; report recommendation" [label="spike: yes"];
-    "Human approves?" -> "Implement via normal workflow (no plan doc)" [label="bounded: yes"];
+    "Human approves?" -> "Implement via normal workflow (no plan doc)" [label="bounded: yes, directly"];
+    "Human approves?" -> "Post the design as the spec comment" [label="bounded: yes, through WDD"];
+    "Post the design as the spec comment" -> "Invoke wave-driven-development";
     "Hidden complexity? Upgrade path" -> "Classify: spike / bounded / architectural";
     "Explore project context" -> "Ask clarifying questions";
     "Ask clarifying questions" -> "Propose 2-3 approaches";
@@ -201,9 +274,12 @@ digraph brainstorming {
 **Terminal states are path-bound.** Architectural: the ONLY skill you
 invoke after brainstorming is pitcall:wave-driven-development — never
 frontend-design, mcp-builder, or any other implementation skill.
-Bounded: after approval, implementation proceeds directly through the
-normal development workflow; no plan document. Spike: the terminal
-state is a reported recommendation.
+Bounded: after approval, either implementation proceeds directly
+through the normal development workflow, with no spec comment and no
+plan document, or — through WDD — the approved design is posted as the
+spec comment and the only skill you invoke is
+pitcall:wave-driven-development. Spike: the terminal state is a
+reported recommendation.
 
 ## The Process
 
