@@ -69,9 +69,19 @@ FENCED = re.compile(r"^[ \t]*(`{3,})[^\n]*\n(.*?)^[ \t]*\1`*[ \t]*$", re.M | re.
 VAR_PREFIX = re.compile(r"^\$\{[^}]*\}/")
 
 # Where `repo_slug()` reads this repository's identity, and the one shape it
-# accepts there.
+# accepts there. The name classes are GitHub's own, so a `#readme` or
+# `?tab=` on the field cannot end up inside the slug -- a slug no link
+# matches would make every URL read as foreign.
 MANIFEST = ".claude-plugin/plugin.json"
-GITHUB_REPO = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+?)(?:\.git)?/?")
+GITHUB_REPO = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?")
+
+# A git ref in a GitHub link, as one segment -- with the `refs/heads/` or
+# `refs/tags/` qualifier GitHub's own Raw button writes, e.g.
+# `raw/refs/heads/main/README.md`.
+REF = r"(?:refs/(?:heads|tags)/)?[^/]+/"
+
+# Markdown's autolink, `<https://...>`: brackets around a concrete URL.
+AUTOLINK = re.compile(r"<([a-z][a-z0-9+.-]*://[^<>\s]+)>", re.IGNORECASE)
 
 # Punctuation a name picks up from the sentence around it. Stripped from
 # both ends by `clean()`'s trailing half; the leading half deliberately
@@ -148,19 +158,27 @@ def repo_slug(root):
     return f"{match[1]}/{match[2]}"
 
 
-def repo_relative(url, repo):
-    """The path a URL into `repo` names from the repository root, or None.
+def repo_relative(token, repo):
+    """The path a link into `repo` names from the repository root, or None.
 
-    None means the URL points anywhere else -- another repository, another
-    host, `http://host:port` -- and this checkout cannot see that tree, so
-    the URL is no claim the gate can judge. A link into this repository is
-    one: its known prefix is stripped whole, the way `normalize()` strips
-    `${VAR}/` and `~/`, and nothing past the prefix is touched, so a wrong
-    intermediate segment still fails to resolve.
+    A link into this repository is a claim about this tree. Its known
+    prefix -- `github.com/<owner>/<name>/(blob|tree|raw)/<ref>/` or
+    `raw.githubusercontent.com/<owner>/<name>/<ref>/` -- is stripped whole,
+    the way `normalize()` strips `${VAR}/` and `~/`, and no path segment past
+    it is touched, so a wrong intermediate segment still fails to resolve.
+    The link is searched for rather than anchored at the token's start, so
+    `URL=https://...`, `--url=https://...` and `[text](https://...)` are
+    still read; `clean()` then drops what the sentence left on its end.
 
-    `<ref>` is read as one segment. A ref holding a slash (`feat/x`) leaves
-    part of itself on the path and the link fails to resolve; a branch link
-    rots when the branch is deleted anyway, so cite `main` or a commit sha.
+    None means there is no claim to judge: no repo was given, the URL points
+    anywhere else -- another repository, another host, `http://host:port` --
+    whose tree this checkout cannot see, or it is a link into this
+    repository in a shape not listed above (a `blame/` page, say).
+
+    `<ref>` is read as one segment (see `REF`), and every ref is checked
+    against this checkout's tree. A ref holding a slash beyond `refs/heads/`
+    (`feat/x`) leaves part of itself on the path and the link fails to
+    resolve; a branch link rots when the branch is deleted anyway.
 
     The match ignores case because GitHub resolves owner and repository
     names that way -- `FendyJong/Pitcall` is still this repository. The path
@@ -169,15 +187,15 @@ def repo_relative(url, repo):
     if repo is None:
         return None
     owner, name = (re.escape(part) for part in repo.split("/"))
-    prefix = re.match(
-        rf"https?://(?:github\.com/{owner}/{name}/(?:blob|tree|raw)/[^/]+/"
-        rf"|raw\.githubusercontent\.com/{owner}/{name}/[^/]+/)",
-        url, re.IGNORECASE,
+    link = re.search(
+        rf"https?://(?:(?:www\.)?github\.com/{owner}/{name}/(?:blob|tree|raw)/{REF}"
+        rf"|raw\.githubusercontent\.com/{owner}/{name}/{REF})",
+        token, re.IGNORECASE,
     )
-    if prefix is None:
+    if link is None:
         return None
     # A `#L10` line anchor or `?plain=1` is not part of the path.
-    return re.split(r"[?#]", url[prefix.end():], maxsplit=1)[0]
+    return clean(re.split(r"[?#]", token[link.end():], maxsplit=1)[0])
 
 
 def tracked(root):
@@ -222,6 +240,9 @@ def clean(token):
     normalize() has run, any leading `.` that remains is a real character,
     not a stray, so the leading strip uses `LEADING_TRIM` instead of `TRIM`.
     Trailing punctuation carries no such ambiguity.
+
+    `repo_relative()` calls it without `normalize()`: the path it cuts out of
+    a URL starts at the repository root, so there is no prefix to read.
     """
     return token.lstrip(LEADING_TRIM).rstrip(TRIM)
 
@@ -268,7 +289,7 @@ def resolves(token, tracked_paths, anchored=False):
     Documents cite `scripts/plan-tasks` relative to the skill that owns it,
     while git tracks `skills/wave-driven-development/scripts/plan-tasks`.
     Requiring an exact match would flag every correct citation in the repo.
-    Callers pass a token already run through `normalize()`, which handles
+    An unanchored token has already been through `normalize()`, which handles
     the mirror case -- a citation LONGER than the tracked path, e.g.
     `${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd` --
     that plain suffix matching alone cannot.
@@ -293,11 +314,15 @@ def problems_in(text, path, dead, tracked_paths, repo=None):
     found = []
     for span in spans(text):
         for raw in tokens(span):
+            autolink = AUTOLINK.fullmatch(raw)
+            if autolink:
+                # Markdown's autolink: the brackets wrap a concrete URL, not
+                # a placeholder, so they must not reach the guard below.
+                raw = autolink[1]
             if "<" in raw or ">" in raw:
                 # A token holding a placeholder like `<name>`, or wrapped
-                # whole in angle brackets like `<scripts/name>` (markdown's
-                # own autolink shape), is prose showing the SHAPE of a path,
-                # not a claim that one exists. Checked on `raw`, before any
+                # whole in angle brackets like `<scripts/name>`, is prose
+                # showing the SHAPE of a path, not a claim that one exists. Checked on `raw`, before any
                 # stripping: `TRIM` would eat a bracket sitting at the
                 # token's own edge and leave this guard blind to
                 # `<scripts/name>` specifically. This idiom is already live
@@ -314,9 +339,7 @@ def problems_in(text, path, dead, tracked_paths, repo=None):
                 # is checked; any other URL is not, and is skipped. Skipping
                 # every URL, as this once did, kept a correct link quiet but
                 # swallowed a wrong one too (#17) -- see `repo_relative()`.
-                # `clean()` runs first, so a parenthesis or quote at the
-                # token's edge cannot hide the scheme from the prefix match.
-                token = repo_relative(clean(raw), repo)
+                token = repo_relative(raw, repo)
                 if token is None:
                     continue
             else:
@@ -505,9 +528,8 @@ def test_a_scripts_placeholder_is_not_a_path_claim():
 
 
 def test_a_whole_placeholder_wrapped_in_angle_brackets_is_not_a_path_claim():
-    """`<scripts/name>` -- markdown's own autolink shape -- is the same
-    placeholder idiom wrapped whole, not `scripts/<name>` with the brackets
-    on the last segment. `TRIM` strips a bracket sitting at either edge of a
+    """`<scripts/name>` is the same placeholder idiom wrapped whole, not
+    `scripts/<name>` with the brackets on the last segment. `TRIM` strips a bracket sitting at either edge of a
     token BEFORE the placeholder guard used to look, so this shape tokenized
     to a clean `scripts/name` and fired. The guard must check `raw`, not the
     trimmed form.
@@ -652,6 +674,50 @@ def test_a_raw_content_url_is_checked_the_same_way():
     assert found and "nope.py" in found[0]
 
 
+# Every link shape the gate reads. Each is written once naming a tracked
+# file and once naming a missing one, so a shape that silently stops being
+# read fails the second half rather than passing both.
+LINK_SHAPES = [
+    "see `https://github.com/{repo}/blob/main/{path}`",
+    "see `http://github.com/{repo}/blob/main/{path}`",
+    "see `https://www.github.com/{repo}/blob/main/{path}`",
+    "see `https://github.com/{repo}/tree/main/{path}`",
+    "see `https://github.com/{repo}/raw/main/{path}`",
+    # What GitHub's Raw button links to, and where it redirects.
+    "see `https://github.com/{repo}/raw/refs/heads/main/{path}`",
+    "see `https://raw.githubusercontent.com/{repo}/refs/heads/main/{path}`",
+    "see `<https://github.com/{repo}/blob/main/{path}>`",
+    "```markdown\nsee [it](https://github.com/{repo}/blob/main/{path})\n```\n",
+    "```bash\nURL=https://raw.githubusercontent.com/{repo}/main/{path}\n```\n",
+    "```bash\ntool --url=https://raw.githubusercontent.com/{repo}/main/{path}\n```\n",
+]
+
+
+@pytest.mark.parametrize("shape", LINK_SHAPES)
+def test_every_link_shape_is_read(shape):
+    tracked_paths = ["scripts/lane.py"]
+    found = problems_in(
+        shape.format(repo=REPO, path="scripts/lane.py"), "docs/x.md", set(),
+        tracked_paths, repo=REPO,
+    )
+    assert found == [], "a correct link must stay quiet"
+
+    found = problems_in(
+        shape.format(repo=REPO, path="scripts/nope.py"), "docs/x.md", set(),
+        tracked_paths, repo=REPO,
+    )
+    assert found and "nope.py" in found[0], "a wrong link must fail"
+
+
+def test_a_dot_in_the_repo_name_matches_only_a_dot():
+    """Unescaped, `.` in `acme/w.x` would read `acme/wXx` -- another
+    repository -- as this one, and judge its links against this tree."""
+    wrong = "see `https://github.com/{}/blob/main/scripts/nope`"
+    assert problems_in(wrong.format("acme/wXx"), "docs/x.md", set(), [], repo="acme/w.x") == []
+    found = problems_in(wrong.format("acme/w.x"), "docs/x.md", set(), [], repo="acme/w.x")
+    assert found and "nope" in found[0]
+
+
 def test_owner_case_does_not_turn_this_repo_into_another():
     """GitHub resolves owner and repo names case-insensitively, so this is
     still a link into this repository -- reading it as foreign would skip it."""
@@ -682,10 +748,12 @@ def test_without_a_repo_every_url_is_foreign():
     assert found == []
 
 
-def _manifest(tmp_path, data):
-    (tmp_path / ".claude-plugin").mkdir()
-    (tmp_path / ".claude-plugin" / "plugin.json").write_text(json.dumps(data))
-    return tmp_path
+def _manifest(root, data):
+    """`data` is written as JSON, or verbatim when it is already a string."""
+    (root / ".claude-plugin").mkdir(parents=True)
+    text = data if isinstance(data, str) else json.dumps(data)
+    (root / ".claude-plugin" / "plugin.json").write_text(text)
+    return root
 
 
 @pytest.mark.parametrize("url", [
@@ -701,17 +769,45 @@ def test_repo_slug_reads_the_manifest(tmp_path, url):
     {},
     {"repository": "https://gitlab.com/acme/widget"},
     {"repository": {"type": "git", "url": "https://github.com/acme/widget"}},
+    {"repository": "https://github.com/acme/widget#readme"},
+    {"repository": "https://github.com/acme/widget?tab=readme"},
+    "[1]",
+    "{",
 ])
 def test_an_unreadable_repository_fails_rather_than_skipping_urls(tmp_path, data):
     """Every URL would read as foreign, and the gate would pass while checking
-    none of them -- the same shape `require_full_history` refuses."""
-    with pytest.raises(AssertionError, match="repository"):
+    none of them -- the same shape `require_full_history` refuses. An
+    AssertionError specifically, never a bare AttributeError or
+    JSONDecodeError, so the failure names the manifest."""
+    with pytest.raises(AssertionError, match="plugin.json"):
         repo_slug(_manifest(tmp_path, data))
 
 
 def test_a_missing_manifest_fails_rather_than_skipping_urls(tmp_path):
     with pytest.raises(AssertionError, match="plugin.json"):
         repo_slug(tmp_path)
+
+
+def test_the_gate_itself_checks_urls(tmp_path):
+    """`problems()` must read the slug AND pass it on. The tests above drive
+    `problems_in()` directly, and this repository cites no script by URL, so
+    dropping either half would make every URL foreign again with CI green --
+    #17's false negative one level up."""
+    root = tmp_path / "r"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "real").write_text("x\n")
+    _manifest(root, {"repository": "https://github.com/acme/widget"})
+    (root / "README.md").write_text(
+        "see `https://github.com/acme/widget/blob/main/scripts/real`\n"
+        "and `https://github.com/acme/widget/blob/main/scripts/nope`\n"
+    )
+    _out(tmp_path, "init", "-q", str(root))
+    _out(root, "config", "user.email", "t@example.com")
+    _out(root, "config", "user.name", "t")
+    _out(root, "add", "-A")
+    _out(root, "commit", "-qm", "one")
+    found = problems(root)
+    assert len(found) == 1 and "scripts/nope" in found[0], found
 
 
 def test_a_wrong_intermediate_path_still_fails_to_resolve():
