@@ -235,14 +235,15 @@ def read_verdict(path: Path) -> tuple[str, str, str]:
     return reviewed.group(1), since.group(1), verdict.group(1)
 
 
-def is_ancestor(older: str, newer: str) -> bool:
+def is_ancestor(older: str, newer: str, rule: str) -> bool:
+    """Ancestry as a chain check; a git error refuses under the rule that asked."""
     r = subprocess.run(
         ["git", "merge-base", "--is-ancestor", older, newer],
         capture_output=True, text=True,
     )
     if r.returncode in (0, 1):
         return r.returncode == 0
-    raise Refusal(f"git could not compare {older[:7]} with {newer}: {r.stderr.strip()}")
+    raise Refusal(f"{rule}: git could not compare {older[:7]} with {newer}: {r.stderr.strip()}")
 
 
 def chain(workspace: Path, head: str, default_ref: str) -> str:
@@ -281,11 +282,11 @@ def chain(workspace: Path, head: str, default_ref: str) -> str:
                 f"#{k - 1} ended at {reviews[k - 2][0][:7]} -- the commits between "
                 "were never reviewed"
             )
-    for k, (rev, snc, _) in enumerate(reviews, start=1):
-        if not is_ancestor(snc, rev):
+        snc, rev = reviews[k - 1][1], reviews[k - 1][0]
+        if not is_ancestor(snc, rev, "rule 4"):
             raise Refusal(f"rule 4: review #{k}'s Since {snc[:7]} is not an ancestor of its Reviewed {rev[:7]}")
     first_reviewed, first_since, _ = reviews[0]
-    if not (is_ancestor(first_since, default_ref) and is_ancestor(first_since, first_reviewed)):
+    if not (is_ancestor(first_since, default_ref, "rule 5") and is_ancestor(first_since, first_reviewed, "rule 5")):
         raise Refusal(
             f"rule 5: review #1 starts at {first_since[:7]}, which is not on "
             f"{default_ref} -- branch commits before it were never reviewed"

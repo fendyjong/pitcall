@@ -46,6 +46,9 @@ def test_blocked_in_prose_is_not_a_stop_marker(tmp_path):
         "| T2 x T4 | ... | T4 Step 1 reports BLOCKED rather than proceeding |",
         "Ruling: the implementer should report BLOCKED — x — y",
         "Note: a gate that reports BLOCKED in prose — low value",
+        "Note: Task 2: BLOCKED is how a stop is recorded — gate",
+        "Ruling: Final review #3: BLOCKED means stop — x — y",
+        "| T2 | Task 2: BLOCKED | quoted |",
     )
     r = ledger_cmd(tmp_path, "stops", str(p))
     assert r.returncode == 0, r.stdout + r.stderr
@@ -314,6 +317,45 @@ def test_a_first_review_starting_on_the_branch_refuses_rule_5(repo):
     ws = repo.path / "ws"
     verdict(ws, 1, one, one)
     r = chain(repo, ws, one)
+    assert r.returncode == 1
+    assert "rule 5" in r.stderr
+
+
+def test_a_first_review_whose_since_is_not_an_ancestor_of_reviewed_refuses_rule_5(repo):
+    """Since_1 is on the default branch but off the reviewed line: rule 5, not rule 4."""
+    base = repo.git("rev-parse", "HEAD").stdout.strip()
+    side = commit(repo, "side")
+    repo.git("reset", "-q", "--hard", base)
+    one = commit(repo, "one")
+    repo.git("update-ref", "refs/remotes/origin/main", side)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, side)
+    r = chain(repo, ws, one)
+    assert r.returncode == 1
+    assert "rule 5" in r.stderr
+
+
+def test_a_second_review_whose_since_is_not_an_ancestor_of_its_reviewed_refuses_rule_4(repo):
+    """Since_2 == Reviewed_1 holds, but Reviewed_1 is not an ancestor of Reviewed_2."""
+    base = repo.git("rev-parse", "HEAD").stdout.strip()
+    one = commit(repo, "one")
+    repo.git("reset", "-q", "--hard", base)
+    two = commit(repo, "two")
+    repo.git("update-ref", "refs/remotes/origin/main", base)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base, "MUST-FIX")
+    verdict(ws, 2, two, one)
+    r = chain(repo, ws, two)
+    assert r.returncode == 1
+    assert "rule 4" in r.stderr
+
+
+def test_an_unresolvable_default_ref_refuses_rule_5_by_name(repo):
+    base, one, _ = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base)
+    r = run_script("wdd-ledger", "chain", str(ws), one, "origin/nonexistent",
+                   cwd=repo.path, env=repo.env)
     assert r.returncode == 1
     assert "rule 5" in r.stderr
 
