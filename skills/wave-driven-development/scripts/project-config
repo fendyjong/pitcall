@@ -48,7 +48,9 @@ other mode, a checkout with NO config file answers `unset` rather than
 failing: brainstorming runs in projects that never ran `init`, and a project
 with no config has made no decision. A config that exists but cannot be read,
 and a value that is not a JSON boolean, are errors — a flag that half-reads as
-true is worse than one that refuses.
+true is worse than one that refuses. A config that exists but lacks the
+loader's required keys is unreadable in that sense too, so a project that writes
+only this key gets exit 2, not `unset`.
 
 Usage: project-config [--scalar | --flag] KEY [CHECKOUT]
 Exit:  0 ok (list mode: including "no such key") | 2 usage, unreadable config,
@@ -64,23 +66,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 try:
-    from lane_config import config_path, load_config
+    from lane_config import ConfigNotFound, config_path, load_config
 except ImportError:  # pragma: no cover - a broken install, not a code path
     sys.exit("project-config: cannot import lane_config — the plugin is incomplete")
 
 
 def read_flag(key: str, checkout: str | None) -> int:
     """`--flag`: print `true`, `false` or `unset` for an optional boolean key."""
+    # One resolution of the config, inside the loader. Resolving it here as well
+    # repeated the legacy-location deprecation notice once per resolution.
     try:
-        if not config_path(checkout).exists():
-            print("unset")
-            return 0
         cfg = load_config(checkout)
-    except (RuntimeError, ValueError, OSError) as exc:
-        # ValueError is a config that will not parse as JSON; OSError is one
-        # that exists but cannot be read (a directory, a permission). The loader
-        # lets both through, and here both are the same answer: unreadable, not
-        # "no decision".
+    except ConfigNotFound:
+        print("unset")
+        return 0
+    except RuntimeError as exc:
+        # The loader reports an unreadable, unparseable or non-object config,
+        # and a missing required key, as RuntimeError: all unreadable here.
         sys.stderr.write(f"{exc}\n")
         return 2
 
@@ -90,9 +92,9 @@ def read_flag(key: str, checkout: str | None) -> int:
         return 0
     if not isinstance(value, bool):
         sys.stderr.write(
-            f"project-config: {key} must be true or false in "
-            f"{config_path(checkout)}, not a {type(value).__name__} ({value!r}) — "
-            "a flag that half-reads as true is worse than one that refuses\n"
+            f"project-config: {key} must be true or false, not a "
+            f"{type(value).__name__} ({value!r}) — a flag that half-reads as "
+            "true is worse than one that refuses\n"
         )
         return 2
     print("true" if value else "false")
