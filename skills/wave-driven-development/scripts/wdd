@@ -660,8 +660,12 @@ PY
         echo "  'require branches to be up to date' in branch protection covers" >&2
         echo "  this, but NOTHING HERE CAN OBSERVE WHETHER IT IS ENABLED, so" >&2
         echo "  this step does not assume it." >&2
-        echo "  Update the branch from $BASE. That changes its head sha, so" >&2
-        echo "  re-run the lane afterwards -- the receipt does not carry across." >&2
+        echo "  Update the branch by merging $BASE into it -- never rebase: a" >&2
+        echo "  rebase rewrites every sha a full-branch review covered. The merge" >&2
+        echo "  changes the head sha, so it needs" >&2
+        echo "  a full-branch review of the new head, then the lane on that commit," >&2
+        echo "  then this step again -- neither the review nor the receipt carries" >&2
+        echo "  across." >&2
         exit 1 ;;
       DIRTY)
         # The COMMON case, not the exotic one: measured 16 DIRTY to 4 BEHIND
@@ -671,8 +675,12 @@ PY
         echo "wdd: PR #$PR_NUM has conflicts with $BASE -- refusing to merge." >&2
         echo "  GitHub will not merge it in this state, so waiting for checks" >&2
         echo "  would only spend the bound to arrive at the same answer." >&2
-        echo "  Resolve the conflict. That changes the head sha, so re-run the" >&2
-        echo "  lane afterwards -- the receipt does not carry across." >&2
+        echo "  Merge $BASE into the branch and resolve the conflict there --" >&2
+        echo "  never rebase: a rebase rewrites every sha a full-branch review" >&2
+        echo "  covered. That changes the head sha, so it needs" >&2
+        echo "  a full-branch review of the new head, then the lane on that commit," >&2
+        echo "  then this step again -- neither the review nor the receipt carries" >&2
+        echo "  across." >&2
         exit 1 ;;
     esac
   }

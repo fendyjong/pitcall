@@ -345,6 +345,41 @@ def test_check_counts_every_task_branch(run):
     assert "task branches: 3" in r.stdout, r.stdout
 
 
+def dropped_branch(run, n=3):
+    """A sweep task that could not finish, handled the way SKILL.md says:
+    worktree gone, branch renamed `<slug>-dropped-t<N>`, its commit never
+    merged into the plan branch."""
+    b = f"{SLUG}-dropped-t{n}"
+    tree = git("rev-parse", "planbranch^{tree}", cwd=run["main"])
+    sha = git("-c", "user.email=t@t", "-c", "user.name=t", "commit-tree", tree,
+              "-p", "planbranch", "-m", "the attempt that could not finish", cwd=run["main"])
+    git("update-ref", f"refs/heads/{b}", sha, cwd=run["main"])
+    unmerged = subprocess.run(["git", "merge-base", "--is-ancestor", b, "planbranch"],
+                              cwd=run["main"]).returncode
+    assert unmerged == 1, "sanity: the dropped attempt is not merged into the plan branch"
+    return b
+
+
+def test_a_dropped_attempts_branch_does_not_block_the_finish(run):
+    """The rename is what takes a dropped sweep task out of the namespace `wdd`
+    checks for unmerged task branches. Left as `<slug>-t<N>`, it would make
+    every later `wdd` call refuse and invite merging the dropped work."""
+    dropped_branch(run)
+    r = finish(run["plan_wt"], "check", PLAN)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "task branches: 2" in r.stdout, r.stdout
+
+
+def test_cleanup_keeps_a_dropped_attempts_branch(run):
+    """It is the only copy of the attempt, and the re-routed issue names it."""
+    b = dropped_branch(run)
+    git("push", "-q", "origin", "planbranch:master", cwd=run["plan_wt"])
+    r = finish(run["plan_wt"], "cleanup", PLAN)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) == "", "sanity: cleanup ran"
+    assert git("branch", "--list", b, cwd=run["main"]) != ""
+
+
 # ---------------------------------------------------------------------------
 # `merge` — landing the PR on evidence rather than on attention.
 #
@@ -871,6 +906,10 @@ def test_a_pr_behind_its_base_is_refused_before_any_wait(run, gh):
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "behind" in r.stderr.lower()
+    # The remedy is a merge of the base, never a rebase, and the new head it
+    # makes needs a full-branch review before the lane and the merge.
+    assert "never rebase" in r.stderr
+    assert "full-branch review of the new head" in r.stderr
     assert merges(gh) == []
     assert not [c for c in calls(gh) if "statusCheckRollup" in c], \
         "a branch that cannot merge should not be waited on"
@@ -949,6 +988,8 @@ def test_a_conflicted_pr_is_refused_immediately_not_after_the_bound(run, gh):
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "conflict" in r.stderr.lower()
+    assert "never rebase" in r.stderr
+    assert "full-branch review of the new head" in r.stderr
     assert merges(gh) == []
     assert not [c for c in calls(gh) if "statusCheckRollup" in c], \
         "a PR that cannot merge should not be waited on"
