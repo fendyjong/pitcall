@@ -314,7 +314,9 @@ implementation starts.
 - **Carry a `**Version:** N` header, starting at 1.** A file spec had version identity for free —
   the commit sha. A comment edited in place has none, so a reader who quotes it may be quoting a
   state that has already moved. Approval names a version; any edit after approval bumps it and
-  re-opens the gate.
+  re-opens the gate — **except a WDD sweep amendment** (`## Amendment <K>`, written by the
+  controller during a run), which bumps it without re-opening the gate. Your human partner reviews
+  an amendment after the run, in the rulings list wave-driven-development hands over.
 - Use elements-of-style:writing-clearly-and-concisely skill if available
 - **A spec too large for one comment is a decomposition finding, not a splitting problem.** The
   limit is roughly 150,000 characters. Do not split a spec across comments: comment order is
