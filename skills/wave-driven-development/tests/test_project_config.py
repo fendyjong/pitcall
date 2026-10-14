@@ -14,6 +14,8 @@ and this script's whole job is feeding paths to `git checkout`.
 
 import json
 
+import pytest
+
 from conftest import run_script
 
 REQUIRED = {
@@ -166,3 +168,81 @@ def test_usage_error_exits_2(repo):
     r = run_script("project-config", cwd=repo.path, env=repo.env)
     assert r.returncode == 2
     assert "usage:" in r.stderr
+
+
+# --- `--flag`: an optional boolean, answered three ways -----------------------
+#
+# `false` and `unset` are different facts — a project's decision, and no
+# decision — and brainstorming's bounded path warns only on the second. So the
+# cases that matter are the ones a two-valued reader would collapse.
+
+
+def _flag(repo, key="bounded_via_wdd"):
+    return run_script("project-config", "--flag", key, cwd=repo.path, env=repo.env)
+
+
+def test_flag_prints_true(repo):
+    _config(repo, bounded_via_wdd=True)
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "true\n"
+
+
+def test_flag_prints_false(repo):
+    _config(repo, bounded_via_wdd=False)
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "false\n"
+
+
+def test_flag_reads_an_absent_key_as_unset(repo):
+    _config(repo)
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "unset\n"
+
+
+def test_flag_reads_null_as_unset(repo):
+    """`null` means "no such setting" everywhere else in the config; here too."""
+    _config(repo, bounded_via_wdd=None)
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "unset\n"
+
+
+def test_flag_reads_a_checkout_with_no_config_as_unset(repo):
+    """The one mode where no config is not an error.
+
+    Brainstorming runs in projects that never ran `init`; a project with no
+    config has made no decision, and failing would make every bounded task
+    there stop to ask.
+    """
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "unset\n"
+
+
+@pytest.mark.parametrize("value", ["yes", "true", 1, ["true"]])
+def test_flag_refuses_anything_but_a_json_boolean(repo, value):
+    """A string "true" is not true: a flag that half-reads as true is worse than one that refuses."""
+    _config(repo, bounded_via_wdd=value)
+    r = _flag(repo)
+    assert r.returncode == 2
+    assert r.stdout == ""
+    assert "bounded_via_wdd" in r.stderr
+
+
+def test_flag_refuses_a_config_that_will_not_parse(repo):
+    """A config that exists but cannot be read is an error, not "no decision"."""
+    (repo.path / "pitcall.config.json").write_text("{not json")
+    r = _flag(repo)
+    assert r.returncode == 2
+    assert r.stdout == ""
+
+
+def test_flag_refuses_a_config_that_exists_but_cannot_be_read(repo):
+    """An OSError on read (here: a directory at the config path) is unreadable, not "no decision"."""
+    (repo.path / "pitcall.config.json").mkdir()
+    r = _flag(repo)
+    assert r.returncode == 2
+    assert r.stdout == ""

@@ -40,7 +40,17 @@ config. `worktree_dir` and `plan_dir` are NOT in `REQUIRED_KEYS` — for those t
 this `--scalar` check is the only enforcement a missing key ever gets, so it
 fires on any project that has simply never set one, not only a broken config.
 
-Usage: project-config [--scalar] KEY [CHECKOUT]
+`--flag` reads an optional boolean and answers THREE ways — `true`, `false`
+or `unset` — because `false` and `unset` are different facts: `false` is a
+project's decision, `unset` is no decision, and brainstorming's bounded path
+warns only on the second. Absent and `null` both read `unset`. Unlike every
+other mode, a checkout with NO config file answers `unset` rather than
+failing: brainstorming runs in projects that never ran `init`, and a project
+with no config has made no decision. A config that exists but cannot be read,
+and a value that is not a JSON boolean, are errors — a flag that half-reads as
+true is worse than one that refuses.
+
+Usage: project-config [--scalar | --flag] KEY [CHECKOUT]
 Exit:  0 ok (list mode: including "no such key") | 2 usage, unreadable config,
        wrong type, or a missing/empty scalar
 """
@@ -59,16 +69,50 @@ except ImportError:  # pragma: no cover - a broken install, not a code path
     sys.exit("project-config: cannot import lane_config — the plugin is incomplete")
 
 
+def read_flag(key: str, checkout: str | None) -> int:
+    """`--flag`: print `true`, `false` or `unset` for an optional boolean key."""
+    try:
+        if not config_path(checkout).exists():
+            print("unset")
+            return 0
+        cfg = load_config(checkout)
+    except (RuntimeError, ValueError, OSError) as exc:
+        # ValueError is a config that will not parse as JSON; OSError is one
+        # that exists but cannot be read (a directory, a permission). The loader
+        # lets both through, and here both are the same answer: unreadable, not
+        # "no decision".
+        sys.stderr.write(f"{exc}\n")
+        return 2
+
+    value = cfg.get(key)
+    if value is None:
+        print("unset")
+        return 0
+    if not isinstance(value, bool):
+        sys.stderr.write(
+            f"project-config: {key} must be true or false in "
+            f"{config_path(checkout)}, not a {type(value).__name__} ({value!r}) — "
+            "a flag that half-reads as true is worse than one that refuses\n"
+        )
+        return 2
+    print("true" if value else "false")
+    return 0
+
+
 def main(argv: list[str]) -> int:
-    scalar = bool(argv) and argv[0] == "--scalar"
-    if scalar:
+    mode = argv[0] if argv and argv[0] in ("--scalar", "--flag") else None
+    if mode:
         argv = argv[1:]
     if not 1 <= len(argv) <= 2:
-        sys.stderr.write("usage: project-config [--scalar] KEY [CHECKOUT]\n")
+        sys.stderr.write("usage: project-config [--scalar | --flag] KEY [CHECKOUT]\n")
         return 2
 
     key = argv[0]
     checkout = argv[1] if len(argv) == 2 else None
+
+    if mode == "--flag":
+        return read_flag(key, checkout)
+    scalar = mode == "--scalar"
 
     try:
         cfg = load_config(checkout)
