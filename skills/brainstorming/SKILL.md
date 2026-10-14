@@ -26,7 +26,7 @@ that label IS the authorization. No other path may borrow it.
 
 Before your first question, classify the request and say the
 classification out loud — "this looks bounded, so I'll present a short
-design here rather than write a spec" — so your human partner can
+design here, and this project's setting ends it directly" — so your human partner can
 override it:
 
 - **Solution-ready** — an issue whose body already carries its own fix, and
@@ -119,15 +119,21 @@ After your human partner approves the short design:
 - **Directly** — implement through the normal development workflow (TDD
   applies). No spec comment, no plan document.
 - **Through WDD:**
-  1. If the task has no work issue, create one — `gh issue create` with
-     no milestone, a title naming the change, and a body of one or two
-     sentences stating the request — and claim it:
+  1. Make sure the work issue exists, is claimed, and is checked out. If
+     the task has no work issue, create one — `gh issue create` with no
+     milestone, a title naming the change, and a body of one or two
+     sentences stating the request. Then claim it, whether you just
+     created it or it already existed:
      `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/claim.py <n> --session <session-url>`.
-     The claim cuts `<branch_prefix><n>-<slug>` from the default branch;
-     the WDD run works on that branch, so `wdd ship` derives the issue
-     from the branch name and the PR closes it. If `claim` refuses (for
-     example, no `branch_prefix` configured), say so and ask how to
-     proceed; do not guess a branch name.
+     `claim` resumes this session's own live claim, refuses another
+     session's, and cuts `<branch_prefix><n>-<slug>` from the default
+     branch. If it refuses (another session's live claim, or no
+     `branch_prefix` configured), say so and ask how to proceed; do not
+     guess a branch name. Then adopt the claimed branch in a worktree —
+     Create the Workspace, below: "The work issue already claimed?" — and
+     run steps 2 and 3 from it. The WDD run then works on that branch, so
+     `wdd ship` derives the issue from the branch name and the PR closes
+     it.
   2. Post the approved design, verbatim, as a comment on that issue:
 
      ```markdown
@@ -195,7 +201,7 @@ your path and complete them in order.
 2. **Ask clarifying questions** — one at a time, the ones that matter
 3. **Present short design in chat** — approach, files touched, testing, and the ending (Bounded Endings, above)
 4. **Get approval** — STOP and wait for an explicit yes; presenting the design and starting in the same breath is skipping the gate
-5. **Take the ending** — **directly**: implement through the normal development workflow (TDD applies), with no spec comment and no plan document; **through WDD**: create and claim the work issue if there is none, post the approved design as the spec comment, and invoke pitcall:wave-driven-development
+5. **Take the ending** — **directly**: implement through the normal development workflow (TDD applies), with no spec comment and no plan document; **through WDD**: make sure the work issue exists and is claimed (created if there is none), adopt its branch in a worktree, post the approved design as the spec comment, and invoke pitcall:wave-driven-development
 
 **Architectural:**
 1. **Explore project context** — check files, docs, recent commits
@@ -352,6 +358,22 @@ implementation starts.
   `WorktreeCreate`, or a `--worktree` flag — over hand-rolled git. It owns
   placement, branching, and cleanup; a hand-rolled `git worktree add` used
   alongside one creates phantom state the harness can't see or manage.
+- **The work issue already claimed? Adopt its branch.** `claim` cuts
+  `<branch_prefix><n>-<slug>` from the default branch, so when the issue
+  was claimed — before brainstorming, or by the bounded path's through-WDD
+  ending — that branch already exists, and the `-b` form below fails on it
+  (`fatal: a branch named '…' already exists`). Check the existing branch
+  out instead, with no `-b` and no base ref, inside `worktree_dir` (confirm
+  it is git-ignored, as below):
+  ```bash
+  git worktree add <worktree_dir>/<n>-<slug> <branch_prefix><n>-<slug>
+  cd <worktree_dir>/<n>-<slug>
+  ```
+  A native worktree tool that can only create branches cannot adopt one:
+  add the worktree this way, then enter it with the tool's path option
+  where it has one. wave-driven-development's Phase 2 setup then finds
+  itself already in a linked worktree and uses it, so the run stays on the
+  claimed branch and `wdd ship` closes the issue.
 - **No native tool? Fall back to git — and always name the base ref
   explicitly:**
   ```bash

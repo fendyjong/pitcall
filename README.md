@@ -61,8 +61,11 @@ to recognise the right value in a project that has never seen this tool.
 
 ## Claiming and filing issues
 
-`scripts/claim.py` and `scripts/file.py` are human-run CLIs, invoked from this project's
-own checkout (not a project this plugin drives):
+`scripts/claim.py` and `scripts/file.py` are CLIs. A person runs them by hand from this
+repository's checkout, as below; the skills also run them inside the projects they drive,
+spelled `${CLAUDE_PLUGIN_ROOT}/scripts/claim.py` and `${CLAUDE_PLUGIN_ROOT}/scripts/file.py` —
+brainstorming's through-WDD bounded ending claims its work issue with `claim`, and
+wave-driven-development files what its sweep did not take with `file`:
 
 ```
 python3 scripts/claim.py <issue-number> [--session <url>] [--take]
