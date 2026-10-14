@@ -6,7 +6,10 @@ quiet on the input it must not fire on. A gate tested only for firing is how
 clean ledger.
 """
 
+import re
 from pathlib import Path
+
+import pytest
 
 from conftest import run_script
 
@@ -84,10 +87,20 @@ def test_an_earlier_numbered_review_does_not_resolve_a_review_stop(tmp_path):
     assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 1
 
 
-def test_a_truncated_final_line_is_not_read(tmp_path):
-    """A crash mid-append leaves a fragment; it is not a whole line yet."""
-    p = ledger(tmp_path, "Task 2: BLOCKED", whole=False)
-    assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 0
+@pytest.mark.parametrize("marker", ["Task 2: BLOCKED", "Final review #3: BLOCKED at abc1234"])
+def test_an_unterminated_stop_marker_still_stops(tmp_path, marker):
+    """A crash mid-append leaves a fragment. It may RAISE a stop: failing closed
+    on half a marker costs one look at the ledger, and failing open ships past it."""
+    r = ledger_cmd(tmp_path, "stops", str(ledger(tmp_path, marker, whole=False)))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.stdout.strip() == marker
+
+
+def test_an_unterminated_complete_line_does_not_resolve_a_stop(tmp_path):
+    """...and never RESOLVE one: half a `complete` line is not a finished task."""
+    p = ledger(tmp_path, "Task 2: BLOCKED",
+               "Task 2: complete (commits a..b, review clean, branch x-t2)", whole=False)
+    assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 1
 
 
 # --- sweep-guard --------------------------------------------------------------
@@ -115,6 +128,22 @@ def test_a_second_sweep_plan_refuses(tmp_path):
     p = ledger(tmp_path, "Sweep plan: waves 2-2", "Sweep plan: waves 3-3")
     r = ledger_cmd(tmp_path, "sweep-guard", str(p))
     assert r.returncode == 1
+    assert "one sweep pass" in r.stderr
+
+
+@pytest.mark.parametrize("plan", ["Sweep plan: waves 2–2", "Sweep plan: waves 3 - 4"])
+def test_a_sweep_plan_that_does_not_parse_refuses(tmp_path, plan):
+    """Fail closed: a plan line the guard cannot read must not switch the guard off."""
+    p = ledger(tmp_path, plan, "Wave 5: dispatched (BASE a)")
+    r = ledger_cmd(tmp_path, "sweep-guard", str(p))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert f"'{plan}' does not parse" in r.stderr
+
+
+def test_a_malformed_second_sweep_plan_still_counts_as_a_second(tmp_path):
+    p = ledger(tmp_path, "Sweep plan: waves 2-2", "Sweep plan: waves 3–3")
+    r = ledger_cmd(tmp_path, "sweep-guard", str(p))
+    assert r.returncode == 1, r.stdout + r.stderr
     assert "one sweep pass" in r.stderr
 
 
@@ -149,6 +178,14 @@ def test_lint_rejects_a_pre_existing_sweep_line_without_evidence(tmp_path):
     r = ledger_cmd(tmp_path, "lint", str(p))
     assert r.returncode == 1
     assert "malformed: Sweep: pre-existing" in r.stderr
+
+
+def test_lint_accepts_an_observation_from_the_re_review_after_a_full_branch_review(tmp_path):
+    """The scoped re-review of review #k's fix is a source of its own."""
+    p = ledger(tmp_path, "Sweep: introduced (late) — x — from final review #2 re-review")
+    r = ledger_cmd(tmp_path, "lint", str(p))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "Sweep: 1"
 
 
 def test_lint_rejects_a_misspelled_route(tmp_path):
@@ -193,10 +230,23 @@ def test_the_sweep_section_counts_and_lists(tmp_path):
     assert ("**Sweep:** 3 fixed (closes #10) · 1 filed (#51) · "
             "1 seen again (#42) · 1 noted") in out
     assert out.count("Closes #10") == 1
-    assert "Refs #25 — fixed: one residual" in out
-    assert "Refs #42 — seen again at wdd:285" in out
-    assert "Filed: #51 — lane run exits 0" in out
-    assert "- quoting edge — low value" in out
+    assert "Refs #25 — fixed: `one residual`" in out
+    assert "Refs #42 — seen again at `wdd:285`" in out
+    assert "Filed: #51 — `lane run exits 0`" in out
+    assert "- `quoting edge` — `low value`" in out
+
+
+def test_free_text_in_the_sweep_section_cannot_close_or_mention_anything(tmp_path):
+    """A ledger one-liner is prose. Bare in a PR body, `fixes #12` closes #12 on
+    merge and `@someone` pings them; inside a code span GitHub does neither. A
+    backtick in the text would end the span early, so it is replaced first."""
+    p = ledger(tmp_path, "Note: the loader `fixes #12 only on retry — cc @someone")
+    r = ledger_cmd(tmp_path, "sweep-section", str(p))
+    assert r.returncode == 0, r.stderr
+    assert "- `the loader 'fixes #12 only on retry` — `cc @someone`" in r.stdout
+    outside_spans = re.sub(r"`[^`]*`", "", r.stdout)
+    assert "#12" not in outside_spans
+    assert "@someone" not in outside_spans
 
 
 def test_an_unresolved_close_is_dropped_but_still_counted_as_fixed(tmp_path):
@@ -377,5 +427,40 @@ def test_verdict_prints_the_parsed_header(repo):
     assert r.stdout.splitlines() == [f"Reviewed={one}", f"Since={base}", "Verdict=CLEAN"]
 
 
+def test_a_lone_review_zero_is_no_review_at_all(repo):
+    """Reviews count from 1. A `final-review-0.md` is not one, so the chain is empty."""
+    base, one, _ = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 0, one, base)
+    r = chain(repo, ws, one)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "rule 1" in r.stderr
+
+
 def test_an_unknown_command_is_a_usage_error(tmp_path):
     assert ledger_cmd(tmp_path, "bogus", "x").returncode == 2
+
+
+def test_extra_arguments_are_a_usage_error(tmp_path):
+    r = ledger_cmd(tmp_path, "stops", str(ledger(tmp_path, "Task 2: BLOCKED")), "extra")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "bad usage" in r.stderr
+
+
+def test_a_non_numeric_unresolved_list_is_a_usage_error(tmp_path):
+    r = ledger_cmd(tmp_path, "sweep-section", str(ledger(tmp_path, *SWEEP_LINES)),
+                   "--unresolved", "10,x")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "bad usage" in r.stderr
+
+
+def test_an_undecodable_ledger_is_unreadable_input_not_bad_usage(tmp_path):
+    """Usage is checked by counting arguments, never inferred from an exception --
+    a decode error is a ValueError, and catching that as 'bad usage' named the
+    wrong fault."""
+    p = tmp_path / "progress.md"
+    p.write_bytes(HEADER.encode() + b"Task 2: \xff\xfe BLOCKED\n")
+    r = ledger_cmd(tmp_path, "stops", str(p))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "unreadable" in r.stderr
+    assert "bad usage" not in r.stderr

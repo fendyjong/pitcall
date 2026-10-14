@@ -12,7 +12,11 @@ and the code that parses it drift apart without either noticing.
 A line counts only if it ends in a newline. A crash mid-append leaves a
 truncated final line, and that fragment can be a literal prefix of a real
 marker (SKILL.md, Resuming an interrupted run, step 0); trusting it would read
-a half-written line as a whole one.
+a half-written line as a whole one. One exception, and it runs one way only:
+a fragment that reads as a stop marker still STOPS, because refusing on half
+a marker costs a look at the ledger while ignoring it ships past a stop -- but
+a fragment never RESOLVES one, since half a `complete` line is not a finished
+task.
 
 Usage:
   wdd-ledger stops         LEDGER
@@ -48,7 +52,7 @@ WAVE_DISPATCHED = re.compile(r"^Wave (\d+): dispatched\b")
 FORMATS: dict[str, re.Pattern] = {
     "Sweep: ": re.compile(
         r"^Sweep: (introduced|pre-existing)( must-fix)?( \(late\))? — "
-        rf"({ONE_LINER}) — from (Task \d+ review|Task \d+ re-review|final review #\d+)"
+        rf"({ONE_LINER}) — from (Task \d+ review|Task \d+ re-review|final review #\d+(?: re-review)?)"
         r"( — evidence: .+)?$"
     ),
     "Sorting: ": re.compile(r"^Sorting: review #1 at [0-9a-f]{7,40}$"),
@@ -69,7 +73,10 @@ FORMATS: dict[str, re.Pattern] = {
 
 COMMANDS = ("stops", "sweep-guard", "lint", "closes", "sweep-section", "verdict", "chain")
 
-VERDICT_FILE = re.compile(r"^final-review-(\d+)\.md$")
+# Reviews count from 1: `final-review-0.md` is not a review, and `01` would be
+# a second spelling of `1`.
+VERDICT_FILE = re.compile(r"^final-review-([1-9][0-9]*)\.md$")
+ISSUE_NUMBERS = re.compile(r"[0-9]*(,[0-9]*)*")
 REVIEWED = re.compile(r"^Reviewed: ([0-9a-f]{40})$")
 SINCE = re.compile(r"^Since: ([0-9a-f]{40})$")
 VERDICT = re.compile(r"^Verdict: (CLEAN|MUST-FIX)$")
@@ -79,14 +86,17 @@ class Refusal(Exception):
     """A decision this script refuses, with the sentence that says why."""
 
 
-def whole_lines(path: Path) -> list[str]:
-    """The ledger's lines, minus a final fragment with no trailing newline."""
-    text = path.read_text(encoding="utf-8")
-    lines = text.split("\n")
-    # "a\nb\n" splits to ["a", "b", ""]; "a\nb" to ["a", "b"]. Either way the
-    # last element is the part after the final newline -- empty when the file
-    # is whole, a fragment when it is not -- and is never a counted line.
-    return lines[:-1]
+def read_ledger(path: Path) -> tuple[list[str], str]:
+    """The ledger's whole lines, and apart from them the final fragment.
+
+    "a\nb\n" splits to ["a", "b", ""]; "a\nb" to ["a", "b"]. Either way the
+    last element is the part after the final newline -- empty when the file is
+    whole, a fragment when it is not -- and is never a counted line. It is
+    returned separately so that the one reader allowed to look at it, `stops`,
+    can, and no other reader sees it by accident.
+    """
+    *lines, fragment = path.read_text(encoding="utf-8").split("\n")
+    return lines, fragment
 
 
 def prefix_of(line: str) -> str | None:
@@ -108,13 +118,17 @@ def matching(lines: list[str], prefix: str) -> list[re.Match]:
     return [m for m in (pattern.match(line) for line in lines) if m]
 
 
-def unresolved_stops(lines: list[str]) -> list[str]:
+def unresolved_stops(lines: list[str], fragment: str = "") -> list[str]:
     """Stop markers with no later line for the same subject.
 
     `Task <N>: BLOCKED` is resolved by a later `Task <N>: complete`;
     `Final review #<k>: BLOCKED` by a later `Final review #<j>:` with j > k.
     Never by deleting the marker -- that is the repair #10 warns must not
     happen, and this rule is what makes it unnecessary.
+
+    `fragment` is the unterminated final line. It can raise a stop and can
+    never resolve one: it is not in `lines`, so no stop above it sees it, and
+    nothing follows it that could resolve it.
     """
     open_markers = []
     for i, line in enumerate(lines):
@@ -131,11 +145,16 @@ def unresolved_stops(lines: list[str]) -> list[str]:
             final = FORMATS["Final review #"]
             if not any((m := final.match(l)) and int(m.group(1)) > k for l in later):
                 open_markers.append(line)
+    if STOP_TASK.match(fragment) or STOP_REVIEW.match(fragment):
+        open_markers.append(fragment)
     return open_markers
 
 
 def sweep_guard(lines: list[str]) -> None:
-    plans = matching(lines, "Sweep plan: ")
+    # Every line that CLAIMS to be a plan line is one, whether or not it parses.
+    # Counting only the lines that parse let `waves 2–2` (an en dash) switch the
+    # guard off entirely -- a guard that fails open on a typo.
+    plans = [line for line in lines if line.startswith("Sweep plan:")]
     if len(plans) > 1:
         raise Refusal(
             f"the ledger records {len(plans)} 'Sweep plan:' lines -- a run gets one "
@@ -143,7 +162,13 @@ def sweep_guard(lines: list[str]) -> None:
         )
     if not plans:
         return
-    first, last = int(plans[0].group(1)), int(plans[0].group(2))
+    plan = FORMATS["Sweep plan: "].match(plans[0])
+    if not plan:
+        raise Refusal(
+            f"'{plans[0]}' does not parse as 'Sweep plan: waves <A>-<B>' -- the "
+            "one-sweep guard cannot read it"
+        )
+    first, last = int(plan.group(1)), int(plan.group(2))
     if first > last:
         raise Refusal(f"'Sweep plan: waves {first}-{last}' names an empty range")
     late = sorted(
@@ -179,7 +204,24 @@ def closes(lines: list[str]) -> list[int]:
     return sorted({int(m.group(3)) for m in matching(lines, "Fixed: ") if m.group(2) == "closes"})
 
 
+def code(text: str) -> str:
+    """Free text as a code span, so GitHub neither links nor acts on it.
+
+    Ledger one-liners are prose, and prose says things like "the loader fixes
+    #12 only on retry": bare in a PR body that closes #12 on merge, and an
+    `@name` notifies someone. A backtick in the text would end the span early
+    and let the rest out, so it becomes `'` first.
+    """
+    return "`" + text.replace("`", "'") + "`"
+
+
 def sweep_section(lines: list[str], unresolved: set[int]) -> str:
+    """The PR body's `## Sweep` section.
+
+    Only what this function composes itself -- `Closes #N`, `Refs #N`, the
+    counts -- is live markdown. Every field copied from the ledger goes
+    through `code`.
+    """
     fixed = matching(lines, "Fixed: ")
     seen = matching(lines, "Seen: ")
     filed = matching(lines, "Filed: ")
@@ -202,12 +244,14 @@ def sweep_section(lines: list[str], unresolved: set[int]) -> str:
     )
     out = ["## Sweep", "", count, ""]
     out += [f"Closes #{n}" for n in closing]
-    out += [f"Refs #{m.group(3)} — fixed: {m.group(1)}" for m in parts]
-    out += [f"Refs #{m.group(1)} — seen again at {m.group(2)}" for m in seen]
-    out += [f"Filed: #{m.group(1)} — {m.group(2)}" for m in filed]
+    out += [f"Refs #{m.group(3)} — fixed: {code(m.group(1))}" for m in parts]
+    out += [f"Refs #{m.group(1)} — seen again at {code(m.group(2))}" for m in seen]
+    out += [f"Filed: #{m.group(1)} — {code(m.group(2))}" for m in filed]
     if notes:
-        out += ["", "### Observed, not acted on", ""]
-        out += [f"- {m.group(1)} — {m.group(2)}" for m in notes]
+        if out[-1] != "":
+            out.append("")
+        out += ["### Observed, not acted on", ""]
+        out += [f"- {code(m.group(1))} — {code(m.group(2))}" for m in notes]
     while out and out[-1] == "":
         out.pop()
     return "\n".join(out)
@@ -294,6 +338,21 @@ def chain(workspace: Path, head: str, default_ref: str) -> str:
     return f"verdict chain: {n} full-branch review(s), CLEAN at {head[:7]}"
 
 
+def well_formed(cmd: str, args: list[str]) -> bool:
+    """Whether `args` fits `cmd`, decided by counting before anything runs.
+
+    Never inferred from an exception mid-run: that reported real faults -- a
+    lone `final-review-0.md` indexing an empty list, an undecodable ledger
+    raising a ValueError -- as "bad usage", the one diagnosis that sends
+    nobody looking at the input.
+    """
+    if cmd == "chain":
+        return len(args) == 3
+    if cmd == "sweep-section" and len(args) == 3:
+        return args[1] == "--unresolved" and ISSUE_NUMBERS.fullmatch(args[2]) is not None
+    return len(args) == 1
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__.split("Usage:")[1].split("Exit:")[0].rstrip(), file=sys.stderr)
@@ -302,24 +361,21 @@ def main(argv: list[str]) -> int:
     if cmd not in COMMANDS:
         print(f"wdd-ledger: unknown command {cmd!r}", file=sys.stderr)
         return 2
+    if not well_formed(cmd, args):
+        print(f"wdd-ledger: bad usage: {' '.join(argv)}", file=sys.stderr)
+        return 2
     try:
         if cmd == "chain":
-            if len(args) != 3:
-                raise IndexError
             print(chain(Path(args[0]), args[1], args[2]))
             return 0
         if cmd == "verdict":
-            if len(args) != 1:
-                raise IndexError
             reviewed, since, verdict = read_verdict(Path(args[0]))
             print(f"Reviewed={reviewed}\nSince={since}\nVerdict={verdict}")
             return 0
 
-        if not args:
-            raise IndexError
-        lines = whole_lines(Path(args[0]))
+        lines, fragment = read_ledger(Path(args[0]))
         if cmd == "stops":
-            markers = unresolved_stops(lines)
+            markers = unresolved_stops(lines, fragment)
             for marker in markers:
                 print(marker)
             return 1 if markers else 0
@@ -338,26 +394,23 @@ def main(argv: list[str]) -> int:
             for n in closes(lines):
                 print(n)
             return 0
-        if cmd == "sweep-section":
-            unresolved: set[int] = set()
-            if len(args) == 3 and args[1] == "--unresolved":
-                unresolved = {int(n) for n in args[2].split(",") if n.strip()}
-            elif len(args) != 1:
-                raise IndexError
-            section = sweep_section(lines, unresolved)
-            if section:
-                print(section)
-            return 0
+        assert cmd == "sweep-section", cmd
+        # `well_formed` already vouched that the list is digits and commas.
+        unresolved = {int(n) for n in args[2].split(",") if n} if len(args) == 3 else set()
+        section = sweep_section(lines, unresolved)
+        if section:
+            print(section)
+        return 0
     except Refusal as exc:
         print(f"wdd: {exc}", file=sys.stderr)
         return 1
-    except (IndexError, ValueError):
-        pass
-    except OSError as exc:
-        print(f"wdd-ledger: {exc}", file=sys.stderr)
+    except UnicodeDecodeError as exc:
+        print(f"wdd-ledger: unreadable input: {args[0]} is not UTF-8 text "
+              f"({exc.reason} at byte {exc.start})", file=sys.stderr)
         return 2
-    print(f"wdd-ledger: bad usage: {' '.join(argv)}", file=sys.stderr)
-    return 2
+    except OSError as exc:
+        print(f"wdd-ledger: unreadable input: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
