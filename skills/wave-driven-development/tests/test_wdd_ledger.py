@@ -1,0 +1,339 @@
+"""`wdd-ledger` — the one reader of ledger lines and full-branch review verdicts.
+
+Every rule is tested in both directions: that it fires, and that it stays
+quiet on the input it must not fire on. A gate tested only for firing is how
+#10 shipped — `BLOCKED` matched anywhere, so prose describing a gate refused a
+clean ledger.
+"""
+
+from pathlib import Path
+
+from conftest import run_script
+
+HEADER = "# WDD ledger — plan: docs/plans/2026-01-01-demo.md\n"
+
+
+def ledger(tmp_path: Path, *lines: str, whole: bool = True) -> Path:
+    p = tmp_path / "progress.md"
+    p.write_text(HEADER + "\n".join(lines) + ("\n" if whole else ""), encoding="utf-8")
+    return p
+
+
+def ledger_cmd(tmp_path, *args):
+    return run_script("wdd-ledger", *args, cwd=tmp_path)
+
+
+# --- stops ------------------------------------------------------------------
+
+
+def test_a_task_stop_marker_refuses_and_is_printed(tmp_path):
+    r = ledger_cmd(tmp_path, "stops", str(ledger(tmp_path, "Task 2: BLOCKED")))
+    assert r.returncode == 1
+    assert r.stdout.strip() == "Task 2: BLOCKED"
+
+
+def test_a_final_review_stop_marker_refuses(tmp_path):
+    r = ledger_cmd(tmp_path, "stops",
+                   str(ledger(tmp_path, "Final review #3: BLOCKED at abc1234")))
+    assert r.returncode == 1
+    assert "Final review #3: BLOCKED" in r.stdout
+
+
+def test_blocked_in_prose_is_not_a_stop_marker(tmp_path):
+    """#10: the word inside a table row, a ruling, or a note is prose."""
+    p = ledger(
+        tmp_path,
+        "| T2 x T4 | ... | T4 Step 1 reports BLOCKED rather than proceeding |",
+        "Ruling: the implementer should report BLOCKED — x — y",
+        "Note: a gate that reports BLOCKED in prose — low value",
+    )
+    r = ledger_cmd(tmp_path, "stops", str(p))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_later_complete_line_resolves_a_task_stop(tmp_path):
+    p = ledger(tmp_path, "Task 2: BLOCKED",
+               "Task 2: complete (commits a..b, review clean, branch x-t2)")
+    assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 0
+
+
+def test_a_complete_line_for_another_task_does_not_resolve_it(tmp_path):
+    p = ledger(tmp_path, "Task 2: BLOCKED",
+               "Task 3: complete (commits a..b, review clean, branch x-t3)")
+    assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 1
+
+
+def test_a_complete_line_before_the_stop_does_not_resolve_it(tmp_path):
+    p = ledger(tmp_path, "Task 2: complete (commits a..b, review clean, branch x-t2)",
+               "Task 2: BLOCKED")
+    assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 1
+
+
+def test_a_later_review_resolves_a_review_stop(tmp_path):
+    p = ledger(tmp_path, "Final review #3: BLOCKED at abc1234",
+               "Final review #4: CLEAN at def5678")
+    assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 0
+
+
+def test_an_earlier_numbered_review_does_not_resolve_a_review_stop(tmp_path):
+    p = ledger(tmp_path, "Final review #3: BLOCKED at abc1234",
+               "Final review #2: CLEAN at def5678")
+    assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 1
+
+
+def test_a_truncated_final_line_is_not_read(tmp_path):
+    """A crash mid-append leaves a fragment; it is not a whole line yet."""
+    p = ledger(tmp_path, "Task 2: BLOCKED", whole=False)
+    assert ledger_cmd(tmp_path, "stops", str(p)).returncode == 0
+
+
+# --- sweep-guard --------------------------------------------------------------
+
+
+def test_no_sweep_plan_means_no_guard(tmp_path):
+    p = ledger(tmp_path, "Wave 7: dispatched (BASE a, T1 @ x-t1 [cheapest/haiku])")
+    assert ledger_cmd(tmp_path, "sweep-guard", str(p)).returncode == 0
+
+
+def test_waves_inside_the_sweep_range_pass(tmp_path):
+    p = ledger(tmp_path, "Wave 1: dispatched (BASE a)", "Sweep plan: waves 2-3",
+               "Wave 2: dispatched (BASE b)", "Wave 3: dispatched (BASE c)")
+    assert ledger_cmd(tmp_path, "sweep-guard", str(p)).returncode == 0
+
+
+def test_a_wave_after_the_sweep_range_refuses(tmp_path):
+    p = ledger(tmp_path, "Sweep plan: waves 3-4", "Wave 5: dispatched (BASE a)")
+    r = ledger_cmd(tmp_path, "sweep-guard", str(p))
+    assert r.returncode == 1
+    assert "wave 5" in r.stderr
+
+
+def test_a_second_sweep_plan_refuses(tmp_path):
+    p = ledger(tmp_path, "Sweep plan: waves 2-2", "Sweep plan: waves 3-3")
+    r = ledger_cmd(tmp_path, "sweep-guard", str(p))
+    assert r.returncode == 1
+    assert "one sweep pass" in r.stderr
+
+
+# --- lint ---------------------------------------------------------------------
+
+EVERY_FORMAT = (
+    "Sweep: introduced — retry loses the key — from Task 4 review",
+    "Sweep: pre-existing — substring match — from final review #1 — evidence: wdd:199 at cfbe04a",
+    "Sorting: review #1 at 9f2c1ab",
+    "Route: sweep #10 full — substring match",
+    "Owner: rename the flag — keep it (2026-10-14)",
+    "Amendment 1: written (v3)",
+    "Sweep plan: waves 2-2",
+    "Final review #1: CLEAN at 9f2c1ab",
+    "Fixed: anchor the stop markers — closes #10",
+    "Seen: #42 — wdd:285",
+    "Filed: #51 — lane run exits 0",
+    "Note: quoting edge — low value",
+)
+
+
+def test_lint_counts_every_documented_format(tmp_path):
+    r = ledger_cmd(tmp_path, "lint", str(ledger(tmp_path, *EVERY_FORMAT)))
+    assert r.returncode == 0, r.stderr
+    for label in ("Sweep", "Sorting", "Route", "Owner", "Amendment", "Sweep plan",
+                  "Final review", "Fixed", "Seen", "Filed", "Note"):
+        assert f"{label}: " in r.stdout, label
+
+
+def test_lint_rejects_a_pre_existing_sweep_line_without_evidence(tmp_path):
+    p = ledger(tmp_path, "Sweep: pre-existing — substring match — from final review #1")
+    r = ledger_cmd(tmp_path, "lint", str(p))
+    assert r.returncode == 1
+    assert "malformed: Sweep: pre-existing" in r.stderr
+
+
+def test_lint_rejects_a_misspelled_route(tmp_path):
+    r = ledger_cmd(tmp_path, "lint", str(ledger(tmp_path, "Route: fix-later — x")))
+    assert r.returncode == 1
+
+
+def test_lint_ignores_lines_with_no_known_prefix(tmp_path):
+    r = ledger_cmd(tmp_path, "lint", str(ledger(tmp_path, "Ruling: a — b — c")))
+    assert r.returncode == 0
+    assert r.stdout == ""
+
+
+# --- closes and sweep-section ---------------------------------------------------
+
+SWEEP_LINES = (
+    "Fixed: anchor the stop markers — closes #10",
+    "Fixed: one residual — part of #25",
+    "Fixed: an introduced nit",
+    "Seen: #42 — wdd:285",
+    "Filed: #51 — lane run exits 0",
+    "Note: quoting edge — low value",
+)
+
+
+def test_closes_lists_only_full_fixes(tmp_path):
+    r = ledger_cmd(tmp_path, "closes", str(ledger(tmp_path, *SWEEP_LINES)))
+    assert r.returncode == 0
+    assert r.stdout.split() == ["10"]
+
+
+def test_a_mid_line_fixed_is_not_a_fixed_line(tmp_path):
+    p = ledger(tmp_path, "Ruling: see Fixed: x — closes #10 — y — z")
+    assert ledger_cmd(tmp_path, "closes", str(p)).stdout == ""
+
+
+def test_the_sweep_section_counts_and_lists(tmp_path):
+    r = ledger_cmd(tmp_path, "sweep-section", str(ledger(tmp_path, *SWEEP_LINES)))
+    assert r.returncode == 0
+    out = r.stdout
+    assert out.startswith("## Sweep\n")
+    assert ("**Sweep:** 3 fixed (closes #10) · 1 filed (#51) · "
+            "1 seen again (#42) · 1 noted") in out
+    assert out.count("Closes #10") == 1
+    assert "Refs #25 — fixed: one residual" in out
+    assert "Refs #42 — seen again at wdd:285" in out
+    assert "Filed: #51 — lane run exits 0" in out
+    assert "- quoting edge — low value" in out
+
+
+def test_an_unresolved_close_is_dropped_but_still_counted_as_fixed(tmp_path):
+    r = ledger_cmd(tmp_path, "sweep-section", str(ledger(tmp_path, *SWEEP_LINES)),
+                   "--unresolved", "10")
+    assert "Closes #10" not in r.stdout
+    assert "**Sweep:** 3 fixed · 1 filed" in r.stdout
+
+
+def test_no_sweep_lines_means_no_section(tmp_path):
+    p = ledger(tmp_path, "Wave 1: integrated (merge a, pytest 1 passed)")
+    r = ledger_cmd(tmp_path, "sweep-section", str(p))
+    assert r.returncode == 0
+    assert r.stdout == ""
+
+
+# --- verdict and chain ----------------------------------------------------------
+
+
+def commit(repo, msg):
+    repo.git("commit", "-q", "--allow-empty", "-m", msg)
+    return repo.git("rev-parse", "HEAD").stdout.strip()
+
+
+def verdict(ws: Path, k: int, reviewed: str, since: str, word: str = "CLEAN") -> Path:
+    ws.mkdir(exist_ok=True)
+    p = ws / f"final-review-{k}.md"
+    p.write_text(f"Reviewed: {reviewed}\nSince: {since}\nVerdict: {word}\n\n## Strengths\n")
+    return p
+
+
+def chain(repo, ws, head):
+    return run_script("wdd-ledger", "chain", str(ws), head, "origin/main",
+                      cwd=repo.path, env=repo.env)
+
+
+def branch(repo):
+    """origin/main at the seed commit; two branch commits on top of it."""
+    base = repo.git("rev-parse", "HEAD").stdout.strip()
+    repo.git("update-ref", "refs/remotes/origin/main", base)
+    return base, commit(repo, "one"), commit(repo, "two")
+
+
+def test_one_clean_review_of_head_passes(repo):
+    base, one, _ = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base)
+    r = chain(repo, ws, one)
+    assert r.returncode == 0, r.stderr
+
+
+def test_no_verdict_refuses_rule_1(repo):
+    _, one, _ = branch(repo)
+    (repo.path / "ws").mkdir()
+    r = chain(repo, repo.path / "ws", one)
+    assert r.returncode == 1
+    assert "rule 1" in r.stderr
+
+
+def test_a_malformed_header_refuses_rule_1(repo):
+    base, one, _ = branch(repo)
+    ws = repo.path / "ws"
+    ws.mkdir()
+    (ws / "final-review-1.md").write_text(f"Reviewed: {one}\nVerdict: CLEAN\n")
+    r = chain(repo, ws, one)
+    assert r.returncode == 1
+    assert "rule 1" in r.stderr
+
+
+def test_a_gap_in_the_chain_refuses_rule_1(repo):
+    base, one, two = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base)
+    verdict(ws, 3, two, one)
+    r = chain(repo, ws, two)
+    assert r.returncode == 1
+    assert "final-review-2.md" in r.stderr
+
+
+def test_a_must_fix_newest_verdict_refuses_rule_2(repo):
+    base, one, _ = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base, "MUST-FIX")
+    r = chain(repo, ws, one)
+    assert r.returncode == 1
+    assert "rule 2" in r.stderr
+
+
+def test_a_commit_after_the_review_refuses_rule_3(repo):
+    base, one, two = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base)
+    r = chain(repo, ws, two)
+    assert r.returncode == 1
+    assert "rule 3" in r.stderr
+
+
+def test_a_chained_second_review_passes(repo):
+    base, one, two = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base, "MUST-FIX")
+    verdict(ws, 2, two, one)
+    assert chain(repo, ws, two).returncode == 0
+
+
+def test_a_second_review_that_skips_commits_refuses_rule_4(repo):
+    base, one, two = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base, "MUST-FIX")
+    verdict(ws, 2, two, base)
+    r = chain(repo, ws, two)
+    assert r.returncode == 1
+    assert "rule 4" in r.stderr
+
+
+def test_a_first_review_starting_on_the_branch_refuses_rule_5(repo):
+    _, one, _ = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, one)
+    r = chain(repo, ws, one)
+    assert r.returncode == 1
+    assert "rule 5" in r.stderr
+
+
+def test_the_chain_still_passes_once_the_branch_has_merged(repo):
+    """Rule 5 is ancestry, not equality with today's merge-base."""
+    base, one, _ = branch(repo)
+    ws = repo.path / "ws"
+    verdict(ws, 1, one, base)
+    repo.git("update-ref", "refs/remotes/origin/main", one)
+    assert chain(repo, ws, one).returncode == 0
+
+
+def test_verdict_prints_the_parsed_header(repo):
+    base, one, _ = branch(repo)
+    p = verdict(repo.path / "ws", 1, one, base)
+    r = run_script("wdd-ledger", "verdict", str(p), cwd=repo.path, env=repo.env)
+    assert r.returncode == 0
+    assert r.stdout.splitlines() == [f"Reviewed={one}", f"Since={base}", "Verdict=CLEAN"]
+
+
+def test_an_unknown_command_is_a_usage_error(tmp_path):
+    assert ledger_cmd(tmp_path, "bogus", "x").returncode == 2

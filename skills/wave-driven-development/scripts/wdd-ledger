@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""Read a WDD ledger and a run's full-branch review verdicts.
+
+`wdd` calls this for every decision that reads a ledger LINE rather than a
+git ref: which stop markers are still open, whether a second sweep ran, whether
+the verdict chain covers the commit about to ship, and what the PR's sweep
+section says. Each line format is one regex below, and every caller -- `wdd`,
+the tests, and the drift test that feeds SKILL.md's example ledger through
+`lint` -- reads the same one. A second spelling of a format is how a document
+and the code that parses it drift apart without either noticing.
+
+A line counts only if it ends in a newline. A crash mid-append leaves a
+truncated final line, and that fragment can be a literal prefix of a real
+marker (SKILL.md, Resuming an interrupted run, step 0); trusting it would read
+a half-written line as a whole one.
+
+Usage:
+  wdd-ledger stops         LEDGER
+  wdd-ledger sweep-guard   LEDGER
+  wdd-ledger lint          LEDGER
+  wdd-ledger closes        LEDGER
+  wdd-ledger sweep-section LEDGER [--unresolved N,N,...]
+  wdd-ledger verdict       FILE
+  wdd-ledger chain         WORKSPACE HEAD_SHA DEFAULT_REF
+
+Exit: 0 ok | 1 refused (the reason is printed) | 2 usage or unreadable input
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ONE_LINER = r"[^\n]+?"
+
+STOP_TASK = re.compile(r"^Task (\d+): BLOCKED\b")
+STOP_REVIEW = re.compile(r"^Final review #(\d+): BLOCKED\b")
+TASK_COMPLETE = re.compile(r"^Task (\d+): complete\b")
+WAVE_DISPATCHED = re.compile(r"^Wave (\d+): dispatched\b")
+
+# Every format SKILL.md's Ledger section documents for the sweep, keyed by
+# the prefix that identifies it. `lint` checks a line against the format its
+# prefix claims; the order matters only in that "Sweep plan: " must be tried
+# before "Sweep: " could ever be confused with it -- and it cannot be, because
+# the colon position differs.
+FORMATS: dict[str, re.Pattern] = {
+    "Sweep: ": re.compile(
+        r"^Sweep: (introduced|pre-existing)( must-fix)?( \(late\))? — "
+        rf"({ONE_LINER}) — from (Task \d+ review|Task \d+ re-review|final review #\d+)"
+        r"( — evidence: .+)?$"
+    ),
+    "Sorting: ": re.compile(r"^Sorting: review #1 at [0-9a-f]{7,40}$"),
+    "Route: ": re.compile(
+        r"^Route: (must-fix|sweep|ask|issue|note)( #\d+( full| part)?)? — .+$"
+    ),
+    "Owner: ": re.compile(r"^Owner: .+ — .+ \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$"),
+    "Amendment ": re.compile(r"^Amendment \d+: written( \(v\d+\))?$"),
+    "Sweep plan: ": re.compile(r"^Sweep plan: waves (\d+)-(\d+)$"),
+    "Final review #": re.compile(
+        r"^Final review #(\d+): (CLEAN|MUST-FIX|BLOCKED) at [0-9a-f]{7,40}$"
+    ),
+    "Fixed: ": re.compile(rf"^Fixed: ({ONE_LINER})(?: — (closes|part of) #(\d+))?$"),
+    "Seen: ": re.compile(r"^Seen: #(\d+) — (.+)$"),
+    "Filed: ": re.compile(r"^Filed: #(\d+) — (.+)$"),
+    "Note: ": re.compile(rf"^Note: ({ONE_LINER}) — (.+)$"),
+}
+
+COMMANDS = ("stops", "sweep-guard", "lint", "closes", "sweep-section", "verdict", "chain")
+
+VERDICT_FILE = re.compile(r"^final-review-(\d+)\.md$")
+REVIEWED = re.compile(r"^Reviewed: ([0-9a-f]{40})$")
+SINCE = re.compile(r"^Since: ([0-9a-f]{40})$")
+VERDICT = re.compile(r"^Verdict: (CLEAN|MUST-FIX)$")
+
+
+class Refusal(Exception):
+    """A decision this script refuses, with the sentence that says why."""
+
+
+def whole_lines(path: Path) -> list[str]:
+    """The ledger's lines, minus a final fragment with no trailing newline."""
+    text = path.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    # "a\nb\n" splits to ["a", "b", ""]; "a\nb" to ["a", "b"]. Either way the
+    # last element is the part after the final newline -- empty when the file
+    # is whole, a fragment when it is not -- and is never a counted line.
+    return lines[:-1]
+
+
+def prefix_of(line: str) -> str | None:
+    if line.startswith("Sweep plan: "):
+        return "Sweep plan: "
+    for prefix in FORMATS:
+        if line.startswith(prefix):
+            return prefix
+    return None
+
+
+def label(prefix: str) -> str:
+    """`Final review #` -> `Final review`, `Sweep: ` -> `Sweep`."""
+    return prefix.strip().rstrip(":#").strip()
+
+
+def matching(lines: list[str], prefix: str) -> list[re.Match]:
+    pattern = FORMATS[prefix]
+    return [m for m in (pattern.match(line) for line in lines) if m]
+
+
+def unresolved_stops(lines: list[str]) -> list[str]:
+    """Stop markers with no later line for the same subject.
+
+    `Task <N>: BLOCKED` is resolved by a later `Task <N>: complete`;
+    `Final review #<k>: BLOCKED` by a later `Final review #<j>:` with j > k.
+    Never by deleting the marker -- that is the repair #10 warns must not
+    happen, and this rule is what makes it unnecessary.
+    """
+    open_markers = []
+    for i, line in enumerate(lines):
+        later = lines[i + 1 :]
+        task = STOP_TASK.match(line)
+        if task:
+            n = task.group(1)
+            if not any((m := TASK_COMPLETE.match(l)) and m.group(1) == n for l in later):
+                open_markers.append(line)
+            continue
+        review = STOP_REVIEW.match(line)
+        if review:
+            k = int(review.group(1))
+            final = FORMATS["Final review #"]
+            if not any((m := final.match(l)) and int(m.group(1)) > k for l in later):
+                open_markers.append(line)
+    return open_markers
+
+
+def sweep_guard(lines: list[str]) -> None:
+    plans = matching(lines, "Sweep plan: ")
+    if len(plans) > 1:
+        raise Refusal(
+            f"the ledger records {len(plans)} 'Sweep plan:' lines -- a run gets one "
+            "sweep pass, and nothing found during or after it starts a second"
+        )
+    if not plans:
+        return
+    first, last = int(plans[0].group(1)), int(plans[0].group(2))
+    if first > last:
+        raise Refusal(f"'Sweep plan: waves {first}-{last}' names an empty range")
+    late = sorted(
+        {int(m.group(1)) for m in (WAVE_DISPATCHED.match(l) for l in lines) if m}
+        - set(range(1, last + 1))
+    )
+    if late:
+        raise Refusal(
+            "wave " + ", ".join(map(str, late))
+            + f" was dispatched after the sweep range {first}-{last} -- no wave runs "
+            "after the sweep; a sweep task that cannot finish is never merged"
+        )
+
+
+def lint(lines: list[str]) -> tuple[dict[str, int], list[str]]:
+    counts: dict[str, int] = {}
+    malformed: list[str] = []
+    for line in lines:
+        prefix = prefix_of(line)
+        if prefix is None:
+            continue
+        match = FORMATS[prefix].match(line)
+        if prefix == "Sweep: " and match and match.group(1) == "pre-existing" and not match.group(6):
+            match = None  # pre-existing origin must carry its evidence
+        if match:
+            counts[prefix] = counts.get(prefix, 0) + 1
+        else:
+            malformed.append(line)
+    return counts, malformed
+
+
+def closes(lines: list[str]) -> list[int]:
+    return sorted({int(m.group(3)) for m in matching(lines, "Fixed: ") if m.group(2) == "closes"})
+
+
+def sweep_section(lines: list[str], unresolved: set[int]) -> str:
+    fixed = matching(lines, "Fixed: ")
+    seen = matching(lines, "Seen: ")
+    filed = matching(lines, "Filed: ")
+    notes = matching(lines, "Note: ")
+    if not (fixed or seen or filed or notes):
+        return ""
+
+    closing = [n for n in closes(lines) if n not in unresolved]
+    parts = [m for m in fixed if m.group(2) == "part of"]
+
+    def listed(numbers: list[int]) -> str:
+        return " (" + ", ".join(f"#{n}" for n in numbers) + ")" if numbers else ""
+
+    count = (
+        f"**Sweep:** {len(fixed)} fixed"
+        + (" (closes " + ", ".join(f"#{n}" for n in closing) + ")" if closing else "")
+        + f" · {len(filed)} filed{listed([int(m.group(1)) for m in filed])}"
+        + f" · {len(seen)} seen again{listed([int(m.group(1)) for m in seen])}"
+        + f" · {len(notes)} noted"
+    )
+    out = ["## Sweep", "", count, ""]
+    out += [f"Closes #{n}" for n in closing]
+    out += [f"Refs #{m.group(3)} — fixed: {m.group(1)}" for m in parts]
+    out += [f"Refs #{m.group(1)} — seen again at {m.group(2)}" for m in seen]
+    out += [f"Filed: #{m.group(1)} — {m.group(2)}" for m in filed]
+    if notes:
+        out += ["", "### Observed, not acted on", ""]
+        out += [f"- {m.group(1)} — {m.group(2)}" for m in notes]
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)
+
+
+def read_verdict(path: Path) -> tuple[str, str, str]:
+    """(reviewed, since, verdict) from a verdict file's first three lines.
+
+    A header that does not parse is an ABSENT verdict, never a permitted one --
+    the same rule `wdd merge` applies to a lane receipt that will not parse.
+    """
+    try:
+        head = path.read_text(encoding="utf-8").split("\n")[:3]
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Refusal(f"rule 1: {path.name} cannot be read ({exc})") from exc
+    if len(head) < 3:
+        raise Refusal(f"rule 1: {path.name} has no three-line verdict header")
+    reviewed, since, verdict = REVIEWED.match(head[0]), SINCE.match(head[1]), VERDICT.match(head[2])
+    if not (reviewed and since and verdict):
+        raise Refusal(
+            f"rule 1: {path.name} does not open with 'Reviewed: <40-hex>', "
+            "'Since: <40-hex>', 'Verdict: CLEAN|MUST-FIX' -- a malformed verdict "
+            "is an absent one"
+        )
+    return reviewed.group(1), since.group(1), verdict.group(1)
+
+
+def is_ancestor(older: str, newer: str) -> bool:
+    r = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", older, newer],
+        capture_output=True, text=True,
+    )
+    if r.returncode in (0, 1):
+        return r.returncode == 0
+    raise Refusal(f"git could not compare {older[:7]} with {newer}: {r.stderr.strip()}")
+
+
+def chain(workspace: Path, head: str, default_ref: str) -> str:
+    found = {}
+    for path in workspace.glob("final-review-*.md"):
+        m = VERDICT_FILE.match(path.name)
+        if m:
+            found[int(m.group(1))] = path
+    if not found:
+        raise Refusal(
+            f"rule 1: no full-branch review verdict in {workspace} -- the last thing "
+            "to see the code before it ships is a full-branch review"
+        )
+    n = max(found)
+    missing = [k for k in range(1, n + 1) if k not in found]
+    if missing:
+        raise Refusal(
+            "rule 1: the verdict chain has a gap -- no final-review-"
+            + ", final-review-".join(map(str, missing)) + ".md"
+        )
+    reviews = [read_verdict(found[k]) for k in range(1, n + 1)]
+
+    reviewed, since, verdict = reviews[-1]
+    if verdict != "CLEAN":
+        raise Refusal(f"rule 2: review #{n} is {verdict}, not CLEAN")
+    if reviewed != head:
+        raise Refusal(
+            f"rule 3: review #{n} covered {reviewed[:7]}, but the commit being "
+            f"shipped is {head[:7]} -- anything that changed after the last review "
+            "needs another review first"
+        )
+    for k in range(2, n + 1):
+        if reviews[k - 1][1] != reviews[k - 2][0]:
+            raise Refusal(
+                f"rule 4: review #{k} starts at {reviews[k - 1][1][:7]}, but review "
+                f"#{k - 1} ended at {reviews[k - 2][0][:7]} -- the commits between "
+                "were never reviewed"
+            )
+    for k, (rev, snc, _) in enumerate(reviews, start=1):
+        if not is_ancestor(snc, rev):
+            raise Refusal(f"rule 4: review #{k}'s Since {snc[:7]} is not an ancestor of its Reviewed {rev[:7]}")
+    first_reviewed, first_since, _ = reviews[0]
+    if not (is_ancestor(first_since, default_ref) and is_ancestor(first_since, first_reviewed)):
+        raise Refusal(
+            f"rule 5: review #1 starts at {first_since[:7]}, which is not on "
+            f"{default_ref} -- branch commits before it were never reviewed"
+        )
+    return f"verdict chain: {n} full-branch review(s), CLEAN at {head[:7]}"
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        print(__doc__.split("Usage:")[1].split("Exit:")[0].rstrip(), file=sys.stderr)
+        return 2
+    cmd, args = argv[0], argv[1:]
+    if cmd not in COMMANDS:
+        print(f"wdd-ledger: unknown command {cmd!r}", file=sys.stderr)
+        return 2
+    try:
+        if cmd == "chain":
+            if len(args) != 3:
+                raise IndexError
+            print(chain(Path(args[0]), args[1], args[2]))
+            return 0
+        if cmd == "verdict":
+            if len(args) != 1:
+                raise IndexError
+            reviewed, since, verdict = read_verdict(Path(args[0]))
+            print(f"Reviewed={reviewed}\nSince={since}\nVerdict={verdict}")
+            return 0
+
+        if not args:
+            raise IndexError
+        lines = whole_lines(Path(args[0]))
+        if cmd == "stops":
+            markers = unresolved_stops(lines)
+            for marker in markers:
+                print(marker)
+            return 1 if markers else 0
+        if cmd == "sweep-guard":
+            sweep_guard(lines)
+            return 0
+        if cmd == "lint":
+            counts, malformed = lint(lines)
+            for prefix in FORMATS:
+                if prefix in counts:
+                    print(f"{label(prefix)}: {counts[prefix]}")
+            for line in malformed:
+                print(f"malformed: {line}", file=sys.stderr)
+            return 1 if malformed else 0
+        if cmd == "closes":
+            for n in closes(lines):
+                print(n)
+            return 0
+        if cmd == "sweep-section":
+            unresolved: set[int] = set()
+            if len(args) == 3 and args[1] == "--unresolved":
+                unresolved = {int(n) for n in args[2].split(",") if n.strip()}
+            elif len(args) != 1:
+                raise IndexError
+            section = sweep_section(lines, unresolved)
+            if section:
+                print(section)
+            return 0
+    except Refusal as exc:
+        print(f"wdd: {exc}", file=sys.stderr)
+        return 1
+    except (IndexError, ValueError):
+        pass
+    except OSError as exc:
+        print(f"wdd-ledger: {exc}", file=sys.stderr)
+        return 2
+    print(f"wdd-ledger: bad usage: {' '.join(argv)}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
