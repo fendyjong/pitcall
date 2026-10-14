@@ -14,6 +14,8 @@ and this script's whole job is feeding paths to `git checkout`.
 
 import json
 
+import pytest
+
 from conftest import run_script
 
 REQUIRED = {
@@ -25,8 +27,16 @@ REQUIRED = {
 
 
 def _config(repo, **extra):
-    (repo.path / "pitcall.config.json").write_text(json.dumps({**REQUIRED, **extra}))
+    """Write the config where `init` writes it: `.pitcall/config.json`."""
+    _raw_config(repo, json.dumps({**REQUIRED, **extra}))
     return repo
+
+
+def _raw_config(repo, text):
+    d = repo.path / ".pitcall"
+    d.mkdir(exist_ok=True)
+    (d / "config.json").write_text(text)
+    return d / "config.json"
 
 
 def test_prints_each_item_on_its_own_line(repo):
@@ -100,8 +110,8 @@ def test_an_explicit_checkout_is_read_instead_of_the_caller_s(repo, tmp_path):
     argument is how a caller settles it — so it must be taken at face value.
     """
     other = tmp_path / "elsewhere"
-    other.mkdir()
-    (other / "pitcall.config.json").write_text(
+    (other / ".pitcall").mkdir(parents=True)
+    (other / ".pitcall" / "config.json").write_text(
         json.dumps({**REQUIRED, "migration_homes": ["db/migrations"]})
     )
     _config(repo, migration_homes=["not/this/one"])
@@ -166,3 +176,129 @@ def test_usage_error_exits_2(repo):
     r = run_script("project-config", cwd=repo.path, env=repo.env)
     assert r.returncode == 2
     assert "usage:" in r.stderr
+
+
+# --- `--flag`: an optional boolean, answered three ways -----------------------
+#
+# `false` and `unset` are different facts — a project's decision, and no
+# decision — and brainstorming's bounded path warns only on the second. So the
+# cases that matter are the ones a two-valued reader would collapse.
+
+
+def _flag(repo, key="bounded_via_wdd"):
+    return run_script("project-config", "--flag", key, cwd=repo.path, env=repo.env)
+
+
+def test_flag_prints_true(repo):
+    _config(repo, bounded_via_wdd=True)
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "true\n"
+
+
+def test_flag_prints_false(repo):
+    _config(repo, bounded_via_wdd=False)
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "false\n"
+
+
+def test_flag_reads_an_absent_key_as_unset(repo):
+    _config(repo)
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "unset\n"
+
+
+def test_flag_reads_null_as_unset(repo):
+    """`null` means "no such setting" everywhere else in the config; here too."""
+    _config(repo, bounded_via_wdd=None)
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "unset\n"
+
+
+def test_flag_reads_a_checkout_with_no_config_as_unset(repo):
+    """The one mode where no config is not an error.
+
+    Brainstorming runs in projects that never ran `init`; a project with no
+    config has made no decision, and failing would make every bounded task
+    there stop to ask.
+    """
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "unset\n"
+
+
+@pytest.mark.parametrize("value", ["yes", "true", 1, ["true"]])
+def test_flag_refuses_anything_but_a_json_boolean(repo, value):
+    """A string "true" is not true: a flag that half-reads as true is worse than one that refuses."""
+    _config(repo, bounded_via_wdd=value)
+    r = _flag(repo)
+    assert r.returncode == 2
+    assert r.stdout == ""
+    assert "bounded_via_wdd" in r.stderr
+
+
+def test_flag_refuses_a_config_that_will_not_parse(repo):
+    """A config that exists but cannot be read is an error, not "no decision"."""
+    _raw_config(repo, "{not json")
+    r = _flag(repo)
+    assert r.returncode == 2
+    assert r.stdout == ""
+
+
+def test_flag_refuses_a_config_that_exists_but_cannot_be_read(repo):
+    """An OSError on read (here: a directory at the config path) is unreadable, not "no decision"."""
+    (repo.path / ".pitcall" / "config.json").mkdir(parents=True)
+    r = _flag(repo)
+    assert r.returncode == 2
+    assert r.stdout == ""
+
+
+#: Each passes the loader's required-key check by accident unless refused first:
+#: `k in` a list or a string of the key names is true for every required key.
+NOT_OBJECTS = [
+    "null",
+    "5",
+    json.dumps(sorted(REQUIRED)),
+    json.dumps(" ".join(sorted(REQUIRED))),
+]
+
+
+@pytest.mark.parametrize("raw", NOT_OBJECTS)
+def test_flag_refuses_a_config_that_is_not_a_json_object(repo, raw):
+    """A top level that is not an object is unreadable: exit 2, not a traceback."""
+    _raw_config(repo, raw)
+    r = _flag(repo)
+    assert r.returncode == 2, r.stderr
+    assert r.stdout == ""
+    assert "Traceback" not in r.stderr
+
+
+def test_scalar_refuses_a_config_that_will_not_parse_with_exit_2(repo):
+    """The docstring's exit 2 for an unreadable config, held in every mode."""
+    _raw_config(repo, "{not json")
+    r = run_script("project-config", "--scalar", "default_branch",
+                   cwd=repo.path, env=repo.env)
+    assert r.returncode == 2, r.stderr
+    assert r.stdout == ""
+    assert "Traceback" not in r.stderr
+
+
+def test_flag_prints_the_deprecation_notice_once(repo):
+    """One resolution of the config, so one notice for a legacy location."""
+    (repo.path / "pitcall.config.json").write_text(
+        json.dumps({**REQUIRED, "bounded_via_wdd": True}))
+    r = _flag(repo)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "true\n"
+    assert r.stderr.count("deprecated") == 1
+
+
+def test_a_refused_flag_prints_the_deprecation_notice_once(repo):
+    (repo.path / "pitcall.config.json").write_text(
+        json.dumps({**REQUIRED, "bounded_via_wdd": "yes"}))
+    r = _flag(repo)
+    assert r.returncode == 2
+    assert r.stderr.count("deprecated") == 1

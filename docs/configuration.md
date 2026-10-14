@@ -96,6 +96,7 @@ branch on it.
 | `claim_expiry_hours` | Hours a claim is honoured before another session may treat it as abandoned — **one half of the test**, never the whole of it. | Yes for `claim`'s refusal path. | `scripts/tracker.py`'s `is_stale()`, via `scripts/claim.py`. | `claim` cannot judge an existing claim and refuses. |
 | `backlog_milestone` | The milestone holding not-yet-scheduled work. | Yes for `file`. | `scripts/file.py`'s `build_command()`. | `file` refuses rather than filing into the milestone in flight. |
 | `notes_milestone` | The milestone holding **recorded decisions that are not work** — a ruling and its reasoning, kept so a later reader finds the answer rather than assuming an oversight. | Yes for `file --notes`; unused otherwise. | `scripts/file.py`'s `build_command()`. | `file --notes` refuses, naming the key. It never falls back to `backlog_milestone`: a note filed silently into the backlog is the defect the key exists to remove, and the fallback would be indistinguishable from not having the key at all. |
+| `bounded_via_wdd` | Whether a bounded change goes through wave-driven-development (`true`) or is implemented directly (`false`). | No. | `skills/wave-driven-development/scripts/project-config` (`--flag`), `skills/brainstorming/SKILL.md` (the bounded path). | Bounded implements directly; brainstorming warns when the project's own instructions require WDD. |
 
 **How to recognise the right value:**
 
@@ -129,6 +130,11 @@ branch on it.
   backlog it means the work got done, and in a notes milestone it means the
   reason the ruling rested on stopped being true. If a project cannot say which
   of those it wants, it does not need this key yet.
+- `bounded_via_wdd` — look for a rule in `CLAUDE.md`, `AGENTS.md` or contributor
+  docs requiring every change to running code to go through wave-driven-development
+  or a reviewed plan. Found → propose `true` and quote that line as the evidence.
+  Propose `false` only when the project explicitly allows small changes directly.
+  Otherwise leave it unset: `false` is a decision the project makes, not a default.
 
 ## Declared, but nothing reads them yet
 

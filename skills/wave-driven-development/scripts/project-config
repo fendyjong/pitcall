@@ -40,7 +40,19 @@ config. `worktree_dir` and `plan_dir` are NOT in `REQUIRED_KEYS` — for those t
 this `--scalar` check is the only enforcement a missing key ever gets, so it
 fires on any project that has simply never set one, not only a broken config.
 
-Usage: project-config [--scalar] KEY [CHECKOUT]
+`--flag` reads an optional boolean and answers THREE ways — `true`, `false`
+or `unset` — because `false` and `unset` are different facts: `false` is a
+project's decision, `unset` is no decision, and brainstorming's bounded path
+warns only on the second. Absent and `null` both read `unset`. Unlike every
+other mode, a checkout with NO config file answers `unset` rather than
+failing: brainstorming runs in projects that never ran `init`, and a project
+with no config has made no decision. A config that exists but cannot be read,
+and a value that is not a JSON boolean, are errors — a flag that half-reads as
+true is worse than one that refuses. A config that exists but lacks the
+loader's required keys is unreadable in that sense too, so a project that writes
+only this key gets exit 2, not `unset`.
+
+Usage: project-config [--scalar | --flag] KEY [CHECKOUT]
 Exit:  0 ok (list mode: including "no such key") | 2 usage, unreadable config,
        wrong type, or a missing/empty scalar
 """
@@ -54,21 +66,55 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 try:
-    from lane_config import config_path, load_config
+    from lane_config import ConfigNotFound, config_path, load_config
 except ImportError:  # pragma: no cover - a broken install, not a code path
     sys.exit("project-config: cannot import lane_config — the plugin is incomplete")
 
 
+def read_flag(key: str, checkout: str | None) -> int:
+    """`--flag`: print `true`, `false` or `unset` for an optional boolean key."""
+    # One resolution of the config, inside the loader. Resolving it here as well
+    # repeated the legacy-location deprecation notice once per resolution.
+    try:
+        cfg = load_config(checkout)
+    except ConfigNotFound:
+        print("unset")
+        return 0
+    except RuntimeError as exc:
+        # The loader reports an unreadable, unparseable or non-object config,
+        # and a missing required key, as RuntimeError: all unreadable here.
+        sys.stderr.write(f"{exc}\n")
+        return 2
+
+    value = cfg.get(key)
+    if value is None:
+        print("unset")
+        return 0
+    if not isinstance(value, bool):
+        sys.stderr.write(
+            f"project-config: {key} must be true or false, not a "
+            f"{type(value).__name__} ({value!r}) — a flag that half-reads as "
+            "true is worse than one that refuses\n"
+        )
+        return 2
+    print("true" if value else "false")
+    return 0
+
+
 def main(argv: list[str]) -> int:
-    scalar = bool(argv) and argv[0] == "--scalar"
-    if scalar:
+    mode = argv[0] if argv and argv[0] in ("--scalar", "--flag") else None
+    if mode:
         argv = argv[1:]
     if not 1 <= len(argv) <= 2:
-        sys.stderr.write("usage: project-config [--scalar] KEY [CHECKOUT]\n")
+        sys.stderr.write("usage: project-config [--scalar | --flag] KEY [CHECKOUT]\n")
         return 2
 
     key = argv[0]
     checkout = argv[1] if len(argv) == 2 else None
+
+    if mode == "--flag":
+        return read_flag(key, checkout)
+    scalar = mode == "--scalar"
 
     try:
         cfg = load_config(checkout)
