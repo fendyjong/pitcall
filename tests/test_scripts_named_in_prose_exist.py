@@ -171,11 +171,14 @@ class Repo(NamedTuple):
     `slug` is `owner/name` (see `repo_slug()`) and `branch` the default
     branch. `exists_at(ref, path)` answers for a link pinned to any other
     ref -- see `link_resolves()`. Without it every pinned link is skipped.
+    `gitlinks` are the tracked paths that are submodules, which no link
+    resolves: GitHub serves a 404 for a `blob/`, `tree/` or `raw/` link to one.
     """
 
     slug: str
     branch: str
     exists_at: Optional[Callable[[str, str], Optional[bool]]] = None
+    gitlinks: frozenset = frozenset()
 
 
 def repo_link(token, slug):
@@ -193,9 +196,9 @@ def repo_link(token, slug):
 
     The path ends at a `#L10` line anchor or `?plain=1`, and at the quote or
     bracket that closes `<https://...>`, `[t](<https://...>)` or
-    `href="https://..."`. It is percent-decoded, as GitHub decodes it --
-    after the cut, so a `%3F` stays part of a name -- and a run of slashes
-    reads as one.
+    `href="https://..."`. It is percent-decoded as GitHub decodes it, after
+    the cut and after `clean()`, so a decoded `%3F` or `%29` stays part of
+    the name; and a run of slashes reads as one.
 
     None means there is no claim to judge: the URL points anywhere else --
     another repository, another host, `http://host:port` -- whose tree this
@@ -221,12 +224,15 @@ def repo_link(token, slug):
     if link is None:
         return None
     ref = link[1] or link[2]
-    path = unquote(re.split(r"[?#\"'>]", token[link.end():], maxsplit=1)[0])
-    # GitHub serves `blob/main//scripts/x` as `blob/main/scripts/x`.
-    path = re.sub(r"/{2,}", "/", path).lstrip("/")
-    if "<" in path or any(part in (".", "..") for part in path.split("/")):
+    cut = re.split(r"[?#\"'>]", token[link.end():], maxsplit=1)[0]
+    # Before `clean()`, which would strip the `<` off `<scripts/name`.
+    if "<" in unquote(cut):
         return None
-    return ref, clean(path)
+    # GitHub serves `blob/main//scripts/x` as `blob/main/scripts/x`.
+    path = re.sub(r"/{2,}", "/", unquote(clean(cut))).lstrip("/")
+    if any(part in (".", "..") for part in path.split("/")):
+        return None
+    return ref, path
 
 
 def link_resolves(ref, path, tracked_paths, repo):
@@ -245,7 +251,7 @@ def link_resolves(ref, path, tracked_paths, repo):
     path in one still fails.
     """
     if ref in (repo.branch, "HEAD", f"refs/heads/{repo.branch}"):
-        return path in tracked_paths
+        return path in tracked_paths and path not in repo.gitlinks
     if repo.exists_at is None:
         return None
     return repo.exists_at(ref, path)
@@ -266,12 +272,14 @@ def exists_at(root):
     A tag link whose first path segment is missing at that tag is skipped
     too: with a tag `v2` and a branch `v2/hotfix`, `blob/v2/hotfix/...` is a
     link to the branch, which `REF` reads as the tag with `hotfix/` on the
-    path. Only what `git ls-files` would list counts, as in the tracked-paths
-    judge -- a file, or a submodule's gitlink: `cat-file -e` alone would also
-    pass a directory.
+    path. Only a file counts, as in the tracked-paths judge: `cat-file -e`
+    alone would also pass a directory, and a submodule's gitlink is no file
+    (see `Repo.gitlinks`).
     """
     def commit(ref):
         """`(sha, tagged)`, or None. A branch name is neither candidate."""
+        if "\0" in ref:
+            return None  # no ref, and no argv either
         name = ref.removeprefix("refs/tags/")
         candidates = [(f"refs/tags/{name}", True)]
         if name == ref and SHA.fullmatch(name):
@@ -296,7 +304,7 @@ def exists_at(root):
         sha, tagged = found
         if tagged and kind(sha, path.split("/", 1)[0]) is None:
             return None
-        return kind(sha, path) in ("blob", "commit")
+        return kind(sha, path) == "blob"
 
     return answer
 
@@ -306,7 +314,8 @@ def this_repo(root):
 
     `default_branch` is read through `lane_config`, the plugin's own config
     reader, rather than a second one here; it fails loudly for the same
-    reason `repo_slug()` does.
+    reason `repo_slug()` does. Submodules are read from the index, where
+    mode 160000 marks a gitlink.
     """
     try:
         branch = lane_config.load_config(root)["default_branch"]
@@ -317,7 +326,11 @@ def this_repo(root):
             f"default_branch is {branch!r}: a link to the default branch "
             f"cannot be told from a pinned one without it."
         )
-    return Repo(repo_slug(root), branch, exists_at(root))
+    staged = _out(root, "ls-files", "--stage").split("\n")
+    gitlinks = frozenset(
+        line.split("\t", 1)[1] for line in staged if line.startswith("160000 ")
+    )
+    return Repo(repo_slug(root), branch, exists_at(root), gitlinks)
 
 
 def tracked(root):
@@ -844,8 +857,27 @@ def test_a_placeholder_inside_a_link_is_not_a_claim():
     reached it would fail CI on correct prose."""
     repo = Repo(REPO.slug, "main", lambda ref, path: False)
     for link in (f"{BLOB}/scripts/<name>", f"{BLOB}/scripts/run-<name>",
+                 f"{BLOB}/<scripts/name>",
                  f"https://github.com/{REPO.slug}/blob/<sha>/scripts/x"):
         assert problems_in(f"see `{link}`", "docs/x.md", set(), [], repo=repo) == [], link
+
+
+def test_a_submodule_is_no_file_on_the_default_branch():
+    """`git ls-files` lists a submodule's gitlink, but GitHub serves a 404 for
+    a link to one -- the pinned judge already says so (`exists_at()`)."""
+    repo = Repo(REPO.slug, "main", gitlinks=frozenset({"scripts/sub"}))
+    found = problems_in(f"`{BLOB}/scripts/sub`", "d.md", set(), ["scripts/sub"],
+                        repo=repo)
+    assert found and "scripts/sub" in found[0]
+
+
+def test_a_doubled_slash_mid_path_reads_as_one():
+    tracked_paths = ["skills/w/scripts/lane.py"]
+    assert problems_in(f"`{BLOB}/skills//w/scripts/lane.py`", "d.md", set(),
+                       tracked_paths, repo=REPO) == []
+    found = problems_in(f"`{BLOB}/skills//w/scripts/nope.py`", "d.md", set(),
+                        tracked_paths, repo=REPO)
+    assert found and "nope.py" in found[0]
 
 
 def test_a_dot_segment_is_skipped_by_both_judges():
@@ -866,10 +898,12 @@ def test_a_percent_encoded_path_is_decoded():
                         tracked_paths, repo=REPO)
     assert found and "nope%2Epy" in found[0]
 
-    # Decoded after the cut: `%3F` is a `?` in the file name, not a query.
-    found = problems_in(f"`{BLOB}/scripts/lane.py%3Fx`", "d.md", set(),
-                        tracked_paths, repo=REPO)
-    assert found and "lane.py%3Fx" in found[0]
+    # Decoded after the cut and after `clean()`: a decoded character is part
+    # of the file name -- mid-name or at its end -- not a query or a stray.
+    for encoded in ("lane.py%3Fx", "lane.py%3F", "lane.py%29"):
+        found = problems_in(f"`{BLOB}/scripts/{encoded}`", "d.md", set(),
+                            tracked_paths, repo=REPO)
+        assert found and encoded in found[0], encoded
 
 
 def test_a_link_to_a_missing_file_outside_scripts_is_not_this_gates_claim():
@@ -1038,10 +1072,18 @@ def _commit(root, message):
     return _out(root, "rev-parse", "HEAD").strip()
 
 
-def test_this_repo_reads_the_slug_and_the_default_branch(tmp_path):
-    root = _config(_manifest(tmp_path, {"repository": "https://github.com/acme/widget"}))
+def _gitlink(root, path, oid="1" * 40):
+    """Stage a submodule's gitlink. The default oid is in no object store,
+    as a real submodule's commit never is in its superproject's."""
+    _out(root, "update-index", "--add", "--cacheinfo", f"160000,{oid},{path}")
+
+
+def test_this_repo_reads_the_slug_the_default_branch_and_the_submodules(tmp_path):
+    root = _config(_manifest(_repo(tmp_path), {"repository": "https://github.com/acme/widget"}))
+    _gitlink(root, "scripts/sub")
     repo = this_repo(root)
     assert (repo.slug, repo.branch) == ("acme/widget", "trunk")
+    assert repo.gitlinks == frozenset({"scripts/sub"})
 
 
 @pytest.mark.parametrize("data", [
@@ -1097,14 +1139,17 @@ def test_exists_at_answers_for_a_sha_or_tag_and_skips_the_rest(tmp_path):
     assert answer("v1", "scripts/nope") is False, "a wrong path at a tag still fails"
     assert answer(first, "nope/scripts/old-name") is False, "a sha holds no slash: judged"
 
-    # A submodule's gitlink is listed by `git ls-files`, so the tracked-paths
-    # judge resolves it; the pinned judge must agree.
-    # Committed straight from the index: `_commit`'s `add -A` would stage the
+    # A submodule is no file: GitHub serves a 404 for a link to one, and the
+    # tracked-paths judge leaves it out too (`Repo.gitlinks`). Committed
+    # straight from the index: `_commit`'s `add -A` would stage the
     # gitlink's missing directory as a deletion.
-    _out(root, "update-index", "--add", "--cacheinfo", f"160000,{first},scripts/sub")
+    _gitlink(root, "scripts/sub")
+    _gitlink(root, "scripts/own", first)  # one whose commit IS in this store
     _out(root, "commit", "-qm", "gitlink")
     linked = _out(root, "rev-parse", "HEAD").strip()
-    assert answer(linked, "scripts/sub") is True
+    assert answer(linked, "scripts/sub") is False
+    assert answer(linked, "scripts/own") is False, "cat-file calls this one a commit"
+    assert answer("v1\0x", "scripts/old-name") is None, "a NUL in the ref is no crash"
 
 
 def test_the_gate_itself_checks_urls(tmp_path):
