@@ -86,10 +86,10 @@ Subagent (general-purpose):
     labels. Before routing anything `issue`, look for an issue it
     duplicates, and run `gh issue view <n>` to confirm a candidate. A finding
     that matches an open issue carries its number, whatever its route.
-    [CLAIM_LABEL] is the label that marks an issue claimed by another
-    session — `none` when the project configures no such label, and then
-    nothing reads as claimed. #[SPEC_ISSUE] is this run's own issue, never
-    another session's.
+    [CLAIM_LABELS] are the labels that mark an issue claimed by another
+    session — claimed, or in review with its PR open — `none` when the
+    project configures neither, and then nothing reads as claimed.
+    #[SPEC_ISSUE] is this run's own issue, never another session's.
 
     ## Where Each Finding Came From
 
@@ -298,7 +298,8 @@ Subagent (general-purpose):
   and any ruling on one. `none` for review #1
 - `[OPEN_ISSUES_FILE]` — REQUIRED: `<workspace>/open-issues.json`, rewritten
   before each review
-- `[CLAIM_LABEL]` — the project config's `status_labels.ongoing`, or `none`
+- `[CLAIM_LABELS]` — the project config's `status_labels.ongoing` and
+  `status_labels.in_review`, whichever are set, or `none`
 - `[SPEC_ISSUE]` — the number of the issue this run implements
 
 **Reviewer returns:** one line naming `[REPORT_FILE]` and the verdict. The

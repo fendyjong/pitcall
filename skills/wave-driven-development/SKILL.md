@@ -1214,7 +1214,8 @@ added is still `introduced`:
    default — as review #1: `[SINCE_SHA]` is `$MERGE_BASE`, `[REVIEWED_SHA]` is
    `git rev-parse HEAD`, `[REPORT_FILE]` is `<workspace>/final-review-1.md`, `[SWEEP_LINES]`
    carries every `Sweep:` line **and every `Task <N>: parked` line** in the ledger, copied in
-   full, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABEL]` (`status_labels.ongoing`, or `none`) and
+   full, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABELS]` (`status_labels.ongoing` and
+   `status_labels.in_review`, whichever are set, or `none`) and
    `[SPEC_ISSUE]` are filled as the template's placeholder list says. A parked line is the
    breaker's ruling that a reviewer was wrong; this is its whole-branch second look, and it is
    routed like any other item — `note` when the reviewer agrees with the ruling. The reviewer
@@ -1229,7 +1230,7 @@ added is still `introduced`:
 | `sweep` | all three hold: a reproduction or a check that fails today; fits one task with declared paths; not a design fork. A matched `#N` is `full` or `part`. |
 | `ask` | the first two sweep conditions hold, but it is a design fork |
 | `issue` | `pre-existing`, real, and fails the sweep conditions; it names its duplicate `#N`, or `none` |
-| `note` | dormant or low value; or it matches an issue another session claimed — one carrying `status_labels.ongoing`, other than this run's own spec issue. With that label unset, nothing reads as claimed. |
+| `note` | dormant or low value; or it matches an issue another session claimed — one carrying `status_labels.ongoing` or `status_labels.in_review` (`ship` swaps the first for the second, and the work is still that session's until its PR lands), other than this run's own spec issue. With both labels unset, nothing reads as claimed. |
 
 `introduced` is never routed `issue`: a Critical/Important one is fixed on the branch or the run
 stops; a Minor one is swept or noted.
@@ -1320,7 +1321,7 @@ Each is `final-reviewer-prompt.md` on the most capable model, given:
   NOT ADDRESSED;
 - as `[SWEEP_LINES]`, only the `(late)` `Sweep:` lines written since the previous full-branch
   review — everything older was routed by a review already;
-- `open-issues.json` rewritten first, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABEL]` and `[SPEC_ISSUE]`
+- `open-issues.json` rewritten first, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABELS]` and `[SPEC_ISSUE]`
   as for review #1; `[REPORT_FILE]` is `<workspace>/final-review-<k>.md` — after an
   owner-directed chain restart, the file name set out in The verdict chain, below.
 
@@ -1409,12 +1410,12 @@ Run `scripts/wdd`, from the **plan worktree**:
 
 ```bash
 scripts/wdd check   PLAN_FILE   # verify only, no side effects
-scripts/wdd ship    PLAN_FILE   # check, push, open PR, sweep section
+scripts/wdd ship    PLAN_FILE   # check, push, open PR, sweep section, in_review label
 
 # bringup + validate -> a receipt for this exact commit
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run --session <session-name>
 
-scripts/wdd merge   PLAN_FILE   # receipt + green -> merge, then sync main
+scripts/wdd merge   PLAN_FILE   # receipt + green -> merge, clear claim label, sync main
 scripts/wdd cleanup PLAN_FILE   # task branches, worktrees, workspace
 ```
 
@@ -1456,10 +1457,16 @@ live branch would decide the fate of the only copy of a task's work. All four
 refuse rather than guess.
 
 `ship` pushes, opens the PR, appends its closing keyword and the `## Sweep`
-section, and stops there. `merge` is what lands it, and
-what it replaces is a human remembering that the branch was validated. That
-bound holds until the first time it does not, and nothing observes the failure
-— so `merge` is gated on **evidence** instead.
+section, swaps the issue's `status_labels.ongoing` for `status_labels.in_review`,
+and stops there. The issue is the one the branch names, and only once the PR
+body closes it. `merge` takes both labels off that issue once the PR has
+landed, and never touches `status_labels.blocked`, which is someone else's to
+retract. Every label step is soft and spoken: a missing number, an unset label
+or a refusing `gh` is reported and never blocks a ship or a merge.
+
+`merge` is what lands the PR, and what it replaces is a human remembering that
+the branch was validated. That bound holds until the first time it does not,
+and nothing observes the failure — so `merge` is gated on **evidence** instead.
 
 **The evidence is a lane receipt.** `lane run` writes
 `.pitcall/receipts/<sha>.json` when — and only when — `validate` passed against
@@ -1510,7 +1517,12 @@ and any push in between means running the lane again.
    so what lands is a sha nothing validated, and it also makes `cleanup`'s
    ancestry test permanently false. **The head pin is the other half of the
    receipt** — see below;
-7. fast-forwards the main checkout, then runs the project's optional
+7. clears the claim label: removes `status_labels.ongoing` and
+   `status_labels.in_review` from the issue the branch names, when the merged
+   PR's body closes it. It runs before the sync below, whose exit 4 is about
+   the main checkout and not the merge, and it is soft: a refusal is reported
+   and never changes the exit status;
+8. fast-forwards the main checkout, then runs the project's optional
    `refresh_commands` there **best-effort** — the merge has already happened
    and a regeneration failing must not unwind it.
 

@@ -31,10 +31,12 @@
 #
 # Usage:
 #   wdd check   PLAN_FILE   # verify only, no side effects
-#   wdd ship    PLAN_FILE   # check, push, open PR, append the sweep section
+#   wdd ship    PLAN_FILE   # check, push, open PR, append the sweep section,
+#                           # swap the issue's claim label for in_review
 #   wdd merge   PLAN_FILE   # require a lane receipt for the PR's head
 #                           # sha, wait for green, merge server-side,
-#                           # fast-forward the main checkout
+#                           # clear the claim label, fast-forward the
+#                           # main checkout
 #   wdd cleanup PLAN_FILE   # AFTER the PR merges: branches + worktrees + workspace
 #
 # Exit: 0 ok | 1 verification failed, or merge refused (nothing landed)
@@ -194,9 +196,32 @@ fail=0
 # could not add printed, which turns a silent miss into a loud one.
 TRACKER="$HERE/../../../scripts/tracker.py"
 
+# The issue this PR closes, once the body really carries the keyword -- set by
+# `attach_closing_keyword`, read by `mark_in_review`. Empty means the PR closes
+# no issue this branch names, and every path there that leaves it empty has
+# already said why.
+CLOSES_ISSUE=""
+
+# True when BODY carries a closing keyword for exactly issue N.
+#
+# GitHub's rule, not a substring: any of its nine keywords, in any case, with an
+# optional colon -- and the number ends where the digits end, because `Closes
+# #20` contains `Closes #2` and closes nothing of #2's. Read as a substring,
+# `ship` reported #2 already closed and left the PR not closing it.
+#
+# A here-string, never `printf | grep -q`: `grep -q` exits at its first match
+# and SIGPIPEs a writer whose body outgrew the pipe buffer, and under
+# `pipefail` that reads as no match (see the probe in `merge`).
+body_closes() {
+  grep -qiE "(^|[^[:alnum:]_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#$2([^[:alnum:]_]|\$)" <<< "$1"
+}
+
 attach_closing_keyword() {
   local pr_ref="${1:-}" issue body
-  [ -n "$pr_ref" ] || return 0
+  if [ -z "$pr_ref" ]; then
+    note "no PR found for '$BRANCH' -- no closing keyword, sweep section or claim label added."
+    return 0
+  fi
 
   issue=""
   [ -f "$TRACKER" ] && issue="$(python3 "$TRACKER" issue-from-branch "$BRANCH" 2>/dev/null || true)"
@@ -217,16 +242,127 @@ attach_closing_keyword() {
     return 0
   fi
 
-  body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null || true)"
-  case "$body" in
-    *"Closes #$issue"*) note "PR body already closes #$issue." ; return 0 ;;
-  esac
+  # A failed read is NOT an empty body. Folding it into one with `|| true` made
+  # the edit below write "nothing, then the keyword" over the PR's whole body.
+  if ! body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null)"; then
+    note "could not read the PR body; add 'Closes #$issue' before merging."
+    return 0
+  fi
+  if body_closes "$body" "$issue"; then
+    note "PR body already closes #$issue."
+    CLOSES_ISSUE="$issue"
+    return 0
+  fi
 
   if gh pr edit "$BRANCH" --body "$(printf '%s\n\nCloses #%s' "$body" "$issue")" >/dev/null 2>&1; then
     note "PR body closes #$issue on merge."
+    CLOSES_ISSUE="$issue"
   else
     note "could not update the PR body; add 'Closes #$issue' before merging."
   fi
+}
+
+# --- the claim label follows the PR -------------------------------------------
+# `claim` puts `status_labels.ongoing` on an issue, and before this nothing ever
+# took it off: closed issues kept advertising themselves as in flight, and only
+# a human noticing ever cleared one (#46). Opening the PR changes the issue's
+# state from claimed to in review, and `gh issue list` does not show linked
+# PRs, so the label is the only place that change is visible in the list.
+# `ship` swaps `ongoing` for `in_review`; `merge` takes both off once the PR
+# that closes the issue has landed.
+#
+# WHICH ISSUE: only the one the branch names, and only once the PR body closes
+# it. Never GitHub's `closingIssuesReferences` for the PR: `--fill` lifts
+# closing keywords out of commit prose (#45) and the sweep section adds one per
+# fixed issue, so that list names issues nobody claimed.
+#
+# ONLY THE LABELS THIS WORKFLOW APPLIES. `blocked` is put on by someone for a
+# reason this run knows nothing about, so nothing here touches it.
+#
+# Soft and spoken, like the keyword: a label must never block a release. gh's
+# stderr flows through, because its diagnosis ("label not found") is the part
+# an operator can act on.
+status_label() {
+  [ -f "$TRACKER" ] || return 0
+  python3 "$TRACKER" status-label "$1" || true
+}
+
+mark_in_review() {
+  local pr_ref="${1:-}" issue="$CLOSES_ISSUE" ongoing in_review
+  # No PR at all: `attach_closing_keyword` already said so, naming this step.
+  [ -n "$pr_ref" ] || return 0
+  if [ -z "$issue" ]; then
+    note "the PR closes no issue this branch names -- no claim label changed."
+    return 0
+  fi
+  in_review="$(status_label in_review)"
+  if [ -z "$in_review" ]; then
+    note "status_labels.in_review is not configured -- #$issue's claim label left as it is."
+    return 0
+  fi
+  ongoing="$(status_label ongoing)"
+  # A project with one "in progress" label names it for both states. Adding it
+  # is then a no-op, and removing it after would leave a claimed issue bare.
+  [ "$ongoing" != "$in_review" ] || ongoing=""
+  # One call per label, so a label gh refuses -- one the project never created
+  # -- cannot take the other step down with it. `in_review` goes on first and
+  # `ongoing` comes off only after it: a refused add leaves the issue reading
+  # as claimed, which is still true, rather than as nobody's.
+  if ! gh issue edit "$issue" --add-label "$in_review" >/dev/null; then
+    note "could not put $in_review on #$issue${ongoing:+ -- $ongoing left as it is}."
+    return 0
+  fi
+  if [ -z "$ongoing" ]; then
+    note "#$issue is labelled $in_review."
+  elif gh issue edit "$issue" --remove-label "$ongoing" >/dev/null; then
+    note "#$issue is labelled $in_review in place of $ongoing."
+  else
+    note "#$issue is labelled $in_review, but $ongoing could not be removed -- remove it by hand."
+  fi
+}
+
+# After the merge, and before the sync that can exit 4: that exit is about the
+# main checkout, and the merge it follows still landed.
+#
+# The issue is read off the branch again rather than carried from `ship`, which
+# ran in another invocation -- and the gate is the MERGED PR's body, not the
+# number alone. A PR that does not close the issue leaves it open, and an open
+# issue's claim is still the truth about it.
+clear_claim_labels() {
+  local pr_ref="$1" issue body ongoing in_review label
+  issue=""
+  [ -f "$TRACKER" ] && issue="$(python3 "$TRACKER" issue-from-branch "$BRANCH" 2>/dev/null || true)"
+  if [ -z "$issue" ]; then
+    note "no issue number in '$BRANCH' -- no claim label to clear."
+    return 0
+  fi
+  if ! body="$(gh pr view "$pr_ref" --json body -q .body)"; then
+    note "could not read PR #$pr_ref's body -- #$issue's claim label left as it is;"
+    note "remove it by hand if the PR closed #$issue."
+    return 0
+  fi
+  if ! body_closes "$body" "$issue"; then
+    note "PR #$pr_ref does not close #$issue -- its claim label stays while the issue is open."
+    return 0
+  fi
+  ongoing="$(status_label ongoing)"
+  in_review="$(status_label in_review)"
+  [ "$in_review" != "$ongoing" ] || in_review=""   # one label named twice
+  if [ -z "$ongoing$in_review" ]; then
+    note "status_labels.ongoing and .in_review are not configured -- no claim label to clear."
+    return 0
+  fi
+  # One call per label, for the reason `mark_in_review` gives: removing
+  # `ongoing` must not depend on `in_review` existing, or #46's stale label
+  # comes back through one refusal.
+  for label in "$ongoing" "$in_review"; do
+    [ -n "$label" ] || continue
+    if gh issue edit "$issue" --remove-label "$label" >/dev/null; then
+      note "cleared $label from #$issue."
+    else
+      note "could not clear $label from #$issue -- remove it by hand."
+    fi
+  done
 }
 
 # --- the PR says what the run's sweep did to the backlog ----------------------
@@ -270,7 +406,10 @@ attach_sweep_section() {
   fi
   [ -n "$section" ] || return 0
 
-  body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null || true)"
+  if ! body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null)"; then
+    note "the sweep section was not added: the PR body could not be read."
+    return 0
+  fi
   case "$body" in
     *"## Sweep"*) note "PR body already carries the sweep section." ; return 0 ;;
   esac
@@ -367,6 +506,7 @@ ship)
     gh pr create --base "$BASE" --head "$BRANCH" --fill || note "PR may already exist"
     pr="$(gh pr view "$BRANCH" --json number -q .number 2>/dev/null || true)"
     attach_closing_keyword "${pr:-}"
+    mark_in_review "${pr:-}"
     attach_sweep_section "${pr:-}"
   fi
   echo ""
@@ -845,6 +985,7 @@ PY
     exit 1
   fi
   note "MERGED: PR #$PR_NUM into $BASE"
+  clear_claim_labels "$PR_NUM"
 
   # -- 5. Bring the main checkout level -------------------------------------
   # The one place this script touches the shared checkout, and it is safe by

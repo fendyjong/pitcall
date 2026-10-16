@@ -78,7 +78,9 @@ cuts `<branch_prefix><issue>-<slug>` from `default_branch` — refusing if the i
 already carries a live claim, or if more than one branch matches the issue and there
 is no way to tell which holds the work. `--session` records the caller's session URL
 in the comment, so a later run can recognise its own claim; `--take` reclaims a claim
-that reads stale.
+that reads stale. The label then follows the work: `wdd ship` swaps it for
+`status_labels.in_review` once the PR closes the issue, and `wdd merge` removes both
+once that PR lands.
 
 `--next` picks the issue instead of taking one: the lowest-numbered open issue nothing
 holds, so the oldest work surfaces rather than starving. It judges from claim comments
