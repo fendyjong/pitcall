@@ -96,8 +96,12 @@ def test_the_status_label_cli_prints_nothing_for_an_absent_label(tmp_path):
     repo = _configured_checkout(tmp_path, status_labels={"ongoing": "status:ongoing"})
     r = _cli(repo, "status-label", "in_review")
     assert (r.returncode, r.stdout) == (0, ""), r.stderr
-    r = _cli(tmp_path / "..", "status-label", "in_review")
-    assert r.returncode == 0, "an unreadable config is an absent label too"
+
+
+def test_the_status_label_cli_prints_nothing_without_a_readable_config(tmp_path):
+    """No checkout, no config: an absent label too, never a traceback."""
+    r = _cli(tmp_path, "status-label", "in_review")
+    assert (r.returncode, r.stdout) == (0, ""), r.stderr
 
 
 def test_the_status_label_cli_refuses_a_name_it_does_not_know(tmp_path):

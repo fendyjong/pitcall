@@ -1517,7 +1517,12 @@ and any push in between means running the lane again.
    so what lands is a sha nothing validated, and it also makes `cleanup`'s
    ancestry test permanently false. **The head pin is the other half of the
    receipt** — see below;
-7. fast-forwards the main checkout, then runs the project's optional
+7. clears the claim label: removes `status_labels.ongoing` and
+   `status_labels.in_review` from the issue the branch names, when the merged
+   PR's body closes it. It runs before the sync below, whose exit 4 is about
+   the main checkout and not the merge, and it is soft: a refusal is reported
+   and never changes the exit status;
+8. fast-forwards the main checkout, then runs the project's optional
    `refresh_commands` there **best-effort** — the merge has already happened
    and a regeneration failing must not unwind it.
 

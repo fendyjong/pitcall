@@ -406,7 +406,8 @@ case "$*" in
   "pr create"*)
     ;;
   "pr view "*"--json number -q .number"*)
-    echo 7
+    # `no_pr` is a create that left nothing gh can find for the branch.
+    [ -f "$GH_DIR/no_pr" ] || echo 7
     ;;
   "pr view "*"--json body"*)
     [ -f "$GH_DIR/pr_body_fails" ] && { echo "gh: could not read the PR" >&2; exit 1; }
@@ -427,10 +428,19 @@ case "$*" in
     ;;
   "issue edit "*)
     # A label change, recorded in the log like every call. `issue_edit_fails`
-    # builds a gh that refuses it -- a label the project never created, say.
+    # builds a gh that refuses every one; `refuse_label` one that refuses only
+    # an edit naming that label -- a label the project never created, say.
     if [ -f "$GH_DIR/issue_edit_fails" ]; then
       echo "gh: 'status:in-review' not found" >&2
       exit 1
+    fi
+    if [ -f "$GH_DIR/refuse_label" ]; then
+      refused="$(cat "$GH_DIR/refuse_label")"
+      # `if`, not `[ ... ] && ...`: a loop's status is its last command's, and
+      # the last arg failing the test would refuse every edit.
+      for a in "$@"; do
+        if [ "$a" = "$refused" ]; then echo "gh: '$refused' not found" >&2; exit 1; fi
+      done
     fi
     ;;
   "pr view "*"--json number"*)
@@ -1335,8 +1345,10 @@ def test_ship_swaps_the_claim_label_for_in_review(run, gh):
     cut_for_issue(run, gh)
     r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
-    assert label_edits(gh) == [
-        "issue edit 20 --add-label status:in-review --remove-label status:ongoing"]
+    # One call per label, `in_review` first: a refusal of one never takes the
+    # other down with it, and `ongoing` only comes off once `in_review` is on.
+    assert label_edits(gh) == ["issue edit 20 --add-label status:in-review",
+                               "issue edit 20 --remove-label status:ongoing"]
     # After the link, never before: the label says the PR closes the issue.
     log = calls(gh)
     assert log.index(calls(gh, "pr edit")[0]) < log.index(label_edits(gh)[0]), log
@@ -1387,14 +1399,51 @@ def test_ship_adds_in_review_alone_without_an_ongoing_label(run, gh):
     assert label_edits(gh) == ["issue edit 20 --add-label status:in-review"]
 
 
-def test_a_relabel_gh_refuses_still_ships_and_says_so(run, gh):
+def test_a_relabel_gh_refuses_still_ships_and_keeps_the_claim(run, gh):
+    """`in_review` would not go on, so `ongoing` stays: the issue is still claimed."""
     cut_for_issue(run, gh)
     (gh["dir"] / "issue_edit_fails").write_text("")
     r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
-    assert label_edits(gh), "the swap was attempted"
-    assert "could not relabel #20" in r.stdout, r.stdout
+    assert label_edits(gh) == ["issue edit 20 --add-label status:in-review"]
+    assert "could not put status:in-review on #20" in r.stdout, r.stdout
+    assert "status:ongoing left as it is" in r.stdout, r.stdout
     assert "not found" in r.stderr, "gh's own diagnosis reaches the operator"
+
+
+def test_an_ongoing_label_gh_will_not_remove_is_reported(run, gh):
+    cut_for_issue(run, gh)
+    (gh["dir"] / "refuse_label").write_text("status:ongoing")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert len(label_edits(gh)) == 2
+    assert "status:ongoing could not be removed" in r.stdout, r.stdout
+
+
+def test_ship_says_so_when_no_pr_can_be_found(run, gh):
+    """Nothing to link means nothing to relabel -- and the reason is the PR, not the branch."""
+    cut_for_issue(run, gh)
+    (gh["dir"] / "no_pr").write_text("")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "no PR found for 'feat/20-demo'" in r.stdout, r.stdout
+    assert calls(gh, "pr edit") == [] and label_edits(gh) == []
+
+
+def test_an_unreadable_pr_body_is_never_overwritten(run, gh):
+    """A failed read is not an empty body. Writing back 'nothing + one line'
+    would replace the PR's whole body -- the commit summary, and a closing
+    keyword an earlier step already reported added."""
+    cut_for_issue(run, gh)
+    write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
+    (gh["dir"] / "issue-10").write_text("")
+    (gh["dir"] / "pr_body_fails").write_text("")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert calls(gh, "pr edit") == []
+    assert "could not read the PR body; add 'Closes #20' before merging." in r.stdout, r.stdout
+    assert "the sweep section was not added: the PR body could not be read." in r.stdout, r.stdout
+    assert label_edits(gh) == []
 
 
 def test_closes_20_in_the_body_does_not_close_2(run, gh):
@@ -1408,8 +1457,17 @@ def test_closes_20_in_the_body_does_not_close_2(run, gh):
     r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert (gh["dir"] / "body.txt").read_text().endswith("\n\nCloses #2"), r.stdout
-    assert label_edits(gh) == [
-        "issue edit 2 --add-label status:in-review --remove-label status:ongoing"]
+    assert label_edits(gh) == ["issue edit 2 --add-label status:in-review",
+                               "issue edit 2 --remove-label status:ongoing"]
+
+
+def test_a_keyword_inside_a_word_does_not_close_the_issue(run, gh):
+    """`encloses #20` ends in `closes #20` and closes nothing."""
+    cut_for_issue(run, gh)
+    (gh["dir"] / "body.txt").write_text("this encloses #20 in a box")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (gh["dir"] / "body.txt").read_text().endswith("\n\nCloses #20"), r.stdout
 
 
 def test_another_closing_keyword_already_closes_the_issue(run, gh):
@@ -1420,7 +1478,7 @@ def test_another_closing_keyword_already_closes_the_issue(run, gh):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "already closes #20" in r.stdout, r.stdout
     assert calls(gh, "pr edit") == []
-    assert len(label_edits(gh)) == 1
+    assert len(label_edits(gh)) == 2
 
 
 def merged_for_issue(run, gh, body="Closes #20", **overrides):
@@ -1435,8 +1493,8 @@ def test_merge_clears_the_claim_labels_from_the_issue_it_closed(run, gh):
     merged_for_issue(run, gh)
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
-    assert label_edits(gh) == [
-        "issue edit 20 --remove-label status:ongoing --remove-label status:in-review"]
+    assert label_edits(gh) == ["issue edit 20 --remove-label status:ongoing",
+                               "issue edit 20 --remove-label status:in-review"]
     # After the merge, never before: until then the work is still in review.
     log = calls(gh)
     assert log.index(merges(gh)[0]) < log.index(label_edits(gh)[0]), log
@@ -1480,12 +1538,32 @@ def test_merge_without_claim_labels_configured_clears_nothing(run, gh):
     assert "not configured" in r.stdout, r.stdout
 
 
+def test_merge_clears_only_the_claim_label_that_is_configured(run, gh):
+    merged_for_issue(run, gh, status_labels={"ongoing": "status:ongoing"})
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == ["issue edit 20 --remove-label status:ongoing"]
+
+
+def test_one_label_gh_refuses_does_not_keep_the_other_on(run, gh):
+    """Removing `ongoing` must not depend on `in_review` existing, or the
+    other way round -- one refusal would bring #46's stale label back."""
+    merged_for_issue(run, gh)
+    (gh["dir"] / "refuse_label").write_text("status:in-review")
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert len(label_edits(gh)) == 2
+    assert "cleared status:ongoing from #20" in r.stdout, r.stdout
+    assert "could not clear status:in-review from #20" in r.stdout, r.stdout
+
+
 def test_a_label_clear_gh_refuses_does_not_unwind_the_merge(run, gh):
     merged_for_issue(run, gh)
     (gh["dir"] / "issue_edit_fails").write_text("")
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "could not clear the claim label from #20" in r.stdout, r.stdout
+    assert "could not clear status:ongoing from #20" in r.stdout, r.stdout
+    assert "could not clear status:in-review from #20" in r.stdout, r.stdout
     assert git("rev-parse", "HEAD", cwd=run["main"]) == git(
         "rev-parse", "origin/master", cwd=run["main"])
 
@@ -1497,7 +1575,8 @@ def test_the_label_is_cleared_even_when_the_main_checkout_will_not_fast_forward(
     merged_for_issue(run, gh)
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 4, r.stdout + r.stderr
-    assert len(label_edits(gh)) == 1
+    assert label_edits(gh) == ["issue edit 20 --remove-label status:ongoing",
+                               "issue edit 20 --remove-label status:in-review"]
 
 
 def test_every_script_named_in_the_skill_exists():

@@ -198,7 +198,8 @@ TRACKER="$HERE/../../../scripts/tracker.py"
 
 # The issue this PR closes, once the body really carries the keyword -- set by
 # `attach_closing_keyword`, read by `mark_in_review`. Empty means the PR closes
-# no issue this branch names, for whatever reason that function already gave.
+# no issue this branch names, and every path there that leaves it empty has
+# already said why.
 CLOSES_ISSUE=""
 
 # True when BODY carries a closing keyword for exactly issue N.
@@ -217,7 +218,10 @@ body_closes() {
 
 attach_closing_keyword() {
   local pr_ref="${1:-}" issue body
-  [ -n "$pr_ref" ] || return 0
+  if [ -z "$pr_ref" ]; then
+    note "no PR found for '$BRANCH' -- no closing keyword, sweep section or claim label added."
+    return 0
+  fi
 
   issue=""
   [ -f "$TRACKER" ] && issue="$(python3 "$TRACKER" issue-from-branch "$BRANCH" 2>/dev/null || true)"
@@ -238,7 +242,12 @@ attach_closing_keyword() {
     return 0
   fi
 
-  body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null || true)"
+  # A failed read is NOT an empty body. Folding it into one with `|| true` made
+  # the edit below write "nothing, then the keyword" over the PR's whole body.
+  if ! body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null)"; then
+    note "could not read the PR body; add 'Closes #$issue' before merging."
+    return 0
+  fi
   if body_closes "$body" "$issue"; then
     note "PR body already closes #$issue."
     CLOSES_ISSUE="$issue"
@@ -290,12 +299,20 @@ mark_in_review() {
     return 0
   fi
   ongoing="$(status_label ongoing)"
-  set -- --add-label "$in_review"
-  if [ -n "$ongoing" ]; then set -- "$@" --remove-label "$ongoing"; fi
-  if gh issue edit "$issue" "$@" >/dev/null; then
-    note "#$issue is labelled $in_review${ongoing:+ in place of $ongoing}."
+  # One call per label, so a label gh refuses -- one the project never created
+  # -- cannot take the other step down with it. `in_review` goes on first and
+  # `ongoing` comes off only after it: a refused add leaves the issue reading
+  # as claimed, which is still true, rather than as nobody's.
+  if ! gh issue edit "$issue" --add-label "$in_review" >/dev/null; then
+    note "could not put $in_review on #$issue${ongoing:+ -- $ongoing left as it is}."
+    return 0
+  fi
+  if [ -z "$ongoing" ]; then
+    note "#$issue is labelled $in_review."
+  elif gh issue edit "$issue" --remove-label "$ongoing" >/dev/null; then
+    note "#$issue is labelled $in_review in place of $ongoing."
   else
-    note "could not relabel #$issue; put $in_review on it${ongoing:+ in place of $ongoing} by hand."
+    note "#$issue is labelled $in_review, but $ongoing could not be removed -- remove it by hand."
   fi
 }
 
@@ -307,7 +324,7 @@ mark_in_review() {
 # number alone. A PR that does not close the issue leaves it open, and an open
 # issue's claim is still the truth about it.
 clear_claim_labels() {
-  local pr_ref="$1" issue body ongoing in_review
+  local pr_ref="$1" issue body ongoing in_review label
   issue=""
   [ -f "$TRACKER" ] && issue="$(python3 "$TRACKER" issue-from-branch "$BRANCH" 2>/dev/null || true)"
   if [ -z "$issue" ]; then
@@ -325,18 +342,21 @@ clear_claim_labels() {
   fi
   ongoing="$(status_label ongoing)"
   in_review="$(status_label in_review)"
-  set --
-  if [ -n "$ongoing" ]; then set -- "$@" --remove-label "$ongoing"; fi
-  if [ -n "$in_review" ]; then set -- "$@" --remove-label "$in_review"; fi
-  if [ "$#" = 0 ]; then
+  if [ -z "$ongoing$in_review" ]; then
     note "status_labels.ongoing and .in_review are not configured -- no claim label to clear."
     return 0
   fi
-  if gh issue edit "$issue" "$@" >/dev/null; then
-    note "claim label cleared from #$issue."
-  else
-    note "could not clear the claim label from #$issue; remove it by hand."
-  fi
+  # One call per label, for the reason `mark_in_review` gives: removing
+  # `ongoing` must not depend on `in_review` existing, or #46's stale label
+  # comes back through one refusal.
+  for label in "$ongoing" "$in_review"; do
+    [ -n "$label" ] || continue
+    if gh issue edit "$issue" --remove-label "$label" >/dev/null; then
+      note "cleared $label from #$issue."
+    else
+      note "could not clear $label from #$issue -- remove it by hand."
+    fi
+  done
 }
 
 # --- the PR says what the run's sweep did to the backlog ----------------------
@@ -380,7 +400,10 @@ attach_sweep_section() {
   fi
   [ -n "$section" ] || return 0
 
-  body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null || true)"
+  if ! body="$(gh pr view "$BRANCH" --json body -q .body 2>/dev/null)"; then
+    note "the sweep section was not added: the PR body could not be read."
+    return 0
+  fi
   case "$body" in
     *"## Sweep"*) note "PR body already carries the sweep section." ; return 0 ;;
   esac
