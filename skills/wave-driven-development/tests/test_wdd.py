@@ -409,9 +409,11 @@ case "$*" in
     echo 7
     ;;
   "pr view "*"--json body"*)
+    [ -f "$GH_DIR/pr_body_fails" ] && { echo "gh: could not read the PR" >&2; exit 1; }
     cat "$GH_DIR/body.txt" 2>/dev/null || true
     ;;
   "pr edit "*)
+    [ -f "$GH_DIR/pr_edit_fails" ] && { echo "gh: could not edit the PR" >&2; exit 1; }
     prev=""
     for a in "$@"; do
       [ "$prev" = "--body" ] && printf '%s' "$a" > "$GH_DIR/body.txt"
@@ -422,6 +424,14 @@ case "$*" in
     # An issue resolves when the test created a marker file for it.
     [ -f "$GH_DIR/issue-$3" ] || exit 1
     echo "{\"number\": $3}"
+    ;;
+  "issue edit "*)
+    # A label change, recorded in the log like every call. `issue_edit_fails`
+    # builds a gh that refuses it -- a label the project never created, say.
+    if [ -f "$GH_DIR/issue_edit_fails" ]; then
+      echo "gh: 'status:in-review' not found" >&2
+      exit 1
+    fi
     ;;
   "pr view "*"--json number"*)
     cat "$GH_DIR/pr.json"
@@ -486,7 +496,7 @@ case "$*" in
       echo "Pull request Head branch was modified. Review and try the merge again." >&2
       exit 1
     fi
-    git -C "$GH_PLAN_WT" push -q origin "planbranch:$GH_BASE"
+    git -C "$GH_PLAN_WT" push -q origin "HEAD:$GH_BASE"
     ;;
   *)
     echo "gh stub: unexpected call: $*" >&2
@@ -1277,6 +1287,217 @@ def test_ship_refuses_a_commit_no_review_covered(run, gh):
     assert r.returncode == 1, r.stdout + r.stderr
     assert "rule 3" in r.stderr
     assert not calls(gh, "pr create"), "nothing is pushed or opened for an unreviewed commit"
+
+
+# ---------------------------------------------------------------------------
+# The claim label follows the PR (#20, #46). `claim` puts `ongoing` on; `ship`
+# swaps it for `in_review` once the PR closes the issue; `merge` takes both off
+# once that PR has landed. Only ever the issue the BRANCH names, and only the
+# two labels this workflow applies -- `blocked` belongs to whoever set it.
+# ---------------------------------------------------------------------------
+
+LABELS = {"ongoing": "status:ongoing", "in_review": "status:in-review",
+          "blocked": "status:blocked"}
+
+
+def name_the_claim_labels(run, gh, branch=None, **overrides):
+    """Commit a config naming the claim labels; optionally rename the branch.
+
+    The fixture's config has neither `branch_prefix` nor `status_labels`, so
+    every earlier test exercises the fail-soft path by accident. These tests
+    choose it on purpose or not at all. The config is committed, so the head
+    is reviewed again -- `ship` refuses a commit no review covered -- and the
+    PR is pointed at the new head.
+    """
+    cfg = {"branch_prefix": "feat/", "status_labels": LABELS, **overrides}
+    write_config(run["plan_wt"], **cfg)
+    commit_path(run["plan_wt"], "pitcall.config.json", "this project names its claim labels")
+    if branch:
+        git("branch", "-m", branch, cwd=run["plan_wt"])
+    write_verdict(run["plan_wt"])
+    head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
+    set_pr_head(gh, head)
+    return head
+
+
+def cut_for_issue(run, gh, n=20, **overrides):
+    """The plan branch where `claim` cuts it, `feat/<n>-demo`, with #<n> resolving."""
+    head = name_the_claim_labels(run, gh, branch=f"feat/{n}-demo", **overrides)
+    (gh["dir"] / f"issue-{n}").write_text("")
+    return head
+
+
+def label_edits(gh):
+    return calls(gh, "issue edit")
+
+
+def test_ship_swaps_the_claim_label_for_in_review(run, gh):
+    cut_for_issue(run, gh)
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == [
+        "issue edit 20 --add-label status:in-review --remove-label status:ongoing"]
+    # After the link, never before: the label says the PR closes the issue.
+    log = calls(gh)
+    assert log.index(calls(gh, "pr edit")[0]) < log.index(label_edits(gh)[0]), log
+    assert "status:blocked" not in "\n".join(log)
+
+
+def test_ship_does_not_relabel_when_the_pr_could_not_be_linked(run, gh):
+    """A body edit that failed leaves the PR closing nothing, and the label with it."""
+    cut_for_issue(run, gh)
+    (gh["dir"] / "pr_edit_fails").write_text("")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == []
+    assert "no claim label changed" in r.stdout, r.stdout
+
+
+def test_ship_does_not_relabel_on_a_branch_that_names_no_issue(run, gh):
+    """Labels configured, prefix configured -- only the branch name is missing."""
+    name_the_claim_labels(run, gh)
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == []
+    assert "no claim label changed" in r.stdout, r.stdout
+
+
+def test_ship_does_not_relabel_an_issue_that_does_not_resolve_here(run, gh):
+    cut_for_issue(run, gh)
+    (gh["dir"] / "issue-20").unlink()
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == []
+    assert "does not resolve" in r.stdout, r.stdout
+
+
+def test_ship_leaves_the_label_alone_without_an_in_review_label(run, gh):
+    """Never a guessed name: the project names its labels or nothing is applied."""
+    cut_for_issue(run, gh, status_labels={"ongoing": "status:ongoing"})
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == []
+    assert "status_labels.in_review is not configured" in r.stdout, r.stdout
+
+
+def test_ship_adds_in_review_alone_without_an_ongoing_label(run, gh):
+    cut_for_issue(run, gh, status_labels={"in_review": "status:in-review"})
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == ["issue edit 20 --add-label status:in-review"]
+
+
+def test_a_relabel_gh_refuses_still_ships_and_says_so(run, gh):
+    cut_for_issue(run, gh)
+    (gh["dir"] / "issue_edit_fails").write_text("")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh), "the swap was attempted"
+    assert "could not relabel #20" in r.stdout, r.stdout
+    assert "not found" in r.stderr, "gh's own diagnosis reaches the operator"
+
+
+def test_closes_20_in_the_body_does_not_close_2(run, gh):
+    """`Closes #20` contains `Closes #2` as a substring and closes nothing of #2's.
+
+    Read as a substring, ship would report #2 already closed, leave the PR not
+    closing it, and then relabel #2 as if it did.
+    """
+    cut_for_issue(run, gh, n=2)
+    (gh["dir"] / "body.txt").write_text("Closes #20")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (gh["dir"] / "body.txt").read_text().endswith("\n\nCloses #2"), r.stdout
+    assert label_edits(gh) == [
+        "issue edit 2 --add-label status:in-review --remove-label status:ongoing"]
+
+
+def test_another_closing_keyword_already_closes_the_issue(run, gh):
+    """GitHub closes on any of its keywords, in any case; so does this read."""
+    cut_for_issue(run, gh)
+    (gh["dir"] / "body.txt").write_text("- fix the thing\n\nfixes: #20")
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "already closes #20" in r.stdout, r.stdout
+    assert calls(gh, "pr edit") == []
+    assert len(label_edits(gh)) == 1
+
+
+def merged_for_issue(run, gh, body="Closes #20", **overrides):
+    """A numbered branch ready to merge: receipt filed, PR body as given."""
+    head = cut_for_issue(run, gh, **overrides)
+    write_receipt(run, head)
+    (gh["dir"] / "body.txt").write_text(body)
+    return head
+
+
+def test_merge_clears_the_claim_labels_from_the_issue_it_closed(run, gh):
+    merged_for_issue(run, gh)
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == [
+        "issue edit 20 --remove-label status:ongoing --remove-label status:in-review"]
+    # After the merge, never before: until then the work is still in review.
+    log = calls(gh)
+    assert log.index(merges(gh)[0]) < log.index(label_edits(gh)[0]), log
+    assert "status:blocked" not in "\n".join(log)
+
+
+def test_merge_on_a_branch_that_names_no_issue_merges_and_says_so(run, gh):
+    head = name_the_claim_labels(run, gh)
+    write_receipt(run, head)
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert merges(gh)
+    assert label_edits(gh) == []
+    assert "no issue number in 'planbranch'" in r.stdout, r.stdout
+
+
+def test_merge_leaves_the_label_on_an_issue_the_pr_does_not_close(run, gh):
+    """The issue stays open, so its claim is still the truth about it."""
+    merged_for_issue(run, gh, body="Refs #20")
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == []
+    assert "does not close #20" in r.stdout, r.stdout
+
+
+def test_merge_says_so_when_the_pr_body_cannot_be_read(run, gh):
+    """Unread is not 'does not close': say which one happened."""
+    merged_for_issue(run, gh)
+    (gh["dir"] / "pr_body_fails").write_text("")
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == []
+    assert "could not read PR #7's body" in r.stdout, r.stdout
+
+
+def test_merge_without_claim_labels_configured_clears_nothing(run, gh):
+    merged_for_issue(run, gh, status_labels={"blocked": "status:blocked"})
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == []
+    assert "not configured" in r.stdout, r.stdout
+
+
+def test_a_label_clear_gh_refuses_does_not_unwind_the_merge(run, gh):
+    merged_for_issue(run, gh)
+    (gh["dir"] / "issue_edit_fails").write_text("")
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "could not clear the claim label from #20" in r.stdout, r.stdout
+    assert git("rev-parse", "HEAD", cwd=run["main"]) == git(
+        "rev-parse", "origin/master", cwd=run["main"])
+
+
+def test_the_label_is_cleared_even_when_the_main_checkout_will_not_fast_forward(run, gh):
+    """Exit 4 is about the sync. The merge stands, and so does what follows it."""
+    (run["main"] / "stray.txt").write_text("committed in the shared checkout\n")
+    commit_path(run["main"], "stray.txt", "a local commit nobody meant to make")
+    merged_for_issue(run, gh)
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert len(label_edits(gh)) == 1
 
 
 def test_every_script_named_in_the_skill_exists():

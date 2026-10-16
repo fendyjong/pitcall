@@ -303,27 +303,44 @@ def commits_since(branch, base, since, cwd=None):
     )
 
 
-def _main(argv):
-    """`tracker.py issue-from-branch BRANCH` -- the one entry point a shell needs.
+#: The claim states `status_labels` names. The CLI refuses any other name: a
+#: misspelt one in a shell caller would otherwise read as "not configured"
+#: forever, which is the one failure that looks exactly like a correct answer.
+STATUS_NAMES = ("ongoing", "in_review", "blocked")
 
-    `wdd ship` is a shell script, and the branch->issue convention is defined by
+_USAGE = "usage: tracker.py issue-from-branch BRANCH | status-label NAME\n"
+
+
+def _main(argv):
+    """The two entry points a shell needs, `issue-from-branch` and `status-label`.
+
+    `wdd` is a shell script, and the branch->issue convention is defined by
     `branch_name`/`issue_from_branch` above. Restating the parse in shell would put
     one convention in two languages with the edge cases in the untested half, so the
-    shell asks this instead.
+    shell asks this instead -- and asks `status_label` for the same reason, rather
+    than reading the config a second way.
 
-    Prints the number and exits 0; prints NOTHING and STILL exits 0 when there is
+    Prints the answer and exits 0; prints NOTHING and STILL exits 0 when there is
     none, including when the config cannot be read at all. A miss is an ordinary
-    answer here rather than an error -- `ship` must ship either way, and a non-zero
-    exit would make a naming convention able to block a release.
+    answer here rather than an error -- `ship` and `merge` must finish either way,
+    and a non-zero exit would make a naming convention or a label able to block a
+    release. A status NAME outside `STATUS_NAMES` is the exception, and exits 2:
+    that is the caller's mistake, not the project's answer.
     """
-    if len(argv) != 2 or argv[0] != "issue-from-branch":
-        sys.stderr.write("usage: tracker.py issue-from-branch BRANCH\n")
+    if len(argv) != 2 or argv[0] not in ("issue-from-branch", "status-label"):
+        sys.stderr.write(_USAGE)
+        return 2
+    verb, arg = argv
+    if verb == "status-label" and arg not in STATUS_NAMES:
+        sys.stderr.write(f"tracker.py: no status named {arg!r}; "
+                         f"status_labels names {', '.join(STATUS_NAMES)}.\n")
         return 2
     try:
         cfg = config()
     except TrackerError:
         return 0
-    found = issue_from_branch(cfg, argv[1])
+    found = (issue_from_branch(cfg, arg) if verb == "issue-from-branch"
+             else status_label(cfg, arg))
     if found:
         print(found)
     return 0

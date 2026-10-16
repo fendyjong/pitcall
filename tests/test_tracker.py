@@ -1,5 +1,6 @@
 """The mechanism behind the issue verbs, exercised without a network."""
 
+import json
 import os
 import subprocess
 import sys
@@ -68,6 +69,43 @@ def test_status_label_absent_is_none_not_a_guess():
     assert tracker.status_label({}, "ongoing") is None
     assert tracker.status_label({"status_labels": {}}, "ongoing") is None
     assert tracker.status_label({"status_labels": {"ongoing": "s:o"}}, "ongoing") == "s:o"
+
+
+def _cli(cwd, *args):
+    return subprocess.run((sys.executable, str(ROOT / "scripts" / "tracker.py"), *args),
+                          cwd=cwd, capture_output=True, text=True)
+
+
+def _configured_checkout(tmp_path, **cfg):
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    (tmp_path / "pitcall.config.json").write_text(json.dumps({
+        "bringup": None, "validate": "true", "default_branch": "main",
+        "required_check": "ci", **cfg}))
+    return tmp_path
+
+
+def test_the_status_label_cli_prints_the_configured_name(tmp_path):
+    """`wdd` is a shell script and reads the label through this, not a second parse."""
+    repo = _configured_checkout(tmp_path, status_labels={"in_review": "status:in-review"})
+    r = _cli(repo, "status-label", "in_review")
+    assert (r.returncode, r.stdout) == (0, "status:in-review\n"), r.stderr
+
+
+def test_the_status_label_cli_prints_nothing_for_an_absent_label(tmp_path):
+    """Absent is an answer, so it exits 0 -- a label must never block a release."""
+    repo = _configured_checkout(tmp_path, status_labels={"ongoing": "status:ongoing"})
+    r = _cli(repo, "status-label", "in_review")
+    assert (r.returncode, r.stdout) == (0, ""), r.stderr
+    r = _cli(tmp_path / "..", "status-label", "in_review")
+    assert r.returncode == 0, "an unreadable config is an absent label too"
+
+
+def test_the_status_label_cli_refuses_a_name_it_does_not_know(tmp_path):
+    """A misspelt name in the shell would otherwise read as 'not configured' forever."""
+    repo = _configured_checkout(tmp_path, status_labels={"in_review": "status:in-review"})
+    r = _cli(repo, "status-label", "in-review")
+    assert r.returncode == 2
+    assert "ongoing, in_review, blocked" in r.stderr
 
 
 # --- staleness: both directions, offline ------------------------------------
