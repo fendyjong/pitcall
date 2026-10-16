@@ -192,20 +192,24 @@ def repo_link(token, slug):
     it is touched, so a wrong intermediate segment still fails to resolve.
     The link is searched for rather than anchored at the token's start, so
     `URL=https://...`, `--url=https://...` and `[text](https://...)` are
-    still read; `clean()` then drops what the sentence left on its end.
+    still read. Only the path's end is trimmed of what the sentence left
+    there (`TRIM`): its start sits inside the link, where no sentence
+    reaches, so a leading `(` or `[` is part of a name.
 
     The path ends at a `#L10` line anchor or `?plain=1`, and at the quote or
     bracket that closes `<https://...>`, `[t](<https://...>)` or
     `href="https://..."`. It is percent-decoded as GitHub decodes it, after
-    the cut and after `clean()`, so a decoded `%3F` or `%29` stays part of
+    the cut and after the trim, so a decoded `%3F` or `%29` stays part of
     the name; and a run of slashes reads as one.
 
     None means there is no claim to judge: the URL points anywhere else --
     another repository, another host, `http://host:port` -- whose tree this
     checkout cannot see; it is a link into this repository in a shape not
     listed above (a `blame/` page, say); its path holds a placeholder like
-    `<name>`; or its path holds a `.` or `..` segment, which a browser
-    resolves before GitHub ever sees it and neither judge here resolves.
+    `<name>`; or a `.` or `..` segment sits inside its path, which a browser
+    resolves before GitHub ever sees it and neither judge here resolves. One
+    at the very end is trimmed like sentence punctuation instead, which
+    leaves a path ending `/` -- a directory, which no caller judges.
 
     `<ref>` is read as one segment (see `REF`). A branch holding a slash
     (`feat/x`) is read as the ref `feat` with `x/` left on the path -- a
@@ -225,11 +229,12 @@ def repo_link(token, slug):
         return None
     ref = link[1] or link[2]
     cut = re.split(r"[?#\"'>]", token[link.end():], maxsplit=1)[0]
-    # Before `clean()`, which would strip the `<` off `<scripts/name`.
+    # Decoded, since `%3C` is a `<` too, and before the trim, which would
+    # drop a `<` the cut at `>` left last.
     if "<" in unquote(cut):
         return None
     # GitHub serves `blob/main//scripts/x` as `blob/main/scripts/x`.
-    path = re.sub(r"/{2,}", "/", unquote(clean(cut))).lstrip("/")
+    path = re.sub(r"/{2,}", "/", unquote(cut.rstrip(TRIM))).lstrip("/")
     if any(part in (".", "..") for part in path.split("/")):
         return None
     return ref, path
@@ -272,9 +277,11 @@ def exists_at(root):
     A tag link whose first path segment is missing at that tag is skipped
     too: with a tag `v2` and a branch `v2/hotfix`, `blob/v2/hotfix/...` is a
     link to the branch, which `REF` reads as the tag with `hotfix/` on the
-    path. Only a file counts, as in the tracked-paths judge: `cat-file -e`
-    alone would also pass a directory, and a submodule's gitlink is no file
-    (see `Repo.gitlinks`).
+    path. That probe asks whether the tag's tree has the entry, not whether
+    its object is in this store: a submodule's commit never is, and a link
+    into a submodule must still fail. Only a file counts, as in the
+    tracked-paths judge: `cat-file -e` alone would also pass a directory,
+    and a submodule's gitlink is no file (see `Repo.gitlinks`).
     """
     def commit(ref):
         """`(sha, tagged)`, or None. A branch name is neither candidate."""
@@ -291,9 +298,12 @@ def exists_at(root):
                 return result.stdout.strip(), tagged
         return None
 
+    def has(sha, path):
+        """An entry at `path`, whether or not its object is in this store."""
+        return _git(root, "rev-parse", "--verify", "--quiet",
+                    f"{sha}:{path}").returncode == 0
+
     def kind(sha, path):
-        if "\0" in path:
-            return None  # a decoded `%00`: no object, and no argv either
         result = _git(root, "cat-file", "-t", f"{sha}:{path}")
         return result.stdout.strip() if result.returncode == 0 else None
 
@@ -301,8 +311,10 @@ def exists_at(root):
         found = commit(ref)
         if found is None:
             return None
+        if "\0" in path:
+            return False  # a decoded `%00`: no object, and no argv either
         sha, tagged = found
-        if tagged and kind(sha, path.split("/", 1)[0]) is None:
+        if tagged and not has(sha, path.split("/", 1)[0]):
             return None
         return kind(sha, path) == "blob"
 
@@ -375,9 +387,6 @@ def clean(token):
     normalize() has run, any leading `.` that remains is a real character,
     not a stray, so the leading strip uses `LEADING_TRIM` instead of `TRIM`.
     Trailing punctuation carries no such ambiguity.
-
-    `repo_link()` calls it without `normalize()`: the path it cuts out of
-    a URL starts at the repository root, so there is no prefix to read.
     """
     return token.lstrip(LEADING_TRIM).rstrip(TRIM)
 
@@ -857,7 +866,7 @@ def test_a_placeholder_inside_a_link_is_not_a_claim():
     reached it would fail CI on correct prose."""
     repo = Repo(REPO.slug, "main", lambda ref, path: False)
     for link in (f"{BLOB}/scripts/<name>", f"{BLOB}/scripts/run-<name>",
-                 f"{BLOB}/<scripts/name>",
+                 f"{BLOB}/<scripts/name>", f"{BLOB}/scripts/%3Cname%3E",
                  f"https://github.com/{REPO.slug}/blob/<sha>/scripts/x"):
         assert problems_in(f"see `{link}`", "docs/x.md", set(), [], repo=repo) == [], link
 
@@ -869,6 +878,18 @@ def test_a_submodule_is_no_file_on_the_default_branch():
     found = problems_in(f"`{BLOB}/scripts/sub`", "d.md", set(), ["scripts/sub"],
                         repo=repo)
     assert found and "scripts/sub" in found[0]
+
+
+def test_a_link_path_is_trimmed_only_at_its_end():
+    """A leading bracket in a link's path is part of a name, since no
+    sentence reaches inside the link; a trailing one is the sentence's."""
+    for name in ("(x)", "[x]", "{x}"):
+        tracked_paths = [f"{name}/scripts/lane.py"]
+        assert problems_in(f"see `({BLOB}/{name}/scripts/lane.py).`", "d.md", set(),
+                           tracked_paths, repo=REPO) == [], name
+        found = problems_in(f"see `({BLOB}/{name}/scripts/nope.py).`", "d.md", set(),
+                            tracked_paths, repo=REPO)
+        assert found and "nope.py" in found[0], name
 
 
 def test_a_doubled_slash_mid_path_reads_as_one():
@@ -1080,6 +1101,9 @@ def _gitlink(root, path, oid="1" * 40):
 
 def test_this_repo_reads_the_slug_the_default_branch_and_the_submodules(tmp_path):
     root = _config(_manifest(_repo(tmp_path), {"repository": "https://github.com/acme/widget"}))
+    (root / "scripts").mkdir()
+    (root / "scripts" / "real").write_text("x\n")
+    _out(root, "add", "scripts/real")  # staged too, and no submodule
     _gitlink(root, "scripts/sub")
     repo = this_repo(root)
     assert (repo.slug, repo.branch) == ("acme/widget", "trunk")
@@ -1145,10 +1169,16 @@ def test_exists_at_answers_for_a_sha_or_tag_and_skips_the_rest(tmp_path):
     # gitlink's missing directory as a deletion.
     _gitlink(root, "scripts/sub")
     _gitlink(root, "scripts/own", first)  # one whose commit IS in this store
+    _gitlink(root, "vendor")
     _out(root, "commit", "-qm", "gitlink")
+    _out(root, "tag", "v2")
     linked = _out(root, "rev-parse", "HEAD").strip()
     assert answer(linked, "scripts/sub") is False
     assert answer(linked, "scripts/own") is False, "cat-file calls this one a commit"
+    # Into a submodule at a tag: the first segment's entry exists, though
+    # its commit is in no store here, so the link is judged, not skipped.
+    for ref in (linked, "v2"):
+        assert answer(ref, "vendor/scripts/x") is False, ref
     assert answer("v1\0x", "scripts/old-name") is None, "a NUL in the ref is no crash"
 
 
