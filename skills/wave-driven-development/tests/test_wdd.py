@@ -1427,7 +1427,17 @@ def test_ship_says_so_when_no_pr_can_be_found(run, gh):
     r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "no PR found for 'feat/20-demo'" in r.stdout, r.stdout
+    assert "closes no issue" not in r.stdout, "said once, by the step that knows why"
     assert calls(gh, "pr edit") == [] and label_edits(gh) == []
+
+
+def test_one_label_named_for_both_states_stays_on_at_ship(run, gh):
+    """A project with a single 'in progress' label names it twice. Adding it is
+    a no-op; removing it afterwards would leave a claimed issue unlabelled."""
+    cut_for_issue(run, gh, status_labels={"ongoing": "status:wip", "in_review": "status:wip"})
+    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == ["issue edit 20 --add-label status:wip"]
 
 
 def test_an_unreadable_pr_body_is_never_overwritten(run, gh):
@@ -1543,6 +1553,13 @@ def test_merge_clears_only_the_claim_label_that_is_configured(run, gh):
     r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --remove-label status:ongoing"]
+
+
+def test_one_label_named_for_both_states_is_cleared_once_at_merge(run, gh):
+    merged_for_issue(run, gh, status_labels={"ongoing": "status:wip", "in_review": "status:wip"})
+    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert label_edits(gh) == ["issue edit 20 --remove-label status:wip"]
 
 
 def test_one_label_gh_refuses_does_not_keep_the_other_on(run, gh):

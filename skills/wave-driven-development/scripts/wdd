@@ -288,7 +288,9 @@ status_label() {
 }
 
 mark_in_review() {
-  local issue="$CLOSES_ISSUE" ongoing in_review
+  local pr_ref="${1:-}" issue="$CLOSES_ISSUE" ongoing in_review
+  # No PR at all: `attach_closing_keyword` already said so, naming this step.
+  [ -n "$pr_ref" ] || return 0
   if [ -z "$issue" ]; then
     note "the PR closes no issue this branch names -- no claim label changed."
     return 0
@@ -299,6 +301,9 @@ mark_in_review() {
     return 0
   fi
   ongoing="$(status_label ongoing)"
+  # A project with one "in progress" label names it for both states. Adding it
+  # is then a no-op, and removing it after would leave a claimed issue bare.
+  [ "$ongoing" != "$in_review" ] || ongoing=""
   # One call per label, so a label gh refuses -- one the project never created
   # -- cannot take the other step down with it. `in_review` goes on first and
   # `ongoing` comes off only after it: a refused add leaves the issue reading
@@ -342,6 +347,7 @@ clear_claim_labels() {
   fi
   ongoing="$(status_label ongoing)"
   in_review="$(status_label in_review)"
+  [ "$in_review" != "$ongoing" ] || in_review=""   # one label named twice
   if [ -z "$ongoing$in_review" ]; then
     note "status_labels.ongoing and .in_review are not configured -- no claim label to clear."
     return 0
@@ -500,7 +506,7 @@ ship)
     gh pr create --base "$BASE" --head "$BRANCH" --fill || note "PR may already exist"
     pr="$(gh pr view "$BRANCH" --json number -q .number 2>/dev/null || true)"
     attach_closing_keyword "${pr:-}"
-    mark_in_review
+    mark_in_review "${pr:-}"
     attach_sweep_section "${pr:-}"
   fi
   echo ""
