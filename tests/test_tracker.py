@@ -405,9 +405,10 @@ def test_a_branch_checked_out_in_a_linked_worktree_still_resolves_clean(tmp_path
 
 # --- select_candidates: the ordering decision, without a network -------------
 
-def _issue(number, title="t", milestone=None, pull_request=False):
+def _issue(number, title="t", milestone=None, pull_request=False, labels=()):
     d = {"number": number, "title": title,
-         "milestone": {"title": milestone} if milestone else None}
+         "milestone": {"title": milestone} if milestone else None,
+         "labels": [{"name": name} for name in labels]}
     if pull_request:
         d["pull_request"] = {"url": "https://example.invalid/pr"}
     return d
@@ -416,20 +417,20 @@ def _issue(number, title="t", milestone=None, pull_request=False):
 def test_candidates_are_ordered_lowest_number_first():
     """FIFO is the whole point: the oldest issue has to come out first."""
     got = tracker.select_candidates([_issue(31), _issue(8), _issue(15)])
-    assert [n for n, _ in got] == [8, 15, 31]
+    assert [n for n, *_ in got] == [8, 15, 31]
 
 
 def test_pull_requests_are_excluded():
     """`repos/:r/issues` returns PRs too -- claiming one would be nonsense."""
     got = tracker.select_candidates([_issue(8), _issue(9, pull_request=True)])
-    assert [n for n, _ in got] == [8]
+    assert [n for n, *_ in got] == [8]
 
 
 def test_a_milestone_filter_keeps_only_that_milestone():
     got = tracker.select_candidates(
         [_issue(8, milestone="Backlog"), _issue(9, milestone="v2"), _issue(10)],
         milestone="Backlog")
-    assert [n for n, _ in got] == [8]
+    assert [n for n, *_ in got] == [8]
 
 
 def test_no_milestone_filter_keeps_issues_that_have_no_milestone():
@@ -439,13 +440,50 @@ def test_no_milestone_filter_keeps_issues_that_have_no_milestone():
     oldest -- excluding them by default would starve exactly what FIFO protects.
     """
     got = tracker.select_candidates([_issue(8), _issue(9, milestone="Backlog")])
-    assert [n for n, _ in got] == [8, 9]
+    assert [n for n, *_ in got] == [8, 9]
 
 
 def test_the_title_travels_with_the_number():
     got = tracker.select_candidates([_issue(8, title="a real title")])
-    assert got == [(8, "a real title")]
+    assert got == [(8, "a real title", [])]
+
+
+def test_label_names_travel_with_the_number():
+    """`claim --next` judges a blocked issue from these, at no extra call."""
+    got = tracker.select_candidates([_issue(8, labels=["status:blocked", "bug"])])
+    assert got == [(8, "t", ["status:blocked", "bug"])]
 
 
 def test_no_candidates_is_an_empty_list_not_an_error():
     assert tracker.select_candidates([]) == []
+
+
+# --- latest_block / latest_claim: one walk, two markers ------------------------
+
+def _comment(body, when="2026-08-30T10:00:00Z"):
+    return {"body": body, "created_at": when}
+
+
+def test_latest_block_is_the_latest_blocked_on_comment(monkeypatch):
+    """A re-mark appends, so the newest reason is the current one."""
+    comments = [_comment(tracker.BLOCK_MARKER + "old", "2026-08-30T09:00:00Z"),
+                _comment(tracker.BLOCK_MARKER + "new", "2026-08-30T10:00:00Z"),
+                _comment("unrelated discussion")]
+    monkeypatch.setattr(tracker, "_comments", lambda issue, repo: comments)
+    assert tracker.latest_block(58, "o/r")["body"] == tracker.BLOCK_MARKER + "new"
+
+
+def test_latest_block_and_latest_claim_ignore_each_others_comments(monkeypatch):
+    comments = [_comment(tracker.BLOCK_MARKER + "an upstream release"),
+                _comment(tracker.CLAIM_MARKER + "https://example/s")]
+    monkeypatch.setattr(tracker, "_comments", lambda issue, repo: comments)
+    assert tracker.latest_block(58, "o/r")["body"] == (
+        tracker.BLOCK_MARKER + "an upstream release")
+    assert tracker.latest_claim(58, "o/r")["body"] == (
+        tracker.CLAIM_MARKER + "https://example/s")
+
+
+def test_latest_block_is_none_without_a_blocked_on_comment(monkeypatch):
+    monkeypatch.setattr(tracker, "_comments",
+                        lambda issue, repo: [_comment(tracker.CLAIM_MARKER + "s")])
+    assert tracker.latest_block(58, "o/r") is None

@@ -61,15 +61,19 @@ to recognise the right value in a project that has never seen this tool.
 
 ## Claiming and filing issues
 
-`scripts/claim.py` and `scripts/file.py` are CLIs. A person runs them by hand from this
-repository's checkout, as below; the skills also run them inside the projects they drive,
-spelled `${CLAUDE_PLUGIN_ROOT}/scripts/claim.py` and `${CLAUDE_PLUGIN_ROOT}/scripts/file.py` —
+`scripts/claim.py`, `scripts/block.py` and `scripts/file.py` are CLIs. A person runs them by
+hand from this repository's checkout, as below; the skills also run them inside the projects
+they drive, spelled `${CLAUDE_PLUGIN_ROOT}/scripts/claim.py`,
+`${CLAUDE_PLUGIN_ROOT}/scripts/block.py` and `${CLAUDE_PLUGIN_ROOT}/scripts/file.py` —
 brainstorming's through-WDD bounded ending claims its work issue with `claim`, and
-wave-driven-development files what its sweep did not take with `file`:
+wave-driven-development files what its sweep did not take with `file`, and clears a block its
+sweep fixed with `block`:
 
 ```
 python3 scripts/claim.py <issue-number> [--session <url>] [--take]
 python3 scripts/claim.py --next [--milestone <name>] [--session <url>] [--take]
+python3 scripts/block.py <issue-number> "<on what>"
+python3 scripts/block.py <issue-number> --clear
 python3 scripts/file.py "<title>" [--body-file <path>]
 ```
 
@@ -83,13 +87,23 @@ that reads stale. The label then follows the work: `wdd ship` swaps it for
 once that PR lands.
 
 `--next` picks the issue instead of taking one: the lowest-numbered open issue nothing
-holds, so the oldest work surfaces rather than starving. It judges from claim comments
+holds, so the oldest work surfaces rather than starving. It judges a claim from claim comments
 rather than labels — a label is skipped entirely when `status_labels.ongoing` is unset,
 and survives a claim going stale — and walks lazily, so the usual cost is one lookup
 rather than one per open issue. A stale claim is passed over unless `--take` is given:
 naming an issue yourself and letting a selector choose which abandoned claim to take
 over are different acts. `--milestone` narrows what it considers, as a filter rather
 than a gate; without it an issue carrying no milestone is still a candidate.
+
+`block` marks an issue blocked: it applies `status_labels.blocked` and posts a comment starting
+`blocked on: ` that says on what. The label is the state and the comment only the reason; a later
+mark supersedes an earlier one. `--clear` removes the label and posts nothing, and works on a
+closed issue too. **Blocking is not unclaiming:** `blocked` sits beside `ongoing` or `in_review`
+and neither is touched, because a blocked issue's branch and work are real, and dropping its claim
+is how a second session ends up duplicating them. `claim --next` passes over a blocked issue,
+judged from its label at no extra call, and `claim <issue-number>` refuses one, `--take` included,
+naming what it is blocked on until the block is cleared; a session resuming its own claim goes
+through. With `status_labels.blocked` unset, `block` refuses and nothing counts as blocked.
 
 `file` opens a new issue straight into `backlog_milestone` — never
 the milestone in flight. `--notes` files into `notes_milestone` instead, for a decision

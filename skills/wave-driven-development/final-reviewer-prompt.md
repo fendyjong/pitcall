@@ -90,6 +90,10 @@ Subagent (general-purpose):
     session — claimed, or in review with its PR open — `none` when the
     project configures neither, and then nothing reads as claimed.
     #[SPEC_ISSUE] is this run's own issue, never another session's.
+    [BLOCKED_LABEL] is the label that marks an issue blocked — waiting on
+    something outside this run — `none` when the project configures none,
+    and then nothing reads as blocked. Blocked is not claimed: a blocked
+    issue may carry a claim label as well, and then it is claimed too.
 
     ## Where Each Finding Came From
 
@@ -117,7 +121,12 @@ Subagent (general-purpose):
       fork. With a matched #N, also say `full` (the fix covers everything #N
       asks) or `part`.
     - **ask** — the first two sweep conditions hold, but it is a design
-      fork. Give the two options and your recommendation.
+      fork. Give the two options and your recommendation. Also **ask**,
+      never sweep, when the item would be sweep with a matched #N that
+      carries [BLOCKED_LABEL]. Its two options are fixed: fix it this round
+      (`full` or `part`, as for sweep), or leave it and comment the finding
+      on #N. must-fix still wins, and an item matching an issue another
+      session has claimed stays note even when that issue is also blocked.
     - **issue** — pre-existing, real, and fails the sweep conditions. Name
       the open issue it duplicates, #N, or say `none`.
     - **note** — dormant or low value; or it matches an issue another
@@ -125,9 +134,10 @@ Subagent (general-purpose):
 
     An introduced item is never routed issue: at review #1 an introduced
     Minor is sweep, ask or note. **From review #2 onward the only routes are
-    must-fix, issue and note** — the run's one sweep has happened. A late
-    introduced Minor is note, or must-fix if you re-grade it Critical or
-    Important.
+    must-fix, issue and note** — the run's one sweep has happened, and a
+    late item matching a blocked issue is routed like any other late item.
+    A late introduced Minor is note, or must-fix if you re-grade it
+    Critical or Important.
 
     ## Read-Only Review
 
@@ -300,6 +310,7 @@ Subagent (general-purpose):
   before each review
 - `[CLAIM_LABELS]` — the project config's `status_labels.ongoing` and
   `status_labels.in_review`, whichever are set, or `none`
+- `[BLOCKED_LABEL]` — the project config's `status_labels.blocked`, or `none`
 - `[SPEC_ISSUE]` — the number of the issue this run implements
 
 **Reviewer returns:** one line naming `[REPORT_FILE]` and the verdict. The

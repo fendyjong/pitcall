@@ -1,5 +1,6 @@
 """The claim verb's decisions, exercised without a network."""
 
+import argparse
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -294,3 +295,131 @@ def test_both_an_issue_and_next_is_refused():
 def test_milestone_without_next_is_refused_rather_than_ignored():
     with pytest.raises(tracker.TrackerError, match="--milestone narrows"):
         claim_mod.main(["19", "--milestone", "Backlog"])
+
+
+# --- blocked: passed over by --next, refused by claim <n> ---------------------
+
+BLOCKED = "status:blocked"
+BCFG = {**CFG, "status_labels": {"ongoing": "status:ongoing", "blocked": BLOCKED}}
+REASON = {"body": tracker.BLOCK_MARKER + "an upstream release",
+          "created_at": "2026-08-30T09:00:00Z"}
+
+
+@pytest.mark.parametrize("take", [False, True])
+def test_select_next_never_picks_a_blocked_issue(take):
+    judge, _ = _judge({8: "blocked"})
+    picked, skipped = claim_mod.select_next(CANDIDATES, judge, take=take)
+    assert picked == (15, "fifteen")
+    assert skipped == [(8, "blocked")]
+
+
+def test_the_take_hint_appears_only_when_a_stale_claim_was_passed_over():
+    with_stale = claim_mod.spoken_for([(8, "blocked"), (15, "stale")])
+    assert "#8 (blocked), #15 (stale)" in with_stale
+    assert "--take would reclaim a stale one" in with_stale
+    for skipped in ([(8, "blocked")], [(8, "live"), (15, "branch")]):
+        assert "--take" not in claim_mod.spoken_for(skipped)
+
+
+def test_next_judges_a_blocked_issue_from_its_label_without_a_lookup(monkeypatch, capsys):
+    looked_up = []
+    monkeypatch.setattr(tracker, "open_issues", lambda repo, milestone=None: [
+        (58, "held", [BLOCKED]), (60, "free one", [])])
+    monkeypatch.setattr(tracker, "latest_claim",
+                        lambda issue, repo: looked_up.append(issue))  # -> None
+    monkeypatch.setattr(claim_mod, "branch_exists", lambda branch, cwd=None: False)
+    args = argparse.Namespace(milestone=None, take=False)
+    assert claim_mod.resolve_next(BCFG, "o/r", "origin/main", NOW, args) == 60
+    assert looked_up == [60]
+    assert "--next: passed over #58 (blocked)" in capsys.readouterr().out
+
+
+def _stub_claim(monkeypatch, *, claim=None, block=None, labels=(BLOCKED,)):
+    ran = []
+    monkeypatch.setattr(tracker, "config", lambda checkout=None: BCFG)
+    monkeypatch.setattr(tracker, "origin_repo", lambda cwd=None: "o/r")
+    monkeypatch.setattr(tracker, "issue_state", lambda issue, repo: {
+        "state": "open", "title": "held", "labels": list(labels)})
+    monkeypatch.setattr(tracker, "latest_claim", lambda issue, repo: claim)
+    monkeypatch.setattr(tracker, "latest_block", lambda issue, repo: block)
+    monkeypatch.setattr(claim_mod, "branch_exists", lambda branch, cwd=None: False)
+    monkeypatch.setattr(tracker, "run",
+                        lambda *args, cwd=None: ran.append(list(args)) or "")
+    return ran
+
+
+@pytest.mark.parametrize("extra", [[], ["--take"]])
+def test_claiming_a_blocked_issue_refuses_before_anything_happens(monkeypatch, extra):
+    ran = _stub_claim(monkeypatch, block=REASON)
+    with pytest.raises(tracker.TrackerError) as exc:
+        claim_mod.main(["58", *extra])
+    assert "#58 is blocked on: an upstream release (2026-08-30T09:00:00Z)." in str(exc.value)
+    assert "Clear it first: block.py 58 --clear." in str(exc.value)
+    assert ran == []
+
+
+def test_the_refusal_says_when_no_reason_was_found(monkeypatch):
+    ran = _stub_claim(monkeypatch, block=None)
+    with pytest.raises(tracker.TrackerError, match='no "blocked on:" comment found'):
+        claim_mod.main(["58"])
+    assert ran == []
+
+
+def test_the_refusal_comes_first_and_names_the_claim(monkeypatch):
+    """Another session's stale claim, with --take: without the block this would
+    judge the claim (a git call) and take it. The block refuses first."""
+    ran = _stub_claim(monkeypatch, block=REASON,
+                      claim=_claim(30, body=_body(THEIRS)))
+    with pytest.raises(tracker.TrackerError, match="It is claimed, since"):
+        claim_mod.main(["58", "--session", MINE, "--take"])
+    assert ran == []
+
+
+def test_a_session_resuming_its_own_claim_on_a_blocked_issue_goes_through(monkeypatch, capsys):
+    ran = _stub_claim(monkeypatch, block=REASON, claim=_claim(1, body=_body(MINE)))
+    claim_mod.main(["58", "--session", MINE])
+    assert "resuming this session's own claim anyway" in capsys.readouterr().out
+    assert ran == [["git", "branch", "feat/58-held", "origin/main"]]
+
+
+def test_an_unblocked_issue_never_looks_up_a_block_reason(monkeypatch):
+    ran = _stub_claim(monkeypatch, labels=())
+
+    def no_lookup(issue, repo):
+        raise AssertionError("latest_block called without the blocked label")
+
+    monkeypatch.setattr(tracker, "latest_block", no_lookup)
+    claim_mod.main(["58", "--session", MINE])
+    assert [c[:3] for c in ran] == [["gh", "issue", "edit"],
+                                    ["gh", "issue", "comment"],
+                                    ["git", "branch", "feat/58-held"]]
+
+
+# --- with status_labels.blocked unset, nothing counts as blocked -------------
+
+UNSET = {**CFG, "status_labels": {"ongoing": "status:ongoing"}}
+
+
+def test_with_blocked_unset_a_labelled_issue_is_claimed_as_today(monkeypatch):
+    """The spec's first rule: unset means nothing is blocked, even an issue
+    carrying a label that happens to be named like one."""
+    ran = _stub_claim(monkeypatch, labels=(BLOCKED,))
+    monkeypatch.setattr(tracker, "config", lambda checkout=None: UNSET)
+
+    def no_lookup(issue, repo):
+        raise AssertionError("latest_block called with blocked unset")
+
+    monkeypatch.setattr(tracker, "latest_block", no_lookup)
+    claim_mod.main(["58", "--session", MINE])
+    assert [c[:3] for c in ran] == [["gh", "issue", "edit"],
+                                    ["gh", "issue", "comment"],
+                                    ["git", "branch", "feat/58-held"]]
+
+
+def test_with_blocked_unset_next_does_not_pass_a_labelled_issue_over(monkeypatch):
+    monkeypatch.setattr(tracker, "open_issues", lambda repo, milestone=None: [
+        (58, "held", [BLOCKED])])
+    monkeypatch.setattr(tracker, "latest_claim", lambda issue, repo: None)
+    monkeypatch.setattr(claim_mod, "branch_exists", lambda branch, cwd=None: False)
+    args = argparse.Namespace(milestone=None, take=False)
+    assert claim_mod.resolve_next(UNSET, "o/r", "origin/main", NOW, args) == 58
