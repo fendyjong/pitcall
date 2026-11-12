@@ -135,9 +135,9 @@ Subagent (general-purpose):
     An introduced item is never routed issue: at review #1 an introduced
     Minor is sweep, ask or note. **From review #2 onward the only routes are
     must-fix, issue and note** — the run's one sweep has happened, and a
-    late item matching a blocked issue is issue, with its #N. A late
-    introduced Minor is note, or must-fix if you re-grade it Critical or
-    Important.
+    late item matching a blocked issue is routed like any other late item.
+    A late introduced Minor is note, or must-fix if you re-grade it
+    Critical or Important.
 
     ## Read-Only Review
 
