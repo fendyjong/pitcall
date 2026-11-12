@@ -61,9 +61,10 @@ to recognise the right value in a project that has never seen this tool.
 
 ## Claiming and filing issues
 
-`scripts/claim.py`, `scripts/block.py` and `scripts/file.py` are CLIs. A person runs them by hand from this
-repository's checkout, as below; the skills also run them inside the projects they drive,
-spelled `${CLAUDE_PLUGIN_ROOT}/scripts/claim.py` and `${CLAUDE_PLUGIN_ROOT}/scripts/file.py` —
+`scripts/claim.py`, `scripts/block.py` and `scripts/file.py` are CLIs. A person runs them by
+hand from this repository's checkout, as below; the skills also run them inside the projects
+they drive, spelled `${CLAUDE_PLUGIN_ROOT}/scripts/claim.py`,
+`${CLAUDE_PLUGIN_ROOT}/scripts/block.py` and `${CLAUDE_PLUGIN_ROOT}/scripts/file.py` —
 brainstorming's through-WDD bounded ending claims its work issue with `claim`, and
 wave-driven-development files what its sweep did not take with `file`, and clears a block its
 sweep fixed with `block`:
@@ -86,7 +87,7 @@ that reads stale. The label then follows the work: `wdd ship` swaps it for
 once that PR lands.
 
 `--next` picks the issue instead of taking one: the lowest-numbered open issue nothing
-holds, so the oldest work surfaces rather than starving. It judges from claim comments
+holds, so the oldest work surfaces rather than starving. It judges a claim from claim comments
 rather than labels — a label is skipped entirely when `status_labels.ongoing` is unset,
 and survives a claim going stale — and walks lazily, so the usual cost is one lookup
 rather than one per open issue. A stale claim is passed over unless `--take` is given:
