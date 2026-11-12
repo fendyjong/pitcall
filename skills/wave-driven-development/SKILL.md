@@ -1215,22 +1215,24 @@ added is still `introduced`:
    `git rev-parse HEAD`, `[REPORT_FILE]` is `<workspace>/final-review-1.md`, `[SWEEP_LINES]`
    carries every `Sweep:` line **and every `Task <N>: parked` line** in the ledger, copied in
    full, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABELS]` (`status_labels.ongoing` and
-   `status_labels.in_review`, whichever are set, or `none`) and
+   `status_labels.in_review`, whichever are set, or `none`), `[BLOCKED_LABEL]`
+   (`status_labels.blocked`, or `none`) and
    `[SPEC_ISSUE]` are filled as the template's placeholder list says. A parked line is the
    breaker's ruling that a reviewer was wrong; this is its whole-branch second look, and it is
    routed like any other item — `note` when the reviewer agrees with the ruling. The reviewer
    writes its report there, verdict header first; append `Final review #1: <verdict> at <sha7>`.
 4. Transcribe every item's route as a `Route:` line, then append `Sorting: review #1 at <sha7>`.
    Check mechanically, and nothing more: every item has a route, no `introduced` item is routed
-   `issue`, and every `pre-existing` tag's evidence holds. You do not re-judge routes.
+   `issue`, every `pre-existing` tag's evidence holds, and no item whose matched `#N` carries
+   `status_labels.blocked` is routed `sweep`. You do not re-judge routes.
 
 | Route | When |
 |---|---|
 | `must-fix` | `introduced` and Critical/Important, or already marked `must-fix`. It takes precedence: a fix that is a design fork goes through the Automation boundary's design-fork interrupt, not `ask`. |
 | `sweep` | all three hold: a reproduction or a check that fails today; fits one task with declared paths; not a design fork. A matched `#N` is `full` or `part`. |
-| `ask` | the first two sweep conditions hold, but it is a design fork |
+| `ask` | the first two sweep conditions hold, but it is a design fork; **or** it would be `sweep` with a matched `#N` that carries `status_labels.blocked`. A blocked-issue `ask` has two fixed options: fix it this round (`full` or `part`, like any approved `ask`), or leave it and comment the finding on `#N`. |
 | `issue` | `pre-existing`, real, and fails the sweep conditions; it names its duplicate `#N`, or `none` |
-| `note` | dormant or low value; or it matches an issue another session claimed — one carrying `status_labels.ongoing` or `status_labels.in_review` (`ship` swaps the first for the second, and the work is still that session's until its PR lands), other than this run's own spec issue. With both labels unset, nothing reads as claimed. |
+| `note` | dormant or low value; or it matches an issue another session claimed — one carrying `status_labels.ongoing` or `status_labels.in_review` (`ship` swaps the first for the second, and the work is still that session's until its PR lands), other than this run's own spec issue, even when that issue is also blocked. With both labels unset, nothing reads as claimed. |
 
 `introduced` is never routed `issue`: a Critical/Important one is fixed on the branch or the run
 stops; a Minor one is swept or noted.
@@ -1244,6 +1246,12 @@ If any item is routed `ask`, ask your human partner **once**, every `ask` item i
 finding, the two options, and the reviewer's recommendation. Wait. Each answer is an option — the
 item is swept with that decision, recorded as an `Owner:` line — or "not now", which makes the
 item `issue` (or `note`, when it is `introduced`). This is the one planned interrupt in a run.
+
+A **blocked-issue `ask`** offers its two fixed options. **Fix it this round** sweeps it like any
+approved `ask`, and its `Owner:` line's decision reads `fix it this round, #<N> blocked`. **Leave
+it** makes it `issue` with its `#N`, so it gets a `Seen: #<N>` line, and Phase 3 comments the
+finding on `#N` before `ship`. "Not now" keeps its meaning — `issue`, or `note` when `introduced`
+— and posts no comment.
 
 ### The amendment
 
@@ -1321,11 +1329,13 @@ Each is `final-reviewer-prompt.md` on the most capable model, given:
   NOT ADDRESSED;
 - as `[SWEEP_LINES]`, only the `(late)` `Sweep:` lines written since the previous full-branch
   review — everything older was routed by a review already;
-- `open-issues.json` rewritten first, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABELS]` and `[SPEC_ISSUE]`
-  as for review #1; `[REPORT_FILE]` is `<workspace>/final-review-<k>.md` — after an
+- `open-issues.json` rewritten first, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABELS]`, `[BLOCKED_LABEL]`
+  and `[SPEC_ISSUE]` as for review #1 — `[BLOCKED_LABEL]` changes no route from here on, since
+  there is no `sweep` or `ask`, but the template is one and needs it filled; `[REPORT_FILE]` is `<workspace>/final-review-<k>.md` — after an
   owner-directed chain restart, the file name set out in The verdict chain, below.
 
-Their routes are `must-fix`, `issue` and `note` only. If review #2 routes anything `must-fix`:
+Their routes are `must-fix`, `issue` and `note` only; a late item matching a blocked issue is
+`issue` with its `#N`. If review #2 routes anything `must-fix`:
 **one fix dispatch** carrying the complete list — never one fixer per finding; per-finding fixers
 each rebuild context and re-run suites, and a real session's final-review fix wave cost more than
 all its tasks combined — then **one scoped re-review** of the fix diff (`re-review-prompt.md`),
@@ -1403,8 +1413,12 @@ failed**, and `found during #<spec issue>, review #<k>` — then a `Filed:` line
 for want of `backlog_milestone`, use `gh issue create` with no milestone, and say so. A matched
 item gets a `Seen:` line and no new issue; a `note` item, a `Note:` line. No comments are posted on
 issues: `ship` writes a `## Sweep` section into the PR body from these lines, and GitHub puts each
-mention on the issue's timeline. After the rulings, your final message lists the issues the sweep
-closed, filed and noted. A `BLOCKED` run files nothing.
+mention on the issue's timeline. **One exception:** for each blocked-issue `ask` your human
+partner answered **leave it**, post one comment on `#N` — `Found during #<spec issue>, review #<k>:
+<finding> — <path:line> at <sha7>`, plus its reproduction or failing check, if there is one — so
+whoever unblocks `#N` finds the finding on `#N`, not in another PR's timeline. A failed post is
+reported in your final message and blocks nothing. After the rulings, your final message lists the
+issues the sweep closed, filed and noted. A `BLOCKED` run files nothing and posts nothing.
 
 Run `scripts/wdd`, from the **plan worktree**:
 
@@ -1416,6 +1430,8 @@ scripts/wdd ship    PLAN_FILE   # check, push, open PR, sweep section, in_review
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run --session <session-name>
 
 scripts/wdd merge   PLAN_FILE   # receipt + green -> merge, clear claim label, sync main
+# per owner-approved `full` fix of a blocked issue, if any (below)
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/block.py <N> --clear
 scripts/wdd cleanup PLAN_FILE   # task branches, worktrees, workspace
 ```
 
@@ -1461,8 +1477,17 @@ section, swaps the issue's `status_labels.ongoing` for `status_labels.in_review`
 and stops there. The issue is the one the branch names, and only once the PR
 body closes it. `merge` takes both labels off that issue once the PR has
 landed, and never touches `status_labels.blocked`, which is someone else's to
-retract. Every label step is soft and spoken: a missing number, an unset label
-or a refusing `gh` is reported and never blocks a ship or a merge.
+retract. The only block a run clears is the controller's own step after `merge`, on an
+owner-approved `full` fix (below). Every label step is soft and spoken: a missing number, an
+unset label or a refusing `gh` is reported and never blocks a ship or a merge.
+
+**After `merge` lands the PR, and before `cleanup`, clear the blocks the owner had fixed.** For
+each `Fixed: … — closes #<N>` line whose item was a blocked-issue `ask` — its `Owner:` line reads
+`fix it this round, #<N> blocked` — run
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/block.py <N> --clear`, so a closed issue does not keep a
+blocked label. A failure is reported in your final message and never blocks the merge or
+`cleanup`. A `part` fix leaves `#N` open and blocked, and clears nothing; a run that never merges
+clears nothing, because nothing was fixed.
 
 `merge` is what lands the PR, and what it replaces is a human remembering that
 the branch was validated. That bound holds until the first time it does not,
