@@ -449,3 +449,34 @@ def test_the_title_travels_with_the_number():
 
 def test_no_candidates_is_an_empty_list_not_an_error():
     assert tracker.select_candidates([]) == []
+
+
+# --- latest_block / latest_claim: one walk, two markers ------------------------
+
+def _comment(body, when="2026-08-30T10:00:00Z"):
+    return {"body": body, "created_at": when}
+
+
+def test_latest_block_is_the_latest_blocked_on_comment(monkeypatch):
+    """A re-mark appends, so the newest reason is the current one."""
+    comments = [_comment(tracker.BLOCK_MARKER + "old", "2026-08-30T09:00:00Z"),
+                _comment(tracker.BLOCK_MARKER + "new", "2026-08-30T10:00:00Z"),
+                _comment("unrelated discussion")]
+    monkeypatch.setattr(tracker, "_comments", lambda issue, repo: comments)
+    assert tracker.latest_block(58, "o/r")["body"] == tracker.BLOCK_MARKER + "new"
+
+
+def test_latest_block_and_latest_claim_ignore_each_others_comments(monkeypatch):
+    comments = [_comment(tracker.BLOCK_MARKER + "an upstream release"),
+                _comment(tracker.CLAIM_MARKER + "https://example/s")]
+    monkeypatch.setattr(tracker, "_comments", lambda issue, repo: comments)
+    assert tracker.latest_block(58, "o/r")["body"] == (
+        tracker.BLOCK_MARKER + "an upstream release")
+    assert tracker.latest_claim(58, "o/r")["body"] == (
+        tracker.CLAIM_MARKER + "https://example/s")
+
+
+def test_latest_block_is_none_without_a_blocked_on_comment(monkeypatch):
+    monkeypatch.setattr(tracker, "_comments",
+                        lambda issue, repo: [_comment(tracker.CLAIM_MARKER + "s")])
+    assert tracker.latest_block(58, "o/r") is None

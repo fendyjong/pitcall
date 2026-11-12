@@ -27,6 +27,11 @@ import lane_config  # noqa: E402
 #: not, because comments accumulate and `--take` deliberately adds another.
 CLAIM_MARKER = "claimed by "
 
+#: Every block reason starts with this. The LABEL is the state; this comment
+#: only holds the reason, so nothing reads one unless the label is on -- a
+#: reason left behind by a clear is never read as current.
+BLOCK_MARKER = "blocked on: "
+
 
 class TrackerError(RuntimeError):
     """Stops a verb with a message, never a traceback."""
@@ -230,17 +235,39 @@ def _comments(issue, repo):
     return [json.loads(line) for line in raw.split("\n") if line.strip()]
 
 
-def latest_claim(issue, repo):
-    """The most recent comment whose body starts with CLAIM_MARKER, or None.
+def _latest_marked(issue, repo, marker):
+    """The most recent comment whose body starts with `marker`, or None.
 
     Reversed rather than sorted: the API returns comments in creation order, and
-    `--take` appends, so the last match is the live claim and earlier ones are
-    superseded records.
+    `--take` and a re-mark both append, so the last match is the current one and
+    earlier ones are superseded records. One walk, so "the latest comment wins"
+    is written once.
     """
     for comment in reversed(_comments(issue, repo)):
-        if comment["body"].startswith(CLAIM_MARKER):
+        if comment["body"].startswith(marker):
             return comment
     return None
+
+
+def latest_claim(issue, repo):
+    """The live claim comment, or None. See `_latest_marked`."""
+    return _latest_marked(issue, repo, CLAIM_MARKER)
+
+
+def latest_block(issue, repo):
+    """The current `blocked on:` comment, or None. See `_latest_marked`.
+
+    Meaningful only while the issue carries `status_labels.blocked`, so callers
+    look it up only then.
+    """
+    return _latest_marked(issue, repo, BLOCK_MARKER)
+
+
+def issue_state(issue, repo):
+    """`{"state", "title", "labels"}` for one issue, `labels` as names."""
+    raw = run("gh", "api", f"repos/{repo}/issues/{issue}", "--jq",
+              "{state: .state, title: .title, labels: [.labels[].name]}")
+    return json.loads(raw)
 
 
 def select_candidates(issues, milestone=None):
