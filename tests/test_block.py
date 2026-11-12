@@ -100,3 +100,56 @@ def test_marking_never_touches_the_claim_labels(monkeypatch, capsys):
     assert "status:ongoing" not in flat and "status:in-review" not in flat
     assert "--remove-label" not in flat
     assert "#58 is blocked on: an upstream release" in capsys.readouterr().out
+
+
+# --- the two partial-failure messages, and the unset label in main -----------
+
+def _failing_run(monkeypatch, fail_on):
+    """Stub `tracker.run` to raise on call number `fail_on` (1-based)."""
+    calls = []
+
+    def run(*args, cwd=None):
+        calls.append(list(args))
+        if len(calls) == fail_on:
+            raise tracker.TrackerError(f"{' '.join(args)} failed: boom")
+        return ""
+
+    monkeypatch.setattr(tracker, "run", run)
+    return calls
+
+
+def test_a_refused_label_says_nothing_else_happened(monkeypatch):
+    _stub(monkeypatch)
+    calls = _failing_run(monkeypatch, fail_on=1)
+    with pytest.raises(tracker.TrackerError,
+                       match="nothing else has happened yet for #58; safe to re-run"):
+        block_mod.main(["58", "an upstream release"])
+    assert len(calls) == 1, "the reason must not be posted after a refused label"
+
+
+def test_a_failed_comment_says_the_reason_was_not_posted(monkeypatch):
+    """On a re-mark the PREVIOUS reason is still the latest comment, so
+    "no reason recorded" would be false -- claim shows the old reason."""
+    _stub(monkeypatch, labels=[LABEL])
+    _failing_run(monkeypatch, fail_on=2)
+    with pytest.raises(tracker.TrackerError) as exc:
+        block_mod.main(["58", "an upstream release"])
+    msg = str(exc.value)
+    assert f"{LABEL} is on #58, but the reason was not posted" in msg
+    assert "claim shows the previous reason, if any" in msg
+    assert "no reason recorded" not in msg
+
+
+def test_main_refuses_an_unset_label_before_any_network_call(monkeypatch):
+    ran = _stub(monkeypatch)
+    monkeypatch.setattr(tracker, "config",
+                        lambda checkout=None: {"status_labels": {"ongoing": "status:ongoing"}})
+
+    def no_network(cwd=None):
+        raise AssertionError("origin_repo called before the label was checked")
+
+    monkeypatch.setattr(tracker, "origin_repo", no_network)
+    with pytest.raises(tracker.TrackerError,
+                       match="status_labels.blocked is not configured"):
+        block_mod.main(["58", "an upstream release"])
+    assert ran == []

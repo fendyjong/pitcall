@@ -393,3 +393,33 @@ def test_an_unblocked_issue_never_looks_up_a_block_reason(monkeypatch):
     assert [c[:3] for c in ran] == [["gh", "issue", "edit"],
                                     ["gh", "issue", "comment"],
                                     ["git", "branch", "feat/58-held"]]
+
+
+# --- with status_labels.blocked unset, nothing counts as blocked -------------
+
+UNSET = {**CFG, "status_labels": {"ongoing": "status:ongoing"}}
+
+
+def test_with_blocked_unset_a_labelled_issue_is_claimed_as_today(monkeypatch):
+    """The spec's first rule: unset means nothing is blocked, even an issue
+    carrying a label that happens to be named like one."""
+    ran = _stub_claim(monkeypatch, labels=(BLOCKED,))
+    monkeypatch.setattr(tracker, "config", lambda checkout=None: UNSET)
+
+    def no_lookup(issue, repo):
+        raise AssertionError("latest_block called with blocked unset")
+
+    monkeypatch.setattr(tracker, "latest_block", no_lookup)
+    claim_mod.main(["58", "--session", MINE])
+    assert [c[:3] for c in ran] == [["gh", "issue", "edit"],
+                                    ["gh", "issue", "comment"],
+                                    ["git", "branch", "feat/58-held"]]
+
+
+def test_with_blocked_unset_next_does_not_pass_a_labelled_issue_over(monkeypatch):
+    monkeypatch.setattr(tracker, "open_issues", lambda repo, milestone=None: [
+        (58, "held", [BLOCKED])])
+    monkeypatch.setattr(tracker, "latest_claim", lambda issue, repo: None)
+    monkeypatch.setattr(claim_mod, "branch_exists", lambda branch, cwd=None: False)
+    args = argparse.Namespace(milestone=None, take=False)
+    assert claim_mod.resolve_next(UNSET, "o/r", "origin/main", NOW, args) == 58

@@ -104,9 +104,9 @@ def main(argv=None):
         tracker.run(*comment)
     except tracker.TrackerError as exc:
         raise tracker.TrackerError(
-            f"{exc}. {label} is on #{args.issue} with no reason recorded. "
-            f"Re-running is safe: re-adding a label already present changes "
-            f"nothing."
+            f"{exc}. {label} is on #{args.issue}, but the reason was not "
+            f"posted -- claim shows the previous reason, if any. Re-run to "
+            f"post it: the label step is a no-op when the label is already on."
         ) from exc
     print(f"#{args.issue} is blocked on: {args.reason.strip()}")
 
