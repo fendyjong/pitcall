@@ -12,19 +12,12 @@ Prefer the failure mode that expires on its own.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tracker  # noqa: E402
-
-
-def issue_state(issue, repo):
-    raw = tracker.run("gh", "api", f"repos/{repo}/issues/{issue}",
-                      "--jq", "{state: .state, title: .title}")
-    return json.loads(raw)
 
 
 def branch_exists(branch, cwd=None):
@@ -100,7 +93,8 @@ def select_next(candidates, judge, take=False):
     """The first claimable issue and the ones passed over, or `(None, skipped)`.
 
     `candidates` is `(number, title)` in FIFO order; `judge(number)` returns
-    `"free"`, `"live"` or `"stale"`. Pure given the judge, so the policy is
+    `"free"`, `"live"`, `"stale"`, `"branch"` or `"blocked"`; only `"free"`, and
+    `"stale"` under `take`, is ever picked. Pure given the judge, so the policy is
     provable without a network -- every judgement is an API call.
 
     **The walk is lazy on purpose.** It stops at the first claimable issue, so
@@ -123,6 +117,28 @@ def select_next(candidates, judge, take=False):
     return None, skipped
 
 
+def spoken_for(skipped, where=""):
+    """The refusal when `--next` passed over every open issue.
+
+    The `--take` hint is offered only when a STALE claim was passed over:
+    `--take` reclaims nothing else, so beside a list of live or blocked issues
+    it points at a door that is not there.
+    """
+    detail = ", ".join(f"#{n} ({v})" for n, v in skipped)
+    hint = (" --take would reclaim a stale one, oldest first."
+            if any(v == "stale" for _, v in skipped) else "")
+    return f"every open issue{where} is spoken for: {detail}.{hint}"
+
+
+def blocked_reason(comment):
+    """`<reason> (<created_at>)` from a `blocked on:` comment, or a plain
+    statement that none was found -- the label alone still blocks."""
+    if comment is None:
+        return 'no "blocked on:" comment found'
+    reason = comment["body"][len(tracker.BLOCK_MARKER):].strip()
+    return f"{reason} ({comment['created_at']})"
+
+
 def resolve_next(cfg, repo, base, now, args):
     """The issue number `--next` picks, or a refusal naming what it passed over.
 
@@ -132,11 +148,20 @@ def resolve_next(cfg, repo, base, now, args):
     refuses when a branch exists with no claim comment, and inheriting that
     refusal here would abort the whole walk on the first such issue instead of
     stepping past it.
+
+    A blocked issue is judged from the labels `open_issues` already returned,
+    before any claim-comment lookup, so it costs no call -- and `select_next`
+    never picks it, so a blocked issue's claim cannot be reclaimed even once it
+    goes stale.
     """
     candidates = tracker.open_issues(repo, args.milestone)
-    titles = dict(candidates)
+    titles = {number: title for number, title, _ in candidates}
+    labels = {number: names for number, _, names in candidates}
+    blocked = tracker.status_label(cfg, "blocked")
 
     def judge(number):
+        if blocked and blocked in labels[number]:
+            return "blocked"
         claim = tracker.latest_claim(number, repo)
         if claim is not None:
             return describe_claim(cfg, claim, number, base, now)[0]
@@ -144,17 +169,14 @@ def resolve_next(cfg, repo, base, now, args):
             return "branch"
         return "free"
 
-    picked, skipped = select_next(candidates, judge, take=args.take)
+    picked, skipped = select_next(
+        [(number, title) for number, title, _ in candidates], judge,
+        take=args.take)
     if picked is None:
         where = f" in milestone {args.milestone!r}" if args.milestone else ""
         if not skipped:
             raise tracker.TrackerError(f"no open issues{where} to claim.")
-        detail = ", ".join(f"#{n} ({v})" for n, v in skipped)
-        raise tracker.TrackerError(
-            f"every open issue{where} is spoken for: {detail}."
-            + ("" if args.take else
-               " --take would reclaim a stale one, oldest first.")
-        )
+        raise tracker.TrackerError(spoken_for(skipped, where))
     number, title = picked
     if skipped:
         print(f"--next: passed over {', '.join(f'#{n} ({v})' for n, v in skipped)}")
@@ -193,7 +215,7 @@ def main(argv=None):
     if args.pick_next:
         args.issue = resolve_next(cfg, repo, base, now, args)
 
-    issue = issue_state(args.issue, repo)
+    issue = tracker.issue_state(args.issue, repo)
     if issue["state"].lower() != "open":
         raise tracker.TrackerError(
             f"#{args.issue} is {issue['state'].lower()} -- nothing to claim."
@@ -209,6 +231,23 @@ def main(argv=None):
     # too, since --take only fires on a stale verdict, locking the caller out
     # of their own issue for claim_expiry_hours. See resumes_own_claim().
     resuming = resumes_own_claim(args.session, claim)
+
+    # Blocked comes before every other refusal: it is the most specific
+    # instruction, and --take does not get past it. Blocking is not
+    # unclaiming, so a session resuming its OWN claim goes through -- its
+    # branch and work are real.
+    blocked = tracker.status_label(cfg, "blocked")
+    if blocked and blocked in issue["labels"]:
+        why = blocked_reason(tracker.latest_block(args.issue, repo))
+        if not resuming:
+            held = (f" It is claimed, since {claim['created_at']}."
+                    if claim is not None else "")
+            raise tracker.TrackerError(
+                f"#{args.issue} is blocked on: {why}.{held} "
+                f"Clear it first: block.py {args.issue} --clear."
+            )
+        print(f"#{args.issue} is blocked on: {why} -- resuming this "
+              f"session's own claim anyway.")
 
     if claim is None:
         if branch_exists(branch):

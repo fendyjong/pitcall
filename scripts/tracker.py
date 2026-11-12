@@ -271,7 +271,10 @@ def issue_state(issue, repo):
 
 
 def select_candidates(issues, milestone=None):
-    """Open issues as `(number, title)`, lowest number first.
+    """Open issues as `(number, title, labels)`, lowest number first.
+
+    `labels` are the label names the API response already carries: `claim
+    --next` judges a blocked issue from them, at no extra call.
 
     Pure, so the ordering rule is provable without a network -- the same split
     this module already applies to the staleness decision.
@@ -294,7 +297,8 @@ def select_candidates(issues, milestone=None):
         if milestone is not None:
             if ((issue.get("milestone") or {}).get("title")) != milestone:
                 continue
-        out.append((issue["number"], issue["title"]))
+        out.append((issue["number"], issue["title"],
+                    [label["name"] for label in issue.get("labels") or []]))
     return sorted(out)
 
 
