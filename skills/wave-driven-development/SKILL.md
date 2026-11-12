@@ -1247,11 +1247,12 @@ finding, the two options, and the reviewer's recommendation. Wait. Each answer i
 item is swept with that decision, recorded as an `Owner:` line — or "not now", which makes the
 item `issue` (or `note`, when it is `introduced`). This is the one planned interrupt in a run.
 
-A **blocked-issue `ask`** offers its two fixed options. **Fix it this round** sweeps it like any
-approved `ask`, and its `Owner:` line's decision reads `fix it this round, #<N> blocked`. **Leave
-it** makes it `issue` with its `#N`, so it gets a `Seen: #<N>` line, and Phase 3 comments the
-finding on `#N` before `ship`. "Not now" keeps its meaning — `issue`, or `note` when `introduced`
-— and posts no comment.
+A **blocked-issue `ask`** offers its two fixed options, and its `Owner:` line's decision names
+the option and the issue: `fix it this round, #<N> blocked` or `leave it, #<N> blocked`. **Fix it
+this round** sweeps it like any approved `ask`. **Leave it** makes it `issue` with its `#N`, so it
+gets a `Seen: #<N>` line — or `note`, when it is `introduced` — and either way Phase 3 comments
+the finding on `#N` before `ship`. "Not now" keeps its meaning — `issue`, or `note` when
+`introduced` — and posts no comment.
 
 ### The amendment
 
@@ -1331,11 +1332,12 @@ Each is `final-reviewer-prompt.md` on the most capable model, given:
   review — everything older was routed by a review already;
 - `open-issues.json` rewritten first, and `[OPEN_ISSUES_FILE]`, `[CLAIM_LABELS]`, `[BLOCKED_LABEL]`
   and `[SPEC_ISSUE]` as for review #1 — `[BLOCKED_LABEL]` changes no route from here on, since
-  there is no `sweep` or `ask`, but the template is one and needs it filled; `[REPORT_FILE]` is `<workspace>/final-review-<k>.md` — after an
-  owner-directed chain restart, the file name set out in The verdict chain, below.
+  there is no `sweep` or `ask`, but the template is one and needs it filled;
+  `[REPORT_FILE]` is `<workspace>/final-review-<k>.md` — after an owner-directed chain restart,
+  the file name set out in The verdict chain, below.
 
-Their routes are `must-fix`, `issue` and `note` only; a late item matching a blocked issue is
-`issue` with its `#N`. If review #2 routes anything `must-fix`:
+Their routes are `must-fix`, `issue` and `note` only, and a late item matching a blocked issue is
+routed like any other late item. If review #2 routes anything `must-fix`:
 **one fix dispatch** carrying the complete list — never one fixer per finding; per-finding fixers
 each rebuild context and re-run suites, and a real session's final-review fix wave cost more than
 all its tasks combined — then **one scoped re-review** of the fix diff (`re-review-prompt.md`),
@@ -1411,14 +1413,14 @@ filed with `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/file.py "<title>" --body-file 
 finding, its evidence pinned to a commit, its reproduction if any, **which sweep condition it
 failed**, and `found during #<spec issue>, review #<k>` — then a `Filed:` line. If `file` refuses
 for want of `backlog_milestone`, use `gh issue create` with no milestone, and say so. A matched
-item gets a `Seen:` line and no new issue; a `note` item, a `Note:` line. No comments are posted on
-issues: `ship` writes a `## Sweep` section into the PR body from these lines, and GitHub puts each
-mention on the issue's timeline. **One exception:** for each blocked-issue `ask` your human
-partner answered **leave it**, post one comment on `#N` — `Found during #<spec issue>, review #<k>:
-<finding> — <path:line> at <sha7>`, plus its reproduction or failing check, if there is one — so
-whoever unblocks `#N` finds the finding on `#N`, not in another PR's timeline. A failed post is
-reported in your final message and blocks nothing. After the rulings, your final message lists the
-issues the sweep closed, filed and noted. A `BLOCKED` run files nothing and posts nothing.
+item gets a `Seen:` line and no new issue; a `note` item, a `Note:` line. No comments are posted
+on issues: `ship` writes a `## Sweep` section into the PR body from these lines, and GitHub puts
+each mention on the issue's timeline. **One exception:** for each `Owner:` line whose decision
+reads `leave it, #<N> blocked`, post one comment on `#N` — `Found during #<spec issue>, review
+#<k>: <finding> — <path:line> at <sha7>`, plus its reproduction or failing check, if there is one
+— so whoever unblocks `#N` finds the finding on `#N`, not in another PR's timeline. A failed post
+is reported in your final message and blocks nothing. After the rulings, your final message lists
+the issues the sweep closed, filed and noted. A `BLOCKED` run files nothing and posts nothing.
 
 Run `scripts/wdd`, from the **plan worktree**:
 
