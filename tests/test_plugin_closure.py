@@ -46,7 +46,7 @@ one of them:
   `pitcall:` prefix and no `../`. A command executes with cwd set to the
   project it configures, not this checkout, so a bare `docs/configuration.md`
   is a plausible path THERE too, and resolves against a same-named file in
-  that project instead of this plugin's own doc — silently, and for `init`,
+  that project instead of this plugin's own doc — silently, and for `setup`,
   with write permission. This shipped once: `commands/init.md` named
   `docs/configuration.md` seven times, unqualified, and every check above
   passed.
@@ -180,7 +180,7 @@ def test_every_command_reference_to_a_shipped_doc_is_plugin_rooted():
     A command executes with cwd set to the project it is configuring, not this
     checkout. `docs/configuration.md` is a plausible path in a REAL project too
     -- so a bare mention resolves against a same-named file there instead of
-    this plugin's own reference doc, and `init` (which literally executes what
+    this plugin's own reference doc, and `setup` (which literally executes what
     it reads) then reads a foreign file with write permission. This is exactly
     what shipped: `test_every_referenced_skill_exists` only matches
     `pitcall:name`, and `test_every_relative_reference_resolves` only matches a

@@ -28,7 +28,8 @@ is clean".
 
 `python3 tests/test_no_old_names.py FILE...` scans just those files as they are
 on disk and prints each hit: the check a change runs on its own files before it
-commits.
+commits. It exits 0 when clean, 1 when it found an old name, and 2 when it cannot
+scan a path it was given.
 """
 
 import re
@@ -43,11 +44,17 @@ SELF = "tests/test_no_old_names.py"
 MARKER = "deprecated(" + "0.16.0)"
 
 OLD_NAMES = re.compile(
-    r"wave-driven-development|wave-worktree|\bwaves?\b|\bwdd\b|implementer|bringup|teardown"
-    r"|solution-ready|solution_ready|\blane\.py\b|\blane run\b|\bclaim\.py\b|\bblock\.py\b"
+    r"wave-driven-development|wave-worktree|(?<![A-Za-z0-9])waves?(?![A-Za-z0-9])|\bwdd\b"
+    r"|implementer|bringup|teardown|solution-ready|solution_ready|\blane\.py\b"
+    r"|(?<![A-Za-z0-9])lane[_\s]+run(?![A-Za-z0-9])|\bclaim\.py\b|\bblock\.py\b"
     r"|\bpitcall:init\b|--validate|receipt",
     re.IGNORECASE,
 )
+
+#: Old command names that are ordinary words too, so `OLD_NAMES` cannot look for
+#: them. Checked only in agent-facing documents, and only in backticks, where
+#: they can only mean the renamed command.
+OLD_COMMAND_WORDS = re.compile(r"`(claim|block|ship|merge|cleanup|init)`")
 
 #: Files that exist only as 0.16.0 aliases and are deleted whole in 0.17.0.
 ALIAS_FILES = {
@@ -98,12 +105,27 @@ def hits(rel, text):
         if line.strip():
             block.append(i)
             continue
-        if not any(MARKER in lines[j] for j in block):
-            for j in block:
-                if j not in history:
-                    found += [f"{rel}:{j + 1}: {m.group(0)}" for m in OLD_NAMES.finditer(lines[j])]
+        if block and not any(MARKER in lines[j] for j in block):
+            found += block_hits(rel, lines, [j for j in block if j not in history])
         block = []
     return found
+
+
+def block_hits(rel, lines, block):
+    """Old names in one block, matched across its line breaks: a wrap must not hide one."""
+    starts, joined = [], ""
+    for j in block:
+        starts.append((len(joined), j))
+        joined += lines[j] + "\n"
+    found = []
+    for m in OLD_NAMES.finditer(joined):
+        line = max(j for offset, j in starts if offset <= m.start())
+        found.append(f"{rel}:{line + 1}: {' '.join(m.group(0).split())}")
+    return found
+
+
+def is_agent_doc(rel):
+    return rel.endswith(".md") and rel.startswith(("skills/", "commands/")) and not is_alias(rel)
 
 
 def tracked():
@@ -177,11 +199,65 @@ def test_every_alias_file_says_it_is_one():
     assert not unmarked, f"listed as aliases but carrying no {MARKER}: {unmarked}"
 
 
+def test_an_old_name_inside_an_identifier_is_found():
+    assert hits("x.py", "def test_lane_run_ok():\n") == ["x.py:1: lane_run"]
+    assert hits("x.py", "waves_dispatched = 1\nLAP = WAVE_WORKTREE\n") == [
+        "x.py:1: waves", "x.py:2: WAVE"]
+
+
+def test_an_old_name_split_across_a_line_break_is_found():
+    assert hits("docs/x.md", "A commit pushed after a lane\nrun does not inherit it.\n") == [
+        "docs/x.md:1: lane run"]
+
+
+def test_kept_names_are_still_not_hits():
+    text = "`bounded_via_wdd`, `WDD_CHECK_TIMEOUT` and `WDD_CHECK_POLL` keep their names.\n"
+    assert hits("docs/x.md", text) == []
+
+
+def test_old_command_words_are_caught_and_new_ones_are_not():
+    assert OLD_COMMAND_WORDS.findall("`claim` cuts it; `ship` opens it; run `init`") == [
+        "claim", "ship", "init"]
+    assert OLD_COMMAND_WORDS.findall("`enter`, `grid`, `claim_expiry_hours`, `git merge`") == []
+
+
+def test_the_cli_refuses_a_path_outside_the_repository(tmp_path, capsys):
+    outside = tmp_path / "x.md"
+    outside.write_text("wdd\n", encoding="utf-8")
+    assert main([str(outside)]) == 2
+    assert "cannot scan" in capsys.readouterr().err
+
+
+def test_the_cli_refuses_a_missing_path(capsys):
+    assert main([str(ROOT / "no-such-file")]) == 2
+    assert "cannot scan" in capsys.readouterr().err
+
+
+def test_agent_docs_name_the_new_commands():
+    """Skill and command documents are instructions an agent follows, so an old
+    command name there runs the alias, or a command that no longer exists. These
+    words are ordinary English too, so the scanner above cannot look for them;
+    in a backticked command position they can only mean the renamed command."""
+    found = [f"{rel}:{n}: {m.group(0)}"
+             for rel in tracked() if is_agent_doc(rel)
+             for n, line in enumerate(blob(rel).split("\n"), 1)
+             for m in OLD_COMMAND_WORDS.finditer(line)]
+    assert not found, "old command names in agent-facing documents:\n" + "\n".join(found)
+
+
 def main(paths):
     found = []
     for name in paths:
         path = Path(name).resolve()
-        found += hits(path.relative_to(ROOT).as_posix(), path.read_text(encoding="utf-8"))
+        try:
+            rel = path.relative_to(ROOT).as_posix()
+            text = path.read_text(encoding="utf-8")
+        except (ValueError, OSError, UnicodeDecodeError) as exc:
+            # 2, not 1: exit 1 means "found an old name", and an unreadable path
+            # must never read as a verdict either way.
+            print(f"test_no_old_names: cannot scan {name}: {exc}", file=sys.stderr)
+            return 2
+        found += hits(rel, text)
     for hit in found:
         print(hit)
     return 1 if found else 0

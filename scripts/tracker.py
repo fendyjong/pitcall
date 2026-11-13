@@ -130,7 +130,7 @@ def issue_from_branch(cfg, branch):
 
     FAILS SOFT, ALWAYS, and that is the whole contract. `branch_prefix` is required
     only by `enter` (docs/configuration.md), so a plan branch cut by hand legitimately
-    carries no number and `ship` must still ship. Every miss returns `None` for the
+    carries no number and `grid` must still grid. Every miss returns `None` for the
     caller to state; raising would refuse to open a PR over a naming convention the
     project never promised to follow.
 
@@ -354,7 +354,7 @@ def _main(argv):
 
     Prints the answer and exits 0; prints NOTHING and STILL exits 0 when there is
     none, including when the config cannot be read at all. A miss is an ordinary
-    answer here rather than an error -- `ship` and `merge` must finish either way,
+    answer here rather than an error -- `grid` and `finish` must finish either way,
     and a non-zero exit would make a naming convention or a label able to block a
     release. A status NAME outside `STATUS_NAMES` is the exception, and exits 2:
     that is the caller's mistake, not the project's answer.

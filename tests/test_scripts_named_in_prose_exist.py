@@ -481,7 +481,7 @@ def problems_in(text, path, dead, tracked_paths, repo=None):
                 # guard blind to `<scripts/name>` specifically. This idiom
                 # is already live and correct in this repo:
                 # `race/<plan-slug>/progress.md` and
-                # `.pitcall/ledger/<sha>.json` (both in Race's SKILL.md),
+                # `.pitcall/pit-passes/<sha>.json` (both in Race's SKILL.md),
                 # and `repos/<owner>` (commands/spec-review.md). A false positive on correct
                 # prose is how a check gets switched off rather than fixed,
                 # which is the failure this gate exists to avoid.
@@ -657,7 +657,7 @@ def test_a_scripts_placeholder_is_not_a_path_claim():
     """`scripts/<name>` shows the SHAPE of a path; it names no file.
 
     The same idiom is already live and correct elsewhere in this repo --
-    `race/<plan-slug>/progress.md`, `.pitcall/ledger/<sha>.json`,
+    `race/<plan-slug>/progress.md`, `.pitcall/pit-passes/<sha>.json`,
     `repos/<owner>` -- so a future `scripts/<name>` must not fail CI, even
     though an unrelated bad path with the same prefix still must.
     """

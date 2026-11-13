@@ -27,7 +27,7 @@ REQUIRED = {
 
 
 def _config(repo, **extra):
-    """Write the config where `init` writes it: `.pitcall/config.json`."""
+    """Write the config where `setup` writes it: `.pitcall/config.json`."""
     _raw_config(repo, json.dumps({**REQUIRED, **extra}))
     return repo
 
@@ -221,7 +221,7 @@ def test_flag_reads_null_as_unset(repo):
 def test_flag_reads_a_checkout_with_no_config_as_unset(repo):
     """The one mode where no config is not an error.
 
-    Brainstorming runs in projects that never ran `init`; a project with no
+    Brainstorming runs in projects that never ran `setup`; a project with no
     config has made no decision, and failing would make every bounded task
     there stop to ask.
     """

@@ -40,11 +40,11 @@ def test_issue_from_branch_is_branch_names_inverse():
 
 
 def test_issue_from_branch_fails_soft_rather_than_raising():
-    """`branch_prefix` is required only for `claim`, so a plan branch cut by hand
+    """`branch_prefix` is required only for `enter`, so a plan branch cut by hand
     legitimately carries no number. Ship must still ship: every miss is None, and the
     caller states the omission. Raising here would refuse to open a PR over a naming
     convention the project never promised to follow."""
-    # No prefix configured at all -- the key is optional outside `claim`.
+    # No prefix configured at all -- the key is optional outside `enter`.
     assert tracker.issue_from_branch({}, "feat/19-x") is None
     # Configured, but this branch does not use it.
     assert tracker.issue_from_branch({"branch_prefix": "feat/"}, "hotfix/19-x") is None
