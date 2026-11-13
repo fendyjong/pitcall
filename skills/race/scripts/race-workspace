@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Resolve and ensure the working-tree directory WDD uses for one plan's
-# short-lived artifacts: task briefs, implementer reports, review packages, and
+# Resolve and ensure the working-tree directory the race uses for one plan's
+# short-lived artifacts: task briefs, driver reports, review packages, and
 # the progress ledger. Prints the plan directory's absolute path.
 #
-# One directory per plan (.pitcall/wdd/<plan-basename>/) so a follow-up plan
+# One directory per plan (.pitcall/race/<plan-basename>/) so a follow-up plan
 # in the same working tree can never read or overwrite another plan's artifacts.
 # A stale ledger misread as current progress makes controllers skip whole task
 # sequences -- plan-scoping removes that failure structurally rather than by
@@ -14,21 +14,21 @@
 #
 # It refuses to run inside a task worktree. The directory is derived from
 # `git rev-parse --show-toplevel`, which inside a task worktree resolves to the
-# task worktree -- so every implementer would silently get its own orphan
+# task worktree -- so every driver would silently get its own orphan
 # workspace the controller cannot read. Only the controller resolves the
 # workspace; subagents receive absolute paths.
 #
 # The workspace lives in the working tree (not under .git/) because Claude Code
 # treats .git/ as a protected path and denies agent writes there, which would
-# block an implementer from writing its report file. A self-ignoring .gitignore
-# at .pitcall/wdd/ keeps every plan's workspace out of `git status` and out
+# block a driver from writing its report file. A self-ignoring .gitignore
+# at .pitcall/race/ keeps every plan's workspace out of `git status` and out
 # of accidental commits, without modifying any tracked file.
 #
-# Usage: wdd-workspace PLAN_FILE
+# Usage: race-workspace PLAN_FILE
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
-  echo "usage: wdd-workspace PLAN_FILE" >&2
+  echo "usage: race-workspace PLAN_FILE" >&2
   exit 2
 fi
 
@@ -43,7 +43,7 @@ fi
 
 root=$(git rev-parse --show-toplevel)
 
-# Task worktrees for THIS plan are named <plan-slug>-t<N> by `wave-worktree`.
+# Task worktrees for THIS plan are named <plan-slug>-t<N> by `lap-worktree`.
 #
 # Key the guard on this plan's own slug, not on any directory ending in -t<N>.
 # A bare `*-t[0-9]` suffix match locks out an ordinary checkout that merely
@@ -63,7 +63,14 @@ EOF
     ;;
 esac
 
-base="$root/.pitcall/wdd"
+base="$root/.pitcall/race"
+
+# deprecated(0.16.0): a run begun on 0.15.0 keeps its scratch where it began --
+# a ledger never moves mid-run, or two places would hold the evidence. Read until 0.17.0.
+if [ ! -d "$base/$slug" ] && [ -d "$root/.pitcall/wdd/$slug" ]; then
+  base="$root/.pitcall/wdd"
+fi
+
 dir="$base/$slug"
 mkdir -p "$dir"
 printf '*\n' > "$base/.gitignore"

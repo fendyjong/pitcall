@@ -28,7 +28,7 @@ def _plan(repo) -> Path:
     return p
 
 
-# --- wdd-workspace ---------------------------------------------------------
+# --- race-workspace ---------------------------------------------------------
 
 
 def test_workspace_prints_only_the_directory(repo):
@@ -36,16 +36,16 @@ def test_workspace_prints_only_the_directory(repo):
     r = run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
     out = r.stdout.strip()
-    assert out.endswith("/.pitcall/wdd/plan")
+    assert out.endswith("/.pitcall/race/plan")
     assert Path(out).is_dir()
-    # Exactly one line: callers do `dir=$(wdd-workspace plan.md)`.
+    # Exactly one line: callers do `dir=$(race-workspace plan.md)`.
     assert len(r.stdout.strip().splitlines()) == 1
 
 
 def test_workspace_is_self_ignoring(repo):
     plan = _plan(repo)
     run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
-    assert (repo.path / ".pitcall/wdd/.gitignore").read_text() == "*\n"
+    assert (repo.path / ".pitcall/race/.gitignore").read_text() == "*\n"
     status = repo.git("status", "--porcelain").stdout
     assert ".pitcall" not in status
 
@@ -81,7 +81,7 @@ def test_workspace_refuses_a_task_worktree_numbered_past_ninety_nine(repo):
     """Silently not guarding is the failure this guard exists to close.
 
     A one-or-two-digit suffix pattern stops matching at t100 and lets an
-    implementer create the orphan workspace the controller cannot read.
+    driver create the orphan workspace the controller cannot read.
     """
     plan = _plan(repo)
     wt = repo.path / ".worktrees/plan-t100"
@@ -105,7 +105,25 @@ def test_workspace_accepts_a_plain_checkout_named_like_a_task_worktree(repo, tmp
     (other / "plan.md").write_text(PLAN)
     r = run_script("race-workspace", "plan.md", cwd=other, env=repo.env)
     assert r.returncode == 0, r.stderr
+    assert r.stdout.strip().endswith("/.pitcall/race/plan")
+
+
+# deprecated(0.16.0): a run begun on 0.15.0 carries on in its old scratch until 0.17.0.
+def test_a_run_begun_in_the_old_directory_carries_on_there(repo):
+    plan = _plan(repo)
+    (repo.path / ".pitcall" / "wdd" / "plan").mkdir(parents=True)
+    r = run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
+    assert r.returncode == 0, r.stderr
     assert r.stdout.strip().endswith("/.pitcall/wdd/plan")
+
+
+# deprecated(0.16.0): when both exist the new directory wins -- it is the newer run's.
+def test_the_new_directory_wins_when_both_exist(repo):
+    plan = _plan(repo)
+    (repo.path / ".pitcall" / "wdd" / "plan").mkdir(parents=True)
+    (repo.path / ".pitcall" / "race" / "plan").mkdir(parents=True)
+    r = run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
+    assert r.stdout.strip().endswith("/.pitcall/race/plan")
 
 
 def test_workspace_missing_plan_exits_2(repo):
@@ -120,7 +138,7 @@ def test_task_brief_extracts_only_the_named_task(repo):
     plan = _plan(repo)
     r = run_script("task-brief", str(plan), "1", cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
-    body = (repo.path / ".pitcall/wdd/plan/task-1-brief.md").read_text()
+    body = (repo.path / ".pitcall/race/plan/task-1-brief.md").read_text()
     assert "Body of task one." in body
     assert "Body of task two." not in body
 
@@ -128,7 +146,7 @@ def test_task_brief_extracts_only_the_named_task(repo):
 def test_task_brief_ignores_headings_inside_fences(repo):
     plan = _plan(repo)
     run_script("task-brief", str(plan), "2", cwd=repo.path, env=repo.env)
-    body = (repo.path / ".pitcall/wdd/plan/task-2-brief.md").read_text()
+    body = (repo.path / ".pitcall/race/plan/task-2-brief.md").read_text()
     assert "Decoy inside a fence" in body  # it belongs to Task 2's body
     r = run_script("task-brief", str(plan), "3", cwd=repo.path, env=repo.env)
     assert r.returncode == 3
@@ -139,7 +157,7 @@ def test_task_brief_survives_a_fence_inside_a_fence(repo):
 
     The upstream awk toggles on every ```-prefixed line, so it treats the
     heading inside the example as a real task heading and cuts the brief there
-    — handing the implementer half its requirements.
+    — handing a driver half its requirements.
 
     The ghost heading must sit INSIDE the inner ```python fence. One level down
     is where the naive toggle has flipped itself back to "outside"; at the outer
@@ -160,7 +178,7 @@ def test_task_brief_survives_a_fence_inside_a_fence(repo):
     )
     r = run_script("task-brief", str(plan), "1", cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
-    body = (repo.path / ".pitcall/wdd/nested/task-1-brief.md").read_text()
+    body = (repo.path / ".pitcall/race/nested/task-1-brief.md").read_text()
     assert "Opening body." in body
     assert "Closing body that must survive." in body
     assert "Other task." not in body
