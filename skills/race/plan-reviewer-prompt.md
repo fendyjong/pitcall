@@ -1,13 +1,13 @@
 # Plan Reviewer Prompt Template
 
 Use this template for the one plan review in Phase 1, after your own
-self-review checklist and before `plan-tasks --validate` (SKILL.md, Phase 1 —
+self-review checklist and before `qualifying` (SKILL.md, Phase 1 —
 Self-review, then validate).
 
 It and the validator check different things and neither substitutes for the
-other. `--validate` decides structure — wave membership, dependency direction,
+other. `qualifying` decides structure — lap membership, dependency direction,
 path disjointness, migration numbers, model tiers — mechanically, and cannot
-read English. This reviewer reads the plan the way an implementer will, and
+read English. This reviewer reads the plan the way a driver will, and
 answers the one question the validator has no access to: could an engineer
 follow this without getting stuck?
 
@@ -49,9 +49,9 @@ Subagent (general-purpose):
     code, "similar to Task N" instead of the repeated code, a step describing
     what to do without showing how, a reference to a type or function no task
     defines, or a migration filename with an unassigned number. Each one is a
-    gap an implementer will fill by guessing.
+    gap a driver will fill by guessing.
 
-    **Each task's implementer sees only its own task**, never the whole plan.
+    **Each task's driver sees only its own task**, never the whole plan.
     So check that a task is self-sufficient: the exact values, signatures and
     test cases it needs are inside it, and anything it takes from another task
     is named in its `Consumes:` line rather than assumed.
@@ -59,13 +59,13 @@ Subagent (general-purpose):
     ## Calibration
 
     **Only flag issues that would cause real problems during implementation.**
-    An implementer building the wrong thing or getting stuck is an issue.
+    a driver building the wrong thing or getting stuck is an issue.
     Minor wording, stylistic preferences, and "nice to have" suggestions are not.
 
     Approve unless there are serious gaps — missing requirements from the spec,
     contradictory steps, placeholder content, or tasks so vague they can't be acted on.
 
-    Do not review the wave assignment, the dependency graph, or path
+    Do not review the lap assignment, the dependency graph, or path
     disjointness. A separate validator checks those mechanically, and a second
     opinion on them from here is noise.
 
@@ -94,4 +94,4 @@ Subagent (general-purpose):
 An `Issues Found` verdict is worth acting on rather than arguing with: the
 calibration above is deliberately loose, so anything it raises cleared a bar
 set at "would cause real problems during implementation." Fix what it raises,
-then run `--validate`.
+then run `qualifying`.

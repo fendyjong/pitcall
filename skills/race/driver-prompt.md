@@ -1,13 +1,13 @@
-# Implementer Subagent Prompt Template
+# Driver Subagent Prompt Template
 
-Use this template when dispatching an implementer subagent.
+Use this template when dispatching a driver subagent.
 
 ```
 Subagent (general-purpose):
   description: "Implement Task N: [task name]"
   model: [MODEL — REQUIRED: resolve the task's `Model:` tier (cheapest /
          standard / most-capable) to a concrete model. Do NOT re-derive the
-         tier here — Phase 1 assigned it and --validate Rule 7 enforced it.
+         tier here — Phase 1 assigned it and qualifying Rule 7 enforced it.
          An omitted model silently inherits the session's most expensive one]
   prompt: |
     You are implementing Task N: [task name]
@@ -50,7 +50,7 @@ Subagent (general-purpose):
 
     Sibling tasks from this plan are usually being implemented **right now**,
     each in its own git worktree on its own branch. Every rule below holds
-    whether or not that is true of this wave: a wave that happens to hold one
+    whether or not that is true of this lap: a lap that happens to hold one
     task gets no worktree of its own, because there is no concurrent writer to
     be isolated from — but the declared file list, the lockfile rules and the
     reporting contract are the same either way, and you cannot see which case
@@ -62,7 +62,7 @@ Subagent (general-purpose):
 
     **1a. Your task's declared file list is a boundary, not a suggestion.** The
     brief's `**Files:**` block names every path you may create, modify, delete,
-    or bump. Sibling tasks in this wave were given disjoint lists, and that
+    or bump. Sibling tasks in this lap were given disjoint lists, and that
     disjointness is the only reason you can all run at once. Touching an
     undeclared path breaks it — silently, and whether or not anything collides
     this time.
@@ -76,7 +76,7 @@ Subagent (general-purpose):
     your task names and report the numbers you observe. A plan line reading
     "Expected: 264 passed" was computed assuming every earlier task had already
     run; siblings are changing the same suite concurrently, so that number is
-    not true for you and is not supposed to be. The wave integrator verifies
+    not true for you and is not supposed to be. The lap integrator verifies
     the plan's totals after the merge, where they are finally true. Report your
     observed counts as observations, not as pass/fail against the plan.
 
@@ -99,7 +99,7 @@ Subagent (general-purpose):
 
     If your task claims a database migration number, the number is **assigned
     in your brief**. Do not derive one from the remote default branch or from
-    the directory listing: a sibling task in this wave may be claiming the
+    the directory listing: a sibling task in this lap may be claiming the
     next number at the same moment.
 
     **While you work:** If you encounter something unexpected or unclear, **ask questions**.
@@ -240,7 +240,7 @@ Subagent (general-purpose):
 
     Skip this section unless your dispatch says a prior attempt was interrupted.
 
-    Another implementer started this task and its session died mid-work. **Your
+    Another driver started this task and its session died mid-work. **Your
     worktree is not a clean base.** Your dispatch lists what it left: commits on
     your branch, files edited but never committed, and what the test suite does
     in your worktree right now.

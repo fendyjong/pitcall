@@ -1,7 +1,7 @@
 # Final Reviewer Prompt Template
 
 Use this template for every full-branch review (SKILL.md, Final Review):
-review #1 after the last spec wave has integrated, and reviews #2 and #3 after
+review #1 after the last spec lap has integrated, and reviews #2 and #3 after
 the sweep and its fix. Dispatch it on the most capable available model — not
 the session default.
 
@@ -201,10 +201,10 @@ Subagent (general-purpose):
 
     Categorize issues by actual severity. Not everything is Critical.
     Acknowledge what was done well before listing issues — accurate praise
-    helps the implementer trust the rest of the feedback.
+    helps the driver trust the rest of the feedback.
 
     If you find significant deviations from the plan, flag them specifically
-    so the implementer can confirm whether the deviation was intentional.
+    so the driver can confirm whether the deviation was intentional.
     If you find issues with the plan itself rather than the implementation,
     say so.
 
@@ -259,7 +259,7 @@ Subagent (general-purpose):
     with `Verdict: MUST-FIX` instead when anything is routed must-fix. The
     example is indented only to set it apart here: in the file, each of the
     three lines starts at column 0, with no leading spaces. Full
-    40-character shas, nothing else on those lines: `wdd` reads them to
+    40-character shas, nothing else on those lines: `race` reads them to
     decide whether this commit may ship, and a header it cannot parse counts
     as no review at all. Then a blank line, then the report above. Your
     final message is one line: the path you wrote, and the verdict.
@@ -321,8 +321,8 @@ What happens next is SKILL.md's (Final Review): review #1's routes drive the
 sweep, and a must-fix from review #2 on gets one fix dispatch and one scoped
 re-review (`re-review-prompt.md`) before the next full-branch review.
 
-**The verdict header, as `wdd` reads it.** The test suite feeds this example
-through `wdd`'s own reader, so the format here and the format it enforces
+**The verdict header, as `race` reads it.** The test suite feeds this example
+through `race`'s own reader, so the format here and the format it enforces
 cannot drift apart:
 
 ```verdict

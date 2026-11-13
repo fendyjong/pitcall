@@ -25,9 +25,9 @@ Subagent (general-purpose):
     Global constraints from the spec/design that bind this task:
     [GLOBAL_CONSTRAINTS]
 
-    ## What the Implementer Claims They Built
+    ## What the Driver Claims They Built
 
-    Read the implementer's report: [REPORT_FILE]
+    Read the driver's report: [REPORT_FILE]
 
     ## Diff Under Review
 
@@ -63,16 +63,16 @@ Subagent (general-purpose):
 
     ## Do Not Trust the Report
 
-    Treat the implementer's report as unverified claims about the code. It
+    Treat the driver's report as unverified claims about the code. It
     may be incomplete, inaccurate, or optimistic. Verify the claims against
     the diff. Design rationales in the report are claims too: "left it per
     YAGNI," "kept it simple deliberately," or any other justification is the
-    implementer grading their own work. Judge the code on its merits — a
+    driver grading their own work. Judge the code on its merits — a
     stated rationale never downgrades a finding's severity.
 
     ## Tests
 
-    The implementer already ran the tests and reported results with TDD
+    The driver already ran the tests and reported results with TDD
     evidence for exactly this code. Do not re-run the suite to confirm their
     report. Run a test only when reading the code raises a specific doubt
     that no existing run answers — and then a focused test, never a
@@ -81,7 +81,7 @@ Subagent (general-purpose):
     running it. If you cannot run commands in this environment, name the
     test you would run.
 
-    Warnings or other noise in the implementer's reported test output are
+    Warnings or other noise in the driver's reported test output are
     findings — test output should be pristine.
 
     Evidence you cannot see is not evidence that doesn't exist. If the
@@ -159,7 +159,7 @@ Subagent (general-purpose):
     plan-mandated. The plan's authorship does not grade its own work; the
     human decides.
     Acknowledge what was done well before listing issues — accurate praise
-    helps the implementer trust the rest of the feedback.
+    helps the driver trust the rest of the feedback.
 
     ## Parallel Execution Context
 
@@ -177,14 +177,14 @@ Subagent (general-purpose):
     **Plan-wide suite totals are resolved elsewhere.** Where the plan states an
     absolute figure ("Expected: 264 passed"), that figure assumes every earlier
     task has landed — sibling tasks are changing the same suite right now. If
-    the implementer's observed counts differ from a plan-wide total, raise it as
+    the driver's observed counts differ from a plan-wide total, raise it as
     "⚠️ Cannot verify from diff" rather than a spec failure: the controller holds
     the cross-task context needed to settle it, and must resolve every ⚠️ item
     before the task closes. Do not suppress it, and do not decide it yourself.
 
     ## Refactoring and Test Hygiene
 
-    Six checks. The first four are things the implementer was told to do; the
+    Six checks. The first four are things the driver was told to do; the
     fifth is a limit on what you can conclude from where you sit; the sixth
     covers a decision that leaves no trace in the diff at all.
 
@@ -208,7 +208,7 @@ Subagent (general-purpose):
        unproven.
 
     4. **A stale test surviving in a file the task owns** is a quality finding.
-       The implementer was asked to keep its own test files honest — but this
+       The driver was asked to keep its own test files honest — but this
        diff is `git diff -U10`, and a stale test sitting more than ten lines
        from any changed hunk in a long file is outside what you can see here.
        When the task touches a test file, name "a stale test elsewhere in this
@@ -224,14 +224,14 @@ Subagent (general-purpose):
        plan, resolves it before the task closes.
 
     6. **A resumed task's report says what it inherited and what it did with
-       it.** If the dispatch told the implementer a prior attempt was
+       it.** If the dispatch told the driver a prior attempt was
        interrupted, its report must state which prior commits and uncommitted
        edits it found, and whether it built on them or set them aside — with a
        reason. Silently discarding another agent's work is a **spec failure**,
        the same grade as an unjustified test deletion, and for the same reason:
        the act is invisible in the diff unless someone says it happened.
 
-    On refactoring itself: the implementer was told to clean the blocks it was
+    On refactoring itself: the driver was told to clean the blocks it was
     already editing, and told not to change anything another file can see. A
     diff that renames, moves, or re-signatures a symbol another file imports is
     a finding even when every file it touched was declared — declared files
@@ -288,7 +288,7 @@ Subagent (general-purpose):
 **Placeholders:**
 - `[MODEL]` — REQUIRED: reviewer model per SKILL.md Model Selection
 - `[BRIEF_FILE]` — REQUIRED: the task brief file (`scripts/task-brief PLAN N`
-  prints the path; same file the implementer worked from)
+  prints the path; same file the driver worked from)
 - `[GLOBAL_CONSTRAINTS]` — the binding requirements copied verbatim from
   the plan's Global Constraints section or the spec: exact values, formats,
   and stated relationships between components (not process rules — those
@@ -296,7 +296,7 @@ Subagent (general-purpose):
   the sentence "this task was resumed after an interruption" — the
   reviewer has no other signal that a resume happened, and without it
   check 6 in Refactoring and Test Hygiene, above, never fires
-- `[REPORT_FILE]` — REQUIRED: the file the implementer wrote its detailed
+- `[REPORT_FILE]` — REQUIRED: the file the driver wrote its detailed
   report to
 - `[BASE_SHA]` — commit before this task
 - `[MERGE_BASE]` — REQUIRED: `git merge-base origin/<default-branch> HEAD`,
