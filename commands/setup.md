@@ -44,6 +44,10 @@ legacy `pitcall.config.json` — Step 8 needs both facts, because overwriting th
 in place is not an option: only `.pitcall/config.json` is ever written, so a legacy config
 found here is migrated, not overwritten.
 
+<!-- deprecated(0.16.0) -->
+A config that still has `bringup` or `teardown` is written back with those values under
+`out_lap` and `in_lap`, and the old keys are dropped.
+
 ---
 
 # Step 2 — Read the reference once
@@ -70,7 +74,7 @@ convention. Leave `default_branch` unset and record that the query failed and wh
 
 # Step 4 — Propose the remaining required keys
 
-For `bringup`, `validate`, `required_check`, `worktree_dir`, and `plan_dir`, follow "How to
+For `out_lap`, `validate`, `required_check`, `worktree_dir`, and `plan_dir`, follow "How to
 recognise the right value in a repository that has never seen this tool" under
 `${CLAUDE_PLUGIN_ROOT}/docs/configuration.md`'s Required keys section. For each key:
 
@@ -80,20 +84,20 @@ recognise the right value in a repository that has never seen this tool" under
 - Found it → propose the value together with the evidence, in this shape: *"`required_check`:
   the job that `needs:` every other job in `.github/workflows/ci.yml`"* — never a bare value.
   A value without its reasoning cannot be checked.
-- `bringup` specifically: if what you read shows nothing needs to be running first, that is
+- `out_lap` specifically: if what you read shows nothing needs to be running first, that is
   a resolved answer — propose `null` explicitly, rather than leaving the key unset. Only
   leave it unset when you cannot tell either way.
 - `worktree_dir` and `plan_dir` specifically: **never leave either unset**, even when the
   project gives you nothing to stand on. Neither is in `lane_config.py`'s `REQUIRED_KEYS`, so
-  — unlike `bringup`, `validate`, and `required_check` — an unset one does not fail at
+  — unlike `out_lap`, `validate`, and `required_check` — an unset one does not fail at
   `load_config()` time; it fails much later, the first time a skill asks `project-config
-  --scalar` for it, deep inside a wave that has already started. Found project-specific
+  --scalar` for it, deep inside a lap that has already started. Found project-specific
   evidence → propose it exactly as above. Found nothing → propose this tool's own convention
   instead of leaving the key unset: `.worktrees/` for `worktree_dir`, `docs/plans/` for
   `plan_dir`. State plainly in your output when a value is this tool's convention rather than
   evidence from the project, so the difference is never hidden inside a value that merely
   looks justified.
-- Found nothing you would stand behind, for `bringup`, `validate`, or `required_check` → leave
+- Found nothing you would stand behind, for `out_lap`, `validate`, or `required_check` → leave
   the key unset and record what you looked at. A required key left unset here is not this
   command's defect: it makes `load_config()` fail loudly the first time anything reads the
   config, which is the correct failure — better than a silently wrong guess standing in for it.
@@ -114,7 +118,7 @@ default this command is entitled to make for it.
 
 # Step 6 — Propose the remaining optional and declared keys
 
-For `regenerated_paths`, `refresh_commands`, `migration_homes`, `status_labels`, `teardown`,
+For `regenerated_paths`, `refresh_commands`, `migration_homes`, `status_labels`, `in_lap`,
 `branch_prefix`, `backlog_milestone`, `claim_expiry_hours`, and `bounded_via_wdd`: follow each
 key's own "how to recognise the right value" guidance in
 `${CLAUDE_PLUGIN_ROOT}/docs/configuration.md`. Propose
@@ -136,9 +140,9 @@ checkout root's `.gitignore` for exactly two lines: `.pitcall/*` and `!.pitcall/
 
 Also check `.gitignore` for an entry covering the `worktree_dir` value resolved in Step 4 (with
 or without a trailing slash — an existing entry counts regardless of which spelling wrote it).
-`wave-worktree`'s own guard refuses to create a worktree (exit 4) unless the configured
+`lap-worktree`'s own guard refuses to create a worktree (exit 4) unless the configured
 directory is git-ignored in this clone, so a config this command writes without also covering
-this here hands the project a `worktree_dir` that the very next `wave-worktree create` refuses
+this here hands the project a `worktree_dir` that the very next `lap-worktree create` refuses
 to use. Missing → append an entry for it. Already covered → leave it alone.
 
 Record what you changed for both checks above, or that nothing needed changing. A setup step
