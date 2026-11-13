@@ -109,6 +109,30 @@ def test_an_old_spelling_is_the_new_command_plus_one_notice(
     assert was.stderr == notice + now.stderr
 
 
+#: The five old paths that were bash scripts in 0.15.0, called the way a bash script can be.
+BASH_ROWS = [row for row in ROWS if row[0][0].rsplit("/", 1)[-1] in
+             ("wdd", "wave-worktree", "wdd-workspace", "review-package", "task-brief")]
+
+
+@pytest.mark.parametrize("old, new, old_spelling, new_spelling, extra", BASH_ROWS,
+                         ids=[f"bash {row[2]}" for row in BASH_ROWS])
+def test_an_old_bash_script_still_forwards_under_bash(
+        tmp_path, old, new, old_spelling, new_spelling, extra):
+    args = extra_args(extra, tmp_path)
+    was = subprocess.run(["bash", str(ROOT / old[0]), *old[1:], *args],
+                         cwd=tmp_path, capture_output=True, text=True)
+    now = subprocess.run(argv(new, args), cwd=tmp_path, capture_output=True, text=True)
+    notice = f"pitcall: '{old_spelling}' is deprecated and goes in 0.17.0; use '{new_spelling}'\n"
+    assert (was.returncode, was.stdout) == (now.returncode, now.stdout)
+    assert was.stderr == notice + now.stderr
+
+
+def test_the_old_skill_shims_are_identical():
+    shims = sorted(p for p in (ROOT / OLD).iterdir() if p.is_file())
+    assert len(shims) == 8
+    assert len({p.read_bytes() for p in shims}) == 1
+
+
 def test_the_old_skill_sends_the_reader_to_race():
     text = (ROOT / "skills/wave-driven-development/SKILL.md").read_text(encoding="utf-8")
     assert "pitcall:race" in text

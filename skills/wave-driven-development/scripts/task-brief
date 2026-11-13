@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/bin/sh
+"exec" "python3" "$0" "$@"
 """deprecated(0.16.0): an old path of a race script. Goes in 0.17.0; see the plugin's alias.py."""
 import sys
 from pathlib import Path
