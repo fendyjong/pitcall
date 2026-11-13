@@ -26,9 +26,11 @@ BACKTICKED_RE = re.compile(r"`([^`]+)`")
 LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
 EXTENSION_RE = re.compile(r"\.\w+$")
 LAPS_HEADING_RE = re.compile(r"^##\s+Laps\s*$")
+
 # deprecated(0.16.0): a plan written for 0.15.0 heads the table `## Waves`; read until 0.17.0.
 OLD_LAPS_HEADING_RE = re.compile(r"^##\s+Waves\s*$")
 OLD_LAPS_HEADING = "## Waves"
+
 SWEEP_HEADING_RE = re.compile(r"^##\s+Sweep\s*$")
 HEADING_RE = re.compile(r"^#{1,6}\s")
 LAP_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|\s*([0-9,\s]*?)\s*\|")
@@ -444,7 +446,7 @@ def validate(
     # Rule 7 — every task declares a model tier.
     #
     # This is a planning-time assignment for the same reason migration numbers
-    # are (Rule 5): a decision deferred to dispatch is a decision skipped. the race
+    # are (Rule 5): a decision deferred to dispatch is a decision skipped. The race
     # dispatches a whole lap in ONE message, so the controller would be judging
     # N tasks' complexity simultaneously while composing N calls — and `model`
     # is an OPTIONAL parameter that silently inherits the session's own, usually
@@ -468,7 +470,7 @@ def validate(
     # Rule 8 — the sweep is ONE pass, appended after the spec's laps
     # (SKILL.md, Final Review). A second `## Sweep` section is a second pass,
     # and a sweep task placed in a spec lap would be dispatched into a lap
-    # `the race's check` already counts as finished. Both are refused here rather
+    # `race check` already counts as finished. Both are refused here rather
     # than left to an instruction a controller can skip.
     if sweep_headings > 1:
         problems.append(
