@@ -19,7 +19,7 @@ import pytest
 from conftest import run_script
 
 REQUIRED = {
-    "bringup": None,
+    "out_lap": None,
     "validate": "true",
     "default_branch": "main",
     "required_check": "ci",

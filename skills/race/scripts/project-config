@@ -5,7 +5,7 @@ The workflow has two steps that only the project knows the inputs to:
 
   regenerated_paths -- tracked output a git hook rewrites. Such a repository
     dirties them on `git worktree add` itself, so a task worktree is born
-    dirty before an implementer runs a single command, and a controller that
+    dirty before an driver runs a single command, and a controller that
     cannot tell a hook's output from unsaved work either destroys real work or
     reports every interrupted task as mid-edit.
   migration_homes -- the directories holding migration files. Numbers are a
@@ -13,7 +13,7 @@ The workflow has two steps that only the project knows the inputs to:
     and the same number twice in one home is a defect git merges cleanly.
 
 Neither can be guessed and neither belongs hardcoded in a skill, so both are
-read from the project's own config through the same loader `lane` uses -- one
+read from the project's own config through the same loader `pit lane` uses -- one
 resolution of "which checkout am I configuring", not a second path to the same
 file that can disagree with the first.
 
@@ -61,7 +61,7 @@ import sys
 from pathlib import Path
 
 # The loader lives at the plugin root, four levels up from this file
-# (<plugin>/skills/wave-driven-development/scripts/). Resolved through the
+# (<plugin>/skills/race/scripts/). Resolved through the
 # script's own path so an installation that symlinks the skill still finds it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 

@@ -1,4 +1,4 @@
-"""Project facts the lane needs, and where to find them.
+"""Project facts the pit lane needs, and where to find them.
 
 The config is committed rather than held in a secret store: widening
 `outbound_allowlist` is a safety change and must appear in a diff.
@@ -39,7 +39,12 @@ class ConfigNotFound(RuntimeError):
 #: and it already fails closed with a KeyError naming the key, whereas a project
 #: that sends nothing outbound has no such list to write and should not be made
 #: to invent one.
-REQUIRED_KEYS = ("bringup", "validate", "default_branch", "required_check")
+REQUIRED_KEYS = ("out_lap", "validate", "default_branch", "required_check")
+
+# deprecated(0.16.0): the 0.15.0 names of two keys, read as their new names
+# until 0.17.0. Every caller of load_config() sees only the new keys.
+RENAMED_KEYS = {"bringup": "out_lap", "teardown": "in_lap"}
+
 
 
 def _git(*args: str) -> str:
@@ -82,7 +87,7 @@ class _Settled(NamedTuple):
     `left_a_git_dir` is the whole reason this is a pair rather than a path. The
     two roots need DIFFERENT AMOUNTS OF CLIMBING, which is the same lesson as
     "two questions that look like one", one level further down: leaving a
-    submodule's own git dir is required to answer *which lane*, and is exactly
+    submodule's own git dir is required to answer *which pit lane*, and is exactly
     the case where *which checkout* has no defensible answer at all.
     """
 
@@ -103,9 +108,9 @@ def _climb_to_the_project(start: Path | None = None) -> _Settled:
     TWO ways up, and both are needed. `--show-superproject-working-tree` handles
     a submodule in its normal place; the git-dir nesting handles a linked
     worktree OF a submodule, where git returns nothing and the naive answer is a
-    lane inside the superproject's git dir that the project itself never
+    pit lane inside the superproject's git dir that the project itself never
     resolves to. With two submodules under one directory the naive answer is
-    worse than wrong: worktrees of both collapse onto ONE lane they share with
+    worse than wrong: worktrees of both collapse onto ONE pit lane they share with
     each other and with nothing else.
 
     KNOWN AND UNFIXED: `GIT_DIR` / `GIT_WORK_TREE` in the environment override
@@ -119,9 +124,9 @@ def _climb_to_the_project(start: Path | None = None) -> _Settled:
     while True:
         if d in seen:
             # Unreachable unless git reports a cycle. Loud, because the
-            # alternative is a session waiting forever on a lane that never
+            # alternative is a session waiting forever on a pit lane that never
             # resolves — and a hang is the one failure this module must not have.
-            raise RuntimeError(f"lane: cycle while resolving the project from {d}")
+            raise RuntimeError(f"pit lane: cycle while resolving the project from {d}")
         seen.add(d)
         superproject = _git("-C", str(d), "rev-parse", "--show-superproject-working-tree")
         if superproject:
@@ -147,7 +152,7 @@ def _rev_parse(d: Path, *args: str) -> str:
     out = _git("-C", str(d), "rev-parse", *args)
     if not out:
         raise RuntimeError(
-            f"lane: {d} is not inside a git repository — cannot resolve a project"
+            f"pit lane: {d} is not inside a git repository — cannot resolve a project"
         )
     return out
 
@@ -162,12 +167,12 @@ def shared_root(start: Path | None = None) -> Path:
     """Where the LOCK lives: the one root every worktree of a project agrees on.
 
     The parent of the shared git dir, so a project checked out into five
-    worktrees still has one lane. Exclusion has to be machine-wide: a
-    worktree-scoped answer hands each session a lane of its own, and then two
-    sessions both hold "the lane" and both bring the stack up — the interleave
+    worktrees still has one pit lane. Exclusion has to be machine-wide: a
+    worktree-scoped answer hands each session a pit lane of its own, and then two
+    sessions both hold "the pit lane" and both bring the stack up — the interleave
     with no error that this module exists to prevent.
 
-    Unaffected by the ambiguity `worktree_root()` refuses on: "which lane" has
+    Unaffected by the ambiguity `worktree_root()` refuses on: "which pit lane" has
     a defensible answer in every shape, including a worktree of a submodule.
     """
     settled = _climb_to_the_project(start)
@@ -178,7 +183,7 @@ def shared_root(start: Path | None = None) -> Path:
 def worktree_root(start: Path | None = None) -> Path:
     """Where the WORK is: the checkout the caller is actually standing in.
 
-    What `bringup` runs against, and where the config is read from. Validation
+    What `out_lap` runs against, and where the config is read from. Validation
     is run *from a worktree*, so defaulting to the main checkout would test code
     the session is not working on — silently, and with a plausible-looking
     result.
@@ -190,7 +195,7 @@ def worktree_root(start: Path | None = None) -> Path:
     branch against a config nobody on that branch wrote.
 
     **Refuses rather than guesses.** In a worktree of a submodule there is no
-    defensible answer: the session is working on the submodule, the bring-up
+    defensible answer: the session is working on the submodule, the out_lap
     belongs to the project, and picking either silently would run `validate`
     against a checkout the session never wrote and report green on it. That is
     the failure this module keeps producing — a loud failure quietly becoming a
@@ -200,9 +205,9 @@ def worktree_root(start: Path | None = None) -> Path:
     settled = _climb_to_the_project(start)
     if settled.left_a_git_dir:
         raise RuntimeError(
-            f"lane: {Path(start or Path.cwd()).resolve()} is a worktree of a "
+            f"pit lane: {Path(start or Path.cwd()).resolve()} is a worktree of a "
             f"submodule of {settled.directory} — there is no unambiguous checkout "
-            f"to run the project's bring-up in. Pass --worktree explicitly."
+            f"to run the project's out_lap in. Pass --worktree explicitly."
         )
     return Path(_rev_parse(settled.directory, "--show-toplevel"))
 
@@ -217,7 +222,7 @@ def _resolve_config_in(root: Path) -> Path:
     legacy = root / CONFIG_NAME
     if new.exists() and legacy.exists():
         raise RuntimeError(
-            f"lane: two configs in {root} — {CONFIG_DIR}/{CONFIG_BASENAME} and "
+            f"pit lane: two configs in {root} — {CONFIG_DIR}/{CONFIG_BASENAME} and "
             f"{CONFIG_NAME}. Delete the legacy one; having both means a silent "
             f"disagreement about which is live."
         )
@@ -225,7 +230,7 @@ def _resolve_config_in(root: Path) -> Path:
         return new
     if legacy.exists():
         sys.stderr.write(
-            f"lane: {CONFIG_NAME} is deprecated — move it to "
+            f"pit lane: {CONFIG_NAME} is deprecated — move it to "
             f"{CONFIG_DIR}/{CONFIG_BASENAME} (and un-ignore that path).\n"
         )
         return legacy
@@ -249,11 +254,27 @@ def config_path(checkout: Path | str | None = None) -> Path:
     re-resolving it would raise the very error the flag exists to settle.
 
     Threading it also keeps ONE answer to "which checkout": the config is read
-    from the same directory the bring-up runs in. They could previously differ —
-    `lane run --worktree X` ran in X while reading the config from cwd's
+    from the same directory the out_lap runs in. They could previously differ —
+    `pit lane --worktree X` ran in X while reading the config from cwd's
     checkout — which is the same class of quiet mismatch as everything else here.
     """
     return _resolve_config_in(_checkout_root(checkout))
+
+
+def _rename_old_keys(cfg: dict) -> None:
+    # deprecated(0.16.0): an old key alone is read as the new one; both set, the
+    # new one wins. Either way the old key is gone before anything reads cfg.
+    for old, new in RENAMED_KEYS.items():
+        if old not in cfg:
+            continue
+        value = cfg.pop(old)
+        if new in cfg:
+            sys.stderr.write(f"pitcall: config key '{old}' is deprecated and ignored, "
+                             f"because '{new}' is also set; delete it\n")
+        else:
+            sys.stderr.write(f"pitcall: config key '{old}' is deprecated; "
+                             f"rename it to '{new}'\n")
+            cfg[new] = value
 
 
 def load_config(checkout: Path | str | None = None) -> dict:
@@ -266,7 +287,7 @@ def load_config(checkout: Path | str | None = None) -> dict:
     look exactly like working behaviour until the moment they do not.
 
     PRESENCE is what is checked, never truthiness: a key written as `null` is a
-    project saying "there is no such step", and the lane already skips a step
+    project saying "there is no such step", and the pit lane already skips a step
     configured that way. Treating that as missing would erase the distinction
     the check exists to draw.
     """
@@ -282,7 +303,7 @@ def load_config(checkout: Path | str | None = None) -> dict:
         # exists it is `.pitcall/`, a directory inside the checkout, and naming
         # it here would be exactly the mistake this comment describes.
         raise ConfigNotFound(
-            f"lane: no {CONFIG_DIR}/{CONFIG_BASENAME} or {CONFIG_NAME} in {root} "
+            f"pit lane: no {CONFIG_DIR}/{CONFIG_BASENAME} or {CONFIG_NAME} in {root} "
             f"— that is the checkout resolved from the current directory"
         ) from None
     except (OSError, ValueError) as exc:
@@ -297,6 +318,7 @@ def load_config(checkout: Path | str | None = None) -> dict:
         raise RuntimeError(
             f"{path}: the config must be a JSON object, not {type(cfg).__name__}"
         )
+    _rename_old_keys(cfg)
     missing = [k for k in REQUIRED_KEYS if k not in cfg]
     if missing:
         # Every missing key at once: one per run means one edit, one re-run and

@@ -1,7 +1,7 @@
 {
-  "bringup": "make up",
+  "out_lap": "make up",
   "validate": "make test",
-  "teardown": "make down",
+  "in_lap": "make down",
   "default_branch": "main",
   "required_check": "ci",
   "branch_prefix": "task/",

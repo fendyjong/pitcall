@@ -22,6 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import lane_config  # noqa: E402
 
+
+def write(root, cfg):
+    (root / ".pitcall").mkdir(exist_ok=True)
+    (root / ".pitcall" / "config.json").write_text(json.dumps(cfg))
+
 # Passed per-command so these repositories build on a machine with no global
 # git config at all — a fresh CI runner has none, and `git commit` refuses
 # without an author.
@@ -39,9 +44,9 @@ _GIT_ID = (
 # values are what a project would answer, and every test that cares about one
 # key edits this copy rather than assuming a default.
 _COMPLETE = {
-    "bringup": "make up",
+    "out_lap": "make up",
     "validate": "make test",
-    "teardown": None,
+    "in_lap": None,
     "default_branch": "main",
     "required_check": "build",
     "outbound_allowlist": ["15550001111", "15550002222"],
@@ -94,7 +99,7 @@ def project(tmp_path, monkeypatch):
 
 
 def test_config_is_read_from_the_callers_project(project):
-    assert lane_config.load_config()["bringup"] == "make up"
+    assert lane_config.load_config()["out_lap"] == "make up"
 
 
 def test_the_config_is_the_one_committed_in_the_callers_own_checkout(tmp_path, monkeypatch):
@@ -107,15 +112,15 @@ def test_the_config_is_the_one_committed_in_the_callers_own_checkout(tmp_path, m
     nobody on that branch wrote — and would look entirely normal, because in the
     main checkout the two paths are the same file.
     """
-    main = _write_config(_new_repo(tmp_path / "project"), bringup="WRONG")
+    main = _write_config(_new_repo(tmp_path / "project"), out_lap="WRONG")
     linked = tmp_path / "linked"
     _git("worktree", "add", "-q", str(linked), "-b", "side", cwd=main)
     linked = linked.resolve()
-    _write_config(linked, bringup="make up")
+    _write_config(linked, out_lap="make up")
     assert linked != main, "the two checkouts must actually differ, or this proves nothing"
 
     monkeypatch.chdir(linked)
-    assert lane_config.load_config()["bringup"] == "make up"
+    assert lane_config.load_config()["out_lap"] == "make up"
 
 
 def test_a_submodules_own_config_never_shadows_the_superprojects(tmp_path, monkeypatch):
@@ -132,10 +137,10 @@ def test_a_submodules_own_config_never_shadows_the_superprojects(tmp_path, monke
     inside = project / "vendor" / "dependency"
     # Written after the add, into the submodule's working tree: that is where a
     # session standing in the submodule would see it.
-    _write_config(inside, bringup="WRONG")
+    _write_config(inside, out_lap="WRONG")
 
     monkeypatch.chdir(inside)
-    assert lane_config.load_config()["bringup"] == "make up"
+    assert lane_config.load_config()["out_lap"] == "make up"
 
 
 def test_load_config_refuses_in_a_worktree_of_a_submodule_and_names_the_flag(
@@ -153,14 +158,14 @@ def test_load_config_refuses_in_a_worktree_of_a_submodule_and_names_the_flag(
     advises actually works — an error telling a session to do something that
     does not help is worse than no message at all.
     """
-    project = _write_config(_new_repo(tmp_path / "project"), bringup="MAIN-CHECKOUT")
+    project = _write_config(_new_repo(tmp_path / "project"), out_lap="MAIN-CHECKOUT")
     dependency = _new_repo(tmp_path / "dependency")
     _git("submodule", "add", "-q", str(dependency), "libs/a", cwd=project)
     sub_worktree = tmp_path / "submodule-worktree"
     _git("worktree", "add", "-q", str(sub_worktree), "-b", "side",
          cwd=project / "libs" / "a")
     sub_worktree = sub_worktree.resolve()
-    _write_config(sub_worktree, bringup="SUBMODULE-WORKTREE")
+    _write_config(sub_worktree, out_lap="SUBMODULE-WORKTREE")
 
     monkeypatch.chdir(sub_worktree)
     with pytest.raises(RuntimeError, match="--worktree"):
@@ -168,12 +173,12 @@ def test_load_config_refuses_in_a_worktree_of_a_submodule_and_names_the_flag(
 
     # An explicit checkout is taken at face value, not re-resolved — re-resolving
     # it would raise the very error the flag exists to settle.
-    assert lane_config.load_config(sub_worktree)["bringup"] == "SUBMODULE-WORKTREE"
+    assert lane_config.load_config(sub_worktree)["out_lap"] == "SUBMODULE-WORKTREE"
 
 
 def test_load_config_outside_any_repository_raises_rather_than_searching_cwd(
         tmp_path, monkeypatch):
-    """Same loud-failure stance the lane takes for an unresolvable lane.
+    """Same loud-failure stance the pit lane takes for an unresolvable pit lane.
 
     There is no directory to fall back to: a config picked up from wherever the
     caller happened to be standing would configure a bring-up against the wrong
@@ -254,7 +259,7 @@ def test_both_locations_present_is_an_error(tmp_path):
 # --- A missing key is a loud failure, never a default --------------------
 
 
-@pytest.mark.parametrize("key", ["bringup", "validate", "default_branch", "required_check"])
+@pytest.mark.parametrize("key", ["out_lap", "validate", "default_branch", "required_check"])
 def test_a_missing_required_key_raises_and_names_itself(tmp_path, monkeypatch, key):
     """The plugin is generic: it cannot know that a project's default branch is
     `main`, or that its required check is called `build`. A default would cut a
@@ -282,7 +287,7 @@ def test_a_required_key_may_be_explicitly_empty(tmp_path, monkeypatch):
     """Presence is what is checked, never truthiness.
 
     A project with nothing to run after bring-up writes `null` and says so; the
-    lane already skips a step configured that way. Checking truthiness instead
+    pit lane already skips a step configured that way. Checking truthiness instead
     would make an explicit "none" indistinguishable from a key nobody wrote,
     which is the exact distinction this check exists to preserve.
     """
@@ -324,3 +329,41 @@ def test_allowlisted_rejects_substring_and_superstring_variations(project):
     assert not lane_config.allowlisted("1555000111100"), "superstring must be rejected"
     assert not lane_config.allowlisted("1555000111"), "substring must be rejected"
     assert not lane_config.allowlisted("155500011"), "substring must be rejected"
+
+
+# deprecated(0.16.0): the 0.15.0 key names are read as the new ones until 0.17.0.
+def test_an_old_key_alone_is_read_as_the_new_one(tmp_path, capsys):
+    write(tmp_path, {"bringup": "make up", "validate": "true",
+                     "default_branch": "main", "required_check": "ci"})
+    cfg = lane_config.load_config(tmp_path)
+    assert cfg["out_lap"] == "make up" and "bringup" not in cfg
+    assert capsys.readouterr().err == (
+        "pitcall: config key 'bringup' is deprecated; rename it to 'out_lap'\n")
+
+# deprecated(0.16.0): both spellings set -- the new key wins until 0.17.0.
+def test_both_keys_set_the_new_one_wins(tmp_path, capsys):
+    write(tmp_path, {"bringup": "old", "out_lap": "new", "validate": "true",
+                     "default_branch": "main", "required_check": "ci"})
+    cfg = lane_config.load_config(tmp_path)
+    assert cfg["out_lap"] == "new" and "bringup" not in cfg
+    assert capsys.readouterr().err == (
+        "pitcall: config key 'bringup' is deprecated and ignored, because 'out_lap' "
+        "is also set; delete it\n")
+
+# deprecated(0.16.0): an old `bringup` still satisfies the required `out_lap`.
+def test_bringup_satisfies_the_required_out_lap(tmp_path):
+    write(tmp_path, {"bringup": None, "validate": "true",
+                     "default_branch": "main", "required_check": "ci"})
+    assert lane_config.load_config(tmp_path)["out_lap"] is None
+
+# deprecated(0.16.0): `teardown` is read as `in_lap` until 0.17.0.
+def test_teardown_is_read_as_in_lap(tmp_path, capsys):
+    write(tmp_path, {"out_lap": None, "teardown": "make down", "validate": "true",
+                     "default_branch": "main", "required_check": "ci"})
+    assert lane_config.load_config(tmp_path)["in_lap"] == "make down"
+    assert "rename it to 'in_lap'" in capsys.readouterr().err
+
+def test_out_lap_is_required(tmp_path):
+    write(tmp_path, {"validate": "true", "default_branch": "main", "required_check": "ci"})
+    with pytest.raises(RuntimeError, match="missing required key\\(s\\): out_lap"):
+        lane_config.load_config(tmp_path)
