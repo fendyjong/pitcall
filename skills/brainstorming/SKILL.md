@@ -376,7 +376,7 @@ implementation starts.
   ```
   A native worktree tool that can only create branches cannot adopt one:
   add the worktree this way, then enter it with the tool's path option
-  where it has one. the race's Phase 2 setup then finds
+  where it has one. The race's Phase 2 setup then finds
   itself already in a linked worktree and uses it, so the run stays on the
   claimed branch and the PR `race grid` opens closes the issue.
 - **No native tool? Fall back to git — and always name the base ref
@@ -449,7 +449,7 @@ Wait for the user's response. If they request changes, make them and re-run the 
 
 - Invoke pitcall:race — it writes the detailed
   implementation plan from the approved spec, then executes it
-- Do NOT invoke any other skill. the race is the next step.
+- Do NOT invoke any other skill. The race is the next step.
 
 ## Visual Companion
 
