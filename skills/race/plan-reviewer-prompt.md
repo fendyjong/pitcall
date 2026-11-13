@@ -59,7 +59,7 @@ Subagent (general-purpose):
     ## Calibration
 
     **Only flag issues that would cause real problems during implementation.**
-    a driver building the wrong thing or getting stuck is an issue.
+    A driver building the wrong thing or getting stuck is an issue.
     Minor wording, stylistic preferences, and "nice to have" suggestions are not.
 
     Approve unless there are serious gaps — missing requirements from the spec,
