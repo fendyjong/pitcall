@@ -14,7 +14,7 @@ Subagent (general-purpose):
          model silently inherits the session's most expensive one]
   prompt: |
     You are re-reviewing one task's fix round. A previous review produced
-    findings; an implementer has attempted to fix them. Your job is to
+    findings; a driver has attempted to fix them. Your job is to
     verdict each finding and inspect the fix diff — nothing else.
 
     ## The Task
@@ -27,7 +27,7 @@ Subagent (general-purpose):
 
     ## The Fix
 
-    Read the implementer's report (fix reports are appended at the end):
+    Read the driver's report (fix reports are appended at the end):
     [REPORT_FILE]
 
     **Fix base:** [FIX_BASE_SHA] (the head the previous review saw)
@@ -63,7 +63,7 @@ Subagent (general-purpose):
 
     ## Tests
 
-    The implementer re-ran the tests covering the amended code and appended
+    The driver re-ran the tests covering the amended code and appended
     the results to the report file. Treat the report as unverified claims:
     confirm the fix report names the covering tests and shows their output,
     and verify the claims against the diff. Do not re-run the suite to
@@ -113,10 +113,10 @@ Subagent (general-purpose):
 **Placeholders:**
 - `[MODEL]` — REQUIRED: reviewer model per SKILL.md Model Selection; scoped
   re-reviews of small fix diffs take a cheap-to-mid tier
-- `[BRIEF_FILE]` — the task brief file (same file the implementer worked from)
+- `[BRIEF_FILE]` — the task brief file (same file the driver worked from)
 - `[FINDINGS]` — the open findings in the fix loop — introduced
   Critical/Important findings, and spec gaps — copied verbatim, one per bullet
-- `[REPORT_FILE]` — the implementer's report file (fix reports appended)
+- `[REPORT_FILE]` — the driver's report file (fix reports appended)
 - `[FIX_BASE_SHA]` — the head the previous review saw
 - `[MERGE_BASE]` — REQUIRED: `git merge-base origin/<default-branch> HEAD`;
   origin tags are measured against it
