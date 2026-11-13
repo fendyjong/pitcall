@@ -5,7 +5,7 @@ Skill documents are executable instructions, and they run with the cwd set to th
 a directory belonging to somebody else's repository. It is correct only when the
 document means its own skill's script, and even then nothing mechanical resolves
 it — this repository's own prose does, at
-`skills/wave-driven-development/SKILL.md:343-344`: "script paths here and in
+`skills/race/SKILL.md:368-369`: "script paths here and in
 Phase 2 are relative to this skill's own directory, wherever the plugin is
 installed." A reader follows that sentence; there is no loader chdir that makes
 a bare path land inside its own skill on its own. The mechanically-correct
@@ -15,7 +15,7 @@ repository does not use it anywhere today, and this file does not require it,
 but a future reader should know the escape hatch exists.
 
 `skills/brainstorming/SKILL.md` shipped a bare `scripts/project-config`, which lives
-in `wave-driven-development`. It fails loudly (`no such file or directory`) rather
+in `race`. It fails loudly (`no such file or directory`) rather
 than silently, which is why it was deferred rather than treated as critical — but it
 is the same class as a command reading a foreign document.
 
@@ -23,7 +23,7 @@ Neither existing gate covers it, and the reasons are worth keeping:
 
 - `tests/test_scripts_named_in_prose_exist.py` asks whether a cited script exists
   ANYWHERE — its `resolves()` accepts a path when any tracked path ends with it, so
-  the offending citation matched WDD's copy and the gate stayed green.
+  the offending citation matched the race skill's copy and the gate stayed green.
 - `tests/test_plugin_closure.py`'s plugin-rooted check is scoped to `commands/*.md`
   naming `docs/` paths, so skill documents sit outside it entirely.
 
@@ -104,7 +104,7 @@ def test_bare_script_paths_resolve_inside_their_own_skill(rel):
             f"{rel}: names `scripts/{name}`, which does not exist at {own!r}. "
             f"A skill document runs with the adopting project's cwd, so a bare "
             f"path resolves into THAT repository — this repository's own "
-            f"convention (skills/wave-driven-development/SKILL.md:343-344) permits "
+            f"convention (skills/race/SKILL.md:368-369) permits "
             f"a bare path only when it names its own skill's script. Spell it "
             f"`${{CLAUDE_PLUGIN_ROOT}}/…` instead."
         )

@@ -165,15 +165,11 @@ def test_the_scan_reads_the_repository():
     assert len(tracked()) >= 50
 
 
-# The rename lands across several commits on its branch. These marks come off
-# with the last of them, and from then on both tests gate like any other.
-@pytest.mark.xfail(reason="the 0.16.0 rename is still landing on this branch", strict=False)
 def test_no_old_name_outside_a_marked_block():
     found = [hit for rel in tracked() for hit in hits(rel, blob(rel))]
     assert not found, "old names outside a marked block:\n" + "\n".join(found)
 
 
-@pytest.mark.xfail(reason="the 0.16.0 rename is still landing on this branch", strict=False)
 def test_every_alias_file_says_it_is_one():
     aliases = [rel for rel in tracked() if is_alias(rel)]
     assert aliases, "no alias file is tracked -- the list names nothing that exists"

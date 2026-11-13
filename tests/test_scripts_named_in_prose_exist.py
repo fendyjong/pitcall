@@ -4,7 +4,7 @@ A rename rots every sentence naming the old script, and those sentences are
 instructions: a reader following one runs a command that does not exist and
 concludes the plugin is broken rather than the sentence. Two references went
 stale exactly that way -- `README.md` and `pytest.ini`, both naming
-`wdd-finish` after it became `wdd` -- and both were found by hand.
+`old-tool` after it was renamed -- and both were found by hand.
 
 Both sides are derived. Candidate names come from git history rather than a
 list in this file, so a rename is tracked without editing anything here; the
@@ -17,7 +17,7 @@ extension, not on being Python: `scripts/plan-tasks` and
 `scripts/project-config` are `#!/usr/bin/env python3` with no `.py` suffix,
 and ARE scanned. A `.py` file naming a script either executes it -- and fails
 loudly on its own -- or discusses it historically, the way
-`skills/wave-driven-development/tests/test_wdd.py` asserts the old `wdd-finish`
+`skills/race/tests/test_race.py` asserts the old script
 path must not come back. Flagging that would fire on the most correct code in
 the repository, which is how a check gets switched off rather than fixed. Prose
 that instructs a human lives in Markdown and in config comments, which is where
@@ -59,13 +59,13 @@ CITED_PATH = re.compile(r"(?:^|/)scripts/[^/\s]+$")
 # gate would skip exactly the citation shape it calls the strongest.
 # A backticked token
 # is a claim that the thing exists; the same letters in running prose are not,
-# which is what keeps `WDD Phase 1` from tripping a gate that must still catch
-# a backticked `wdd`.
+# which is what keeps `Race Phase 1` from tripping a gate that must still catch
+# a backticked `race`.
 #
 # The closing fence must be at least as long as the opener: `\1` backreferences
 # the captured backtick run, so a fence opened with four backticks does not
 # close on the first inner three-backtick fence it contains. Without this,
-# `skills/wave-driven-development/SKILL.md`'s own four-backtick block --
+# `skills/race/SKILL.md`'s own four-backtick block --
 # which itself contains three inner ``` fences, to document fenced examples --
 # mis-pairs into fragments that drop real content between them.
 INLINE = re.compile(r"`([^`\n]+)`")
@@ -245,7 +245,7 @@ def link_resolves(ref, path, tracked_paths, repo):
     when the gate cannot know and the link is skipped.
 
     Either way the path starts at the repository root and must name a file
-    exactly: `blob/main/scripts/wdd` names a root-level `scripts/wdd`, and
+    exactly: `blob/main/scripts/race` names a root-level `scripts/race`, and
     GitHub serves a 404 for it whatever lives under `skills/`.
 
     A link to the default branch or `HEAD` names the files this branch will
@@ -382,7 +382,7 @@ def clean(token):
     Must run AFTER `normalize()`, never before: normalize() needs an intact
     leading `.` to recognise `./` or `../` as a whole prefix, and stripping
     it blindly (as this function alone used to, via the full `TRIM` set on
-    both ends) mangled `./scripts/lane.py` into `/scripts/lane.py` -- a path
+    both ends) mangled `./scripts/pit.py` into `/scripts/pit.py` -- a path
     the author never wrote -- before normalize() ever got a look. Once
     normalize() has run, any leading `.` that remains is a real character,
     not a stray, so the leading strip uses `LEADING_TRIM` instead of `TRIM`.
@@ -397,7 +397,7 @@ def normalize(token):
     a relative-path dot, or a unified-diff marker.
 
     Deliberately NOT a tail-only compare: an actually-wrong intermediate path
-    segment -- e.g. `skills/brainstorming/scripts/wdd`, which names a file
+    segment -- e.g. `skills/brainstorming/scripts/race`, which names a file
     that lives under a different skill entirely -- must keep failing to
     resolve. Only these specific, whole-prefix shapes are stripped, and only
     from the front; nothing here touches the rest of the token.
@@ -431,11 +431,11 @@ def resolves(token, tracked_paths):
     """A cited path resolves if a tracked path is it, or ends with it.
 
     Documents cite `scripts/plan-tasks` relative to the skill that owns it,
-    while git tracks `skills/wave-driven-development/scripts/plan-tasks`.
+    while git tracks `skills/race/scripts/plan-tasks`.
     Requiring an exact match would flag every correct citation in the repo.
     Callers pass a token already run through `normalize()`, which handles
     the mirror case -- a citation LONGER than the tracked path, e.g.
-    `${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd` --
+    `${CLAUDE_PLUGIN_ROOT}/skills/race/scripts/race` --
     that plain suffix matching alone cannot. A path out of a URL is judged by
     `link_resolves()` instead: it starts at the repository root.
     """
@@ -480,8 +480,8 @@ def problems_in(text, path, dead, tracked_paths, repo=None):
                 # bracket sitting at the token's own edge and leave this
                 # guard blind to `<scripts/name>` specifically. This idiom
                 # is already live and correct in this repo:
-                # `wdd/<plan-slug>/progress.md` and
-                # `.pitcall/receipts/<sha>.json` (both in WDD's SKILL.md),
+                # `race/<plan-slug>/progress.md` and
+                # `.pitcall/ledger/<sha>.json` (both in Race's SKILL.md),
                 # and `repos/<owner>` (commands/spec-review.md). A false positive on correct
                 # prose is how a check gets switched off rather than fixed,
                 # which is the failure this gate exists to avoid.
@@ -532,7 +532,7 @@ def test_this_repository_satisfies_its_own_gate():
 def test_the_real_repository_has_dead_names_to_look_for():
     """Otherwise the gate above passes vacuously.
 
-    `wdd-finish` (renamed to `wdd`) and `sdd-workspace` (removed) are both real.
+    The finish script's earlier name and `sdd-workspace` (removed) are both real.
     If this set ever empties, the test above stops proving anything, and this is
     the test that says so rather than letting a green run imply coverage.
     """
@@ -549,25 +549,25 @@ def test_the_scan_skips_this_file():
 
 
 def test_a_renamed_script_named_in_markdown_is_caught():
-    found = problems_in("run `wdd-finish merge` to land it", "README.md", {"wdd-finish"}, [])
+    found = problems_in("run `old-tool merge` to land it", "README.md", {"old-tool"}, [])
     assert found, "a backticked dead script name must fail"
-    assert "wdd-finish" in found[0]
+    assert "old-tool" in found[0]
 
 
 def test_the_same_name_unbackticked_is_not_caught():
-    found = problems_in("WDD Phase 1 mentions wdd-finish in prose", "README.md", {"wdd-finish"}, [])
+    found = problems_in("Race Phase 1 mentions old-tool in prose", "README.md", {"old-tool"}, [])
     assert found == []
 
 
 def test_a_fenced_block_is_scanned():
-    found = problems_in("```bash\nwdd-finish check\n```\n", "SKILL.md", {"wdd-finish"}, [])
+    found = problems_in("```bash\nold-tool check\n```\n", "SKILL.md", {"old-tool"}, [])
     assert found, "a fenced command line is the strongest form of 'run this'"
 
 
 def test_an_indented_fenced_block_is_scanned():
     """Three of SKILL.md's fences sit indented under numbered steps."""
-    found = problems_in("1. run it:\n\n   ```bash\n   wdd-finish check\n   ```\n",
-                        "SKILL.md", {"wdd-finish"}, [])
+    found = problems_in("1. run it:\n\n   ```bash\n   old-tool check\n   ```\n",
+                        "SKILL.md", {"old-tool"}, [])
     assert found, "a fence indented under a list item is still a fence"
 
 
@@ -575,7 +575,7 @@ def test_names_ever_sees_a_rename_target(tmp_path):
     """A renamed script's NEW name must be in `names_ever`.
 
     `--diff-filter=AMD` omits renames, so a script added, renamed, and never
-    touched again vanishes from the set. In this repository `wdd` survives such
+    touched again vanishes from the set. In this repository `race` survives such
     a filter only because a later commit happened to modify it -- an accident of
     history, not a property to rely on -- so this is a purpose-built fixture
     rather than an assertion about the repo.
@@ -602,7 +602,7 @@ def test_a_path_under_scripts_that_does_not_resolve_is_caught():
 def test_a_relative_citation_resolves_against_a_nested_script_dir():
     found = problems_in(
         "run `scripts/plan-tasks`", "SKILL.md", set(),
-        ["skills/wave-driven-development/scripts/plan-tasks"],
+        ["skills/race/scripts/plan-tasks"],
     )
     assert found == [], "documents cite script paths relative to their own skill"
 
@@ -643,21 +643,21 @@ def test_a_fence_nested_inside_a_longer_delimiter_fence_is_still_scanned():
         "````markdown\n"
         "pre text\n"
         "```bash\n"
-        "wdd-finish check\n"
+        "old-tool check\n"
         "```\n"
         "tail text\n"
         "````\n"
     )
-    found = problems_in(text, "SKILL.md", {"wdd-finish"}, [])
+    found = problems_in(text, "SKILL.md", {"old-tool"}, [])
     assert found, "a dead name inside a nested fence must not be dropped"
-    assert "wdd-finish" in found[0]
+    assert "old-tool" in found[0]
 
 
 def test_a_scripts_placeholder_is_not_a_path_claim():
     """`scripts/<name>` shows the SHAPE of a path; it names no file.
 
     The same idiom is already live and correct elsewhere in this repo --
-    `wdd/<plan-slug>/progress.md`, `.pitcall/receipts/<sha>.json`,
+    `race/<plan-slug>/progress.md`, `.pitcall/ledger/<sha>.json`,
     `repos/<owner>` -- so a future `scripts/<name>` must not fail CI, even
     though an unrelated bad path with the same prefix still must.
     """
@@ -693,31 +693,31 @@ def test_a_plugin_root_variable_prefix_resolves():
     mandates, and it must resolve here rather than fail CI.
     """
     found = problems_in(
-        "run `${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd`",
+        "run `${CLAUDE_PLUGIN_ROOT}/skills/race/scripts/race`",
         "commands/x.md", set(),
-        ["skills/wave-driven-development/scripts/wdd"],
+        ["skills/race/scripts/race"],
     )
     assert found == []
 
 
 def test_a_dot_slash_relative_citation_resolves():
     found = problems_in(
-        "run `./scripts/lane.py` to check it", "docs/x.md", set(), ["scripts/lane.py"],
+        "run `./scripts/pit.py` to check it", "docs/x.md", set(), ["scripts/pit.py"],
     )
     assert found == []
 
 
 def test_a_double_dot_relative_citation_resolves():
     found = problems_in(
-        "see `../scripts/lane.py`", "skills/w/SKILL.md", set(), ["scripts/lane.py"],
+        "see `../scripts/pit.py`", "skills/w/SKILL.md", set(), ["scripts/pit.py"],
     )
     assert found == []
 
 
 def test_a_home_directory_install_path_resolves():
     found = problems_in(
-        "run `~/.claude/plugins/pitcall/scripts/wdd`", "docs/x.md", set(),
-        [".claude/plugins/pitcall/scripts/wdd"],
+        "run `~/.claude/plugins/pitcall/scripts/race`", "docs/x.md", set(),
+        [".claude/plugins/pitcall/scripts/race"],
     )
     assert found == []
 
@@ -727,8 +727,8 @@ def test_a_unified_diff_path_prefix_resolves():
     `git ls-files | /usr/bin/grep -E '^(a|b)/'`, which returned nothing --
     so stripping this pair of prefixes cannot hide a real wrong path.
     """
-    text = "```diff\n--- a/scripts/lane.py\n+++ b/scripts/lane.py\n```\n"
-    found = problems_in(text, "docs/x.md", set(), ["scripts/lane.py"])
+    text = "```diff\n--- a/scripts/pit.py\n+++ b/scripts/pit.py\n```\n"
+    found = problems_in(text, "docs/x.md", set(), ["scripts/pit.py"])
     assert found == []
 
 
@@ -740,7 +740,7 @@ BLOB = f"https://github.com/{REPO.slug}/blob/main"
 
 def test_a_correct_url_into_this_repo_is_not_flagged():
     found = problems_in(
-        f"see `{BLOB}/scripts/lane.py`", "docs/x.md", set(), ["scripts/lane.py"],
+        f"see `{BLOB}/scripts/pit.py`", "docs/x.md", set(), ["scripts/pit.py"],
         repo=REPO,
     )
     assert found == []
@@ -759,30 +759,30 @@ def test_a_url_into_this_repo_naming_a_missing_script_is_caught():
 
 def test_a_url_into_this_repo_with_a_wrong_intermediate_path_is_caught():
     """Resolving only the `scripts/<name>` tail would let this through:
-    `wdd` is real, but under `wave-driven-development`, not `brainstorming`."""
+    `race` is real, but under `race`, not `brainstorming`."""
     found = problems_in(
-        f"see `{BLOB}/skills/brainstorming/scripts/wdd`", "docs/x.md", set(),
-        ["skills/wave-driven-development/scripts/wdd"], repo=REPO,
+        f"see `{BLOB}/skills/brainstorming/scripts/race`", "docs/x.md", set(),
+        ["skills/race/scripts/race"], repo=REPO,
     )
-    assert found and "wdd" in found[0]
+    assert found and "race" in found[0]
 
 
 def test_a_url_is_anchored_at_the_repo_root():
     """A prose citation is relative to its own skill, so it may be a tracked
-    path's tail. A URL is not: `blob/main/scripts/wdd` names a root-level
-    `scripts/wdd`, which does not exist, and GitHub would serve a 404."""
+    path's tail. A URL is not: `blob/main/scripts/race` names a root-level
+    `scripts/race`, which does not exist, and GitHub would serve a 404."""
     found = problems_in(
-        f"see `{BLOB}/scripts/wdd`", "docs/x.md", set(),
-        ["skills/wave-driven-development/scripts/wdd"], repo=REPO,
+        f"see `{BLOB}/scripts/race`", "docs/x.md", set(),
+        ["skills/race/scripts/race"], repo=REPO,
     )
-    assert found and "wdd" in found[0]
+    assert found and "race" in found[0]
 
 
 def test_a_line_anchor_or_query_does_not_hide_the_path():
-    tracked_paths = ["scripts/lane.py"]
+    tracked_paths = ["scripts/pit.py"]
     for suffix in ("#L10-L20", "?plain=1", "?plain=1#L3"):
         found = problems_in(
-            f"see `{BLOB}/scripts/lane.py{suffix}`", "docs/x.md", set(),
+            f"see `{BLOB}/scripts/pit.py{suffix}`", "docs/x.md", set(),
             tracked_paths, repo=REPO,
         )
         assert found == [], f"a correct link with {suffix!r} must stay quiet"
@@ -797,13 +797,13 @@ def test_a_line_anchor_or_query_does_not_hide_the_path():
 def test_a_raw_content_url_is_checked_the_same_way():
     raw = f"https://raw.githubusercontent.com/{REPO.slug}/main"
     found = problems_in(
-        f"fetch `{raw}/scripts/lane.py`", "docs/x.md", set(), ["scripts/lane.py"],
+        f"fetch `{raw}/scripts/pit.py`", "docs/x.md", set(), ["scripts/pit.py"],
         repo=REPO,
     )
     assert found == []
 
     found = problems_in(
-        f"fetch `{raw}/scripts/nope.py`", "docs/x.md", set(), ["scripts/lane.py"],
+        f"fetch `{raw}/scripts/nope.py`", "docs/x.md", set(), ["scripts/pit.py"],
         repo=REPO,
     )
     assert found and "nope.py" in found[0]
@@ -812,7 +812,7 @@ def test_a_raw_content_url_is_checked_the_same_way():
     # scheme from the prefix match and turn a wrong link into a foreign one.
     found = problems_in(
         f'```bash\ncurl -fsSL "{raw}/scripts/nope.py"\n```\n', "docs/x.md", set(),
-        ["scripts/lane.py"], repo=REPO,
+        ["scripts/pit.py"], repo=REPO,
     )
     assert found and "nope.py" in found[0]
 
@@ -846,9 +846,9 @@ LINK_SHAPES = [
 
 @pytest.mark.parametrize("shape", LINK_SHAPES)
 def test_every_link_shape_is_read(shape):
-    tracked_paths = ["scripts/lane.py"]
+    tracked_paths = ["scripts/pit.py"]
     found = problems_in(
-        shape.format(repo=REPO.slug, path="scripts/lane.py"), "docs/x.md", set(),
+        shape.format(repo=REPO.slug, path="scripts/pit.py"), "docs/x.md", set(),
         tracked_paths, repo=REPO,
     )
     assert found == [], "a correct link must stay quiet"
@@ -884,8 +884,8 @@ def test_a_link_path_is_trimmed_only_at_its_end():
     """A leading bracket in a link's path is part of a name, since no
     sentence reaches inside the link; a trailing one is the sentence's."""
     for name in ("(x)", "[x]", "{x}"):
-        tracked_paths = [f"{name}/scripts/lane.py"]
-        assert problems_in(f"see `({BLOB}/{name}/scripts/lane.py).`", "d.md", set(),
+        tracked_paths = [f"{name}/scripts/pit.py"]
+        assert problems_in(f"see `({BLOB}/{name}/scripts/pit.py).`", "d.md", set(),
                            tracked_paths, repo=REPO) == [], name
         found = problems_in(f"see `({BLOB}/{name}/scripts/nope.py).`", "d.md", set(),
                             tracked_paths, repo=REPO)
@@ -893,8 +893,8 @@ def test_a_link_path_is_trimmed_only_at_its_end():
 
 
 def test_a_doubled_slash_mid_path_reads_as_one():
-    tracked_paths = ["skills/w/scripts/lane.py"]
-    assert problems_in(f"`{BLOB}/skills//w/scripts/lane.py`", "d.md", set(),
+    tracked_paths = ["skills/w/scripts/pit.py"]
+    assert problems_in(f"`{BLOB}/skills//w/scripts/pit.py`", "d.md", set(),
                        tracked_paths, repo=REPO) == []
     found = problems_in(f"`{BLOB}/skills//w/scripts/nope.py`", "d.md", set(),
                         tracked_paths, repo=REPO)
@@ -912,8 +912,8 @@ def test_a_dot_segment_is_skipped_by_both_judges():
 
 
 def test_a_percent_encoded_path_is_decoded():
-    tracked_paths = ["scripts/lane.py"]
-    assert problems_in(f"`{BLOB}/scripts/lane%2Epy`", "d.md", set(),
+    tracked_paths = ["scripts/pit.py"]
+    assert problems_in(f"`{BLOB}/scripts/pit%2Epy`", "d.md", set(),
                        tracked_paths, repo=REPO) == []
     found = problems_in(f"`{BLOB}/scripts/nope%2Epy`", "d.md", set(),
                         tracked_paths, repo=REPO)
@@ -921,7 +921,7 @@ def test_a_percent_encoded_path_is_decoded():
 
     # Decoded after the cut and after `clean()`: a decoded character is part
     # of the file name -- mid-name or at its end -- not a query or a stray.
-    for encoded in ("lane.py%3Fx", "lane.py%3F", "lane.py%29"):
+    for encoded in ("pit.py%3Fx", "pit.py%3F", "pit.py%29"):
         found = problems_in(f"`{BLOB}/scripts/{encoded}`", "d.md", set(),
                             tracked_paths, repo=REPO)
         assert found and encoded in found[0], encoded
@@ -949,7 +949,7 @@ def test_owner_case_does_not_turn_this_repo_into_another():
     still a link into this repository -- reading it as foreign would skip it."""
     found = problems_in(
         "see `https://github.com/FendyJong/Pitcall/blob/main/scripts/nope.py`",
-        "docs/x.md", set(), ["scripts/lane.py"], repo=REPO,
+        "docs/x.md", set(), ["scripts/pit.py"], repo=REPO,
     )
     assert found and "nope.py" in found[0]
 
@@ -960,7 +960,7 @@ def test_a_url_into_another_repository_is_not_checked():
     citation, e.g. of the upstream project `ATTRIBUTION.md` credits."""
     found = problems_in(
         "see `https://github.com/obra/superpowers/blob/main/skills/x/scripts/y`",
-        "docs/x.md", set(), ["scripts/lane.py"], repo=REPO,
+        "docs/x.md", set(), ["scripts/pit.py"], repo=REPO,
     )
     assert found == []
 
@@ -1068,7 +1068,7 @@ def test_a_missing_manifest_fails_rather_than_skipping_urls(tmp_path):
         repo_slug(tmp_path)
 
 
-CONFIG = {"bringup": None, "validate": None, "default_branch": "trunk",
+CONFIG = {"out_lap": None, "validate": None, "default_branch": "trunk",
           "required_check": "ci"}
 
 
@@ -1208,13 +1208,13 @@ def test_the_gate_itself_checks_urls(tmp_path):
 
 
 def test_a_wrong_intermediate_path_still_fails_to_resolve():
-    """`wdd` really does live under `wave-driven-development`; this cites the
+    """`race` really does live under `race`; this cites the
     wrong skill entirely. Normalization strips known-transparent prefixes,
     never intermediate segments -- a tail-only compare would let this
     resolve too, which is exactly what must not happen.
     """
     found = problems_in(
-        "see `skills/brainstorming/scripts/wdd`", "docs/x.md", set(),
-        ["skills/wave-driven-development/scripts/wdd"],
+        "see `skills/brainstorming/scripts/race`", "docs/x.md", set(),
+        ["skills/race/scripts/race"],
     )
-    assert found and "wdd" in found[0]
+    assert found and "race" in found[0]
