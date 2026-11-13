@@ -36,7 +36,7 @@ def test_branch_name_refuses_without_a_prefix():
 def test_issue_from_branch_is_branch_names_inverse():
     cfg = {"branch_prefix": "feat/"}
     assert tracker.issue_from_branch(cfg, tracker.branch_name(cfg, 19, "Claim and file")) == "19"
-    assert tracker.issue_from_branch({"branch_prefix": "wdd/"}, "wdd/1143-consent-pair") == "1143"
+    assert tracker.issue_from_branch({"branch_prefix": "race/"}, "race/1143-consent-pair") == "1143"
 
 
 def test_issue_from_branch_fails_soft_rather_than_raising():
@@ -79,13 +79,13 @@ def _cli(cwd, *args):
 def _configured_checkout(tmp_path, **cfg):
     subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
     (tmp_path / "pitcall.config.json").write_text(json.dumps({
-        "bringup": None, "validate": "true", "default_branch": "main",
+        "out_lap": None, "validate": "true", "default_branch": "main",
         "required_check": "ci", **cfg}))
     return tmp_path
 
 
 def test_the_status_label_cli_prints_the_configured_name(tmp_path):
-    """`wdd` is a shell script and reads the label through this, not a second parse."""
+    """`race` is a shell script and reads the label through this, not a second parse."""
     repo = _configured_checkout(tmp_path, status_labels={"in_review": "status:in-review"})
     r = _cli(repo, "status-label", "in_review")
     assert (r.returncode, r.stdout) == (0, "status:in-review\n"), r.stderr
@@ -219,7 +219,7 @@ def test_config_translates_a_missing_required_key_into_a_TrackerError(tmp_path):
     """`lane_config.load_config` raises a bare `RuntimeError` here, which a
     caller doing `except TrackerError` would not catch -- the whole point of
     this test is that `tracker.config()` must not let that escape unwrapped."""
-    (tmp_path / "pitcall.config.json").write_text('{"bringup": "x"}')
+    (tmp_path / "pitcall.config.json").write_text('{"out_lap": "x"}')
     with pytest.raises(tracker.TrackerError, match="missing required key"):
         tracker.config(tmp_path)
 
@@ -384,7 +384,7 @@ def test_a_remote_only_branch_still_resolves(tmp_path):
 def test_a_branch_checked_out_in_a_linked_worktree_still_resolves_clean(tmp_path):
     """`git branch -a --list` marks a branch checked out in ANOTHER linked
     worktree with `+`, not `*` -- and that is the normal state here, since
-    every WDD task gets its own worktree. `checkout`ing the branch in the
+    every race task gets its own worktree. `checkout`ing the branch in the
     SAME clone (as `test_a_branch_and_its_remote_counterpart_are_one_branch`
     does) only ever exercises `*`, so it can't catch a `+` left unstripped.
 

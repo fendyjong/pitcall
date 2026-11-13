@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claim an issue: label + comment + branch, in that order.
+"""Enter an issue: claim it with label + comment + branch, in that order.
 
 Comment before branch is load-bearing. Branch-first with a failed comment leaves
 an active-looking branch and no claim record -- the state `workflow.md` calls
@@ -185,7 +185,7 @@ def resolve_next(cfg, repo, base, now, args):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="claim")
+    ap = argparse.ArgumentParser(prog="enter")
     ap.add_argument("issue", type=int, nargs="?")
     ap.add_argument("--next", dest="pick_next", action="store_true",
                     help="claim the lowest-numbered open issue nothing holds")
@@ -244,7 +244,7 @@ def main(argv=None):
                     if claim is not None else "")
             raise tracker.TrackerError(
                 f"#{args.issue} is blocked on: {why}.{held} "
-                f"Clear it first: block.py {args.issue} --clear."
+                f"Clear it first: red_flag.py {args.issue} --clear."
             )
         print(f"#{args.issue} is blocked on: {why} -- resuming this "
               f"session's own claim anyway.")
@@ -320,4 +320,4 @@ if __name__ == "__main__":
     try:
         main()
     except tracker.TrackerError as exc:
-        sys.exit(f"claim: {exc}")
+        sys.exit(f"enter: {exc}")
