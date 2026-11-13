@@ -33,7 +33,7 @@ def _plan(repo) -> Path:
 
 def test_workspace_prints_only_the_directory(repo):
     plan = _plan(repo)
-    r = run_script("wdd-workspace", str(plan), cwd=repo.path, env=repo.env)
+    r = run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
     out = r.stdout.strip()
     assert out.endswith("/.pitcall/wdd/plan")
@@ -44,7 +44,7 @@ def test_workspace_prints_only_the_directory(repo):
 
 def test_workspace_is_self_ignoring(repo):
     plan = _plan(repo)
-    run_script("wdd-workspace", str(plan), cwd=repo.path, env=repo.env)
+    run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
     assert (repo.path / ".pitcall/wdd/.gitignore").read_text() == "*\n"
     status = repo.git("status", "--porcelain").stdout
     assert ".pitcall" not in status
@@ -52,8 +52,8 @@ def test_workspace_is_self_ignoring(repo):
 
 def test_workspace_is_idempotent(repo):
     plan = _plan(repo)
-    first = run_script("wdd-workspace", str(plan), cwd=repo.path, env=repo.env)
-    second = run_script("wdd-workspace", str(plan), cwd=repo.path, env=repo.env)
+    first = run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
+    second = run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
     assert first.stdout == second.stdout
     assert second.returncode == 0
 
@@ -62,8 +62,8 @@ def test_workspace_separates_plans(repo):
     a = _plan(repo)
     b = repo.path / "other.md"
     b.write_text(PLAN)
-    ra = run_script("wdd-workspace", str(a), cwd=repo.path, env=repo.env)
-    rb = run_script("wdd-workspace", str(b), cwd=repo.path, env=repo.env)
+    ra = run_script("race-workspace", str(a), cwd=repo.path, env=repo.env)
+    rb = run_script("race-workspace", str(b), cwd=repo.path, env=repo.env)
     assert ra.stdout != rb.stdout
 
 
@@ -72,7 +72,7 @@ def test_workspace_refuses_to_run_inside_a_task_worktree(repo):
     wt = repo.path / ".worktrees/plan-t2"
     repo.git("worktree", "add", "-q", "-b", "plan-t2", str(wt), "HEAD")
     (wt / "plan.md").write_text(PLAN)
-    r = run_script("wdd-workspace", "plan.md", cwd=wt, env=repo.env)
+    r = run_script("race-workspace", "plan.md", cwd=wt, env=repo.env)
     assert r.returncode == 2
     assert "task worktree" in r.stderr
 
@@ -87,7 +87,7 @@ def test_workspace_refuses_a_task_worktree_numbered_past_ninety_nine(repo):
     wt = repo.path / ".worktrees/plan-t100"
     repo.git("worktree", "add", "-q", "-b", "plan-t100", str(wt), "HEAD")
     (wt / "plan.md").write_text(PLAN)
-    r = run_script("wdd-workspace", "plan.md", cwd=wt, env=repo.env)
+    r = run_script("race-workspace", "plan.md", cwd=wt, env=repo.env)
     assert r.returncode == 2
     assert "task worktree" in r.stderr
 
@@ -103,13 +103,13 @@ def test_workspace_accepts_a_plain_checkout_named_like_a_task_worktree(repo, tmp
     other.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=other, env=repo.env, check=True)
     (other / "plan.md").write_text(PLAN)
-    r = run_script("wdd-workspace", "plan.md", cwd=other, env=repo.env)
+    r = run_script("race-workspace", "plan.md", cwd=other, env=repo.env)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip().endswith("/.pitcall/wdd/plan")
 
 
 def test_workspace_missing_plan_exits_2(repo):
-    r = run_script("wdd-workspace", "nope.md", cwd=repo.path, env=repo.env)
+    r = run_script("race-workspace", "nope.md", cwd=repo.path, env=repo.env)
     assert r.returncode == 2
 
 

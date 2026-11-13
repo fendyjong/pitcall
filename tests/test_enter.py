@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
-import claim as claim_mod  # noqa: E402
+import enter as claim_mod  # noqa: E402
 import tracker  # noqa: E402
 
 NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)

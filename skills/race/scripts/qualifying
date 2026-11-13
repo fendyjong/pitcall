@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Judge a plan before a race runs it.
+
+Every task in exactly one lap of the plan's table, every dependency in an
+earlier lap, declared files disjoint within a lap, migration numbers unique, a
+model tier on every task, and one sweep after the spec's laps. Run it in Phase
+1, before a race exists, and again on resume.
+
+The checks live in `plan-tasks`, beside the parser they read, so a plan is
+parsed one way whichever command reads it.
+
+Usage: qualifying PLAN_FILE
+Exit:  0 valid | 1 validation failed | 2 usage or unreadable plan | 3 no tasks found
+"""
+
+import sys
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+from pathlib import Path
+
+
+def plan_tasks():
+    """`plan-tasks` as a module: it has no `.py` suffix, so it is loaded by path."""
+    path = Path(__file__).resolve().parent / "plan-tasks"
+    loader = SourceFileLoader("plan_tasks", str(path))
+    module = module_from_spec(spec_from_loader("plan_tasks", loader))
+    loader.exec_module(module)
+    return module
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 1:
+        print("usage: qualifying PLAN_FILE", file=sys.stderr)
+        return 2
+    return plan_tasks().qualify(Path(argv[0]))
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

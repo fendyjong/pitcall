@@ -23,7 +23,7 @@ def ledger(tmp_path: Path, *lines: str, whole: bool = True) -> Path:
 
 
 def ledger_cmd(tmp_path, *args):
-    return run_script("wdd-ledger", *args, cwd=tmp_path)
+    return run_script("race-ledger", *args, cwd=tmp_path)
 
 
 # --- stops ------------------------------------------------------------------
@@ -302,7 +302,7 @@ def verdict(ws: Path, k: int, reviewed: str, since: str, word: str = "CLEAN") ->
 
 
 def chain(repo, ws, head):
-    return run_script("wdd-ledger", "chain", str(ws), head, "origin/main",
+    return run_script("race-ledger", "chain", str(ws), head, "origin/main",
                       cwd=repo.path, env=repo.env)
 
 
@@ -427,7 +427,7 @@ def test_an_unresolvable_default_ref_refuses_rule_5_by_name(repo):
     base, one, _ = branch(repo)
     ws = repo.path / "ws"
     verdict(ws, 1, one, base)
-    r = run_script("wdd-ledger", "chain", str(ws), one, "origin/nonexistent",
+    r = run_script("race-ledger", "chain", str(ws), one, "origin/nonexistent",
                    cwd=repo.path, env=repo.env)
     assert r.returncode == 1
     assert "rule 5" in r.stderr
@@ -445,7 +445,7 @@ def test_the_chain_still_passes_once_the_branch_has_merged(repo):
 def test_verdict_prints_the_parsed_header(repo):
     base, one, _ = branch(repo)
     p = verdict(repo.path / "ws", 1, one, base)
-    r = run_script("wdd-ledger", "verdict", str(p), cwd=repo.path, env=repo.env)
+    r = run_script("race-ledger", "verdict", str(p), cwd=repo.path, env=repo.env)
     assert r.returncode == 0
     assert r.stdout.splitlines() == [f"Reviewed={one}", f"Since={base}", "Verdict=CLEAN"]
 

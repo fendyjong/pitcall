@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 SKILL = Path(__file__).parent.parent
-WDD = SKILL / "scripts" / "wdd"
+WDD = SKILL / "scripts" / "race"
 SLUG = "2026-01-01-demo"
 PLAN = f"docs/superpowers/plans/{SLUG}.md"
 
@@ -205,7 +205,7 @@ def test_a_blocked_entry_blocks_the_finish(run):
 
 def test_cleanup_refuses_before_the_branch_reaches_origin_master(run):
     """Deleting a task branch whose work has not landed destroys the only copy."""
-    r = finish(run["plan_wt"], "cleanup", PLAN)
+    r = finish(run["plan_wt"], "pack-down", PLAN)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "not merged into origin/" in r.stderr
     assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) != ""
@@ -216,7 +216,7 @@ def test_cleanup_deletes_task_branches_and_workspace_once_merged(run):
     ws = run["plan_wt"] / ".pitcall" / "wdd" / SLUG
     assert ws.exists()
 
-    r = finish(run["plan_wt"], "cleanup", PLAN)
+    r = finish(run["plan_wt"], "pack-down", PLAN)
     assert r.returncode == 0, r.stdout + r.stderr
     assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) == ""
     assert git("branch", "--list", f"{SLUG}-t2", cwd=run["main"]) == ""
@@ -251,7 +251,7 @@ def test_cleanup_uses_the_config_default_branch_not_a_stale_origin_head(run):
     assert git("symbolic-ref", "--short", "refs/remotes/origin/HEAD",
                cwd=run["main"]) == "origin/master"
 
-    r = finish(run["plan_wt"], "cleanup", PLAN)
+    r = finish(run["plan_wt"], "pack-down", PLAN)
     assert r.returncode == 0, r.stdout + r.stderr
     assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) == ""
     assert git("branch", "--list", f"{SLUG}-t2", cwd=run["main"]) == ""
@@ -267,7 +267,7 @@ def test_cleanup_refuses_when_the_config_cannot_answer(run):
     git("push", "-q", "origin", "planbranch:master", cwd=run["plan_wt"])
     (run["plan_wt"] / "pitcall.config.json").unlink()
 
-    r = finish(run["plan_wt"], "cleanup", PLAN)
+    r = finish(run["plan_wt"], "pack-down", PLAN)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "pitcall.config.json" in r.stderr          # project-config's own diagnosis
     assert "Refusing rather than guessing" in r.stderr  # and why we stop here
@@ -293,7 +293,7 @@ def test_cleanup_removes_a_worktree_under_a_configured_worktree_dir_other_than_t
     and deletes the branch anyway -- the worktree leaks with nothing left
     pointing at it.
     """
-    WAVE_WORKTREE = SKILL / "scripts" / "wave-worktree"
+    WAVE_WORKTREE = SKILL / "scripts" / "lap-worktree"
 
     write_config(run["plan_wt"], worktree_dir="wt")
     (run["plan_wt"] / ".gitignore").write_text("wt/\n")
@@ -316,7 +316,7 @@ def test_cleanup_removes_a_worktree_under_a_configured_worktree_dir_other_than_t
 
     assert wt.exists(), "sanity: the worktree exists before cleanup runs"
 
-    r = finish(run["plan_wt"], "cleanup", PLAN)
+    r = finish(run["plan_wt"], "pack-down", PLAN)
     assert r.returncode == 0, r.stdout + r.stderr
     assert not wt.exists(), "the worktree under the configured worktree_dir was not removed"
     assert git("branch", "--list", b, cwd=run["main"]) == ""
@@ -374,7 +374,7 @@ def test_cleanup_keeps_a_dropped_attempts_branch(run):
     """It is the only copy of the attempt, and the re-routed issue names it."""
     b = dropped_branch(run)
     git("push", "-q", "origin", "planbranch:master", cwd=run["plan_wt"])
-    r = finish(run["plan_wt"], "cleanup", PLAN)
+    r = finish(run["plan_wt"], "pack-down", PLAN)
     assert r.returncode == 0, r.stdout + r.stderr
     assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) == "", "sanity: cleanup ran"
     assert git("branch", "--list", b, cwd=run["main"]) != ""
@@ -637,7 +637,7 @@ def test_merge_lands_the_pr_and_then_fast_forwards_the_main_checkout(run, gh):
     write_receipt(run, gh["head"])
     before = git("rev-parse", "HEAD", cwd=run["main"])
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
 
     attempts = merges(gh)
@@ -663,7 +663,7 @@ def test_merge_refuses_without_a_receipt_and_never_calls_gh_pr_merge(run, gh):
     step promises: refusing early costs nothing, refusing after a ten-minute
     wait means having waited for checks on a branch that could never merge.
     """
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
 
     assert r.returncode == 1, r.stdout + r.stderr
     assert "no lane receipt" in r.stderr
@@ -684,7 +684,7 @@ def test_merge_refuses_a_receipt_that_names_a_different_commit(run, gh):
     assert validated != gh["head"]
     write_receipt(run, validated)
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "no lane receipt" in r.stderr
     assert "other commit" in r.stderr, "say WHY there is a receipt directory but no match"
@@ -700,7 +700,7 @@ def test_a_corrupt_receipt_is_treated_as_absent(run, gh):
     """
     write_receipt(run, gh["head"], raw="{this is not json")
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "will not parse" in r.stderr
     assert merges(gh) == []
@@ -710,7 +710,7 @@ def test_merge_reports_not_merged_when_the_check_is_still_running(run, gh):
     write_receipt(run, gh["head"])
     (gh["dir"] / "checks.json").write_text(rollup(("ci", "IN_PROGRESS", None)))
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 3, r.stdout + r.stderr
     assert "NOT MERGED" in r.stderr
     assert "still running" in r.stderr
@@ -723,7 +723,7 @@ def test_merge_refuses_when_the_required_check_is_red(run, gh):
     write_receipt(run, gh["head"])
     (gh["dir"] / "checks.json").write_text(rollup(("ci", "COMPLETED", "FAILURE")))
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "not green" in r.stderr.lower()
     assert merges(gh) == []
@@ -742,7 +742,7 @@ def test_merge_waits_for_a_check_that_finishes_mid_wait(run, gh):
     (gh["dir"] / "checks-2.json").write_text(pending)
     env = {**gh["env"], "WDD_CHECK_TIMEOUT": "30"}
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=env)
+    r = finish(run["plan_wt"], "finish", PLAN, env=env)
     assert r.returncode == 0, r.stdout + r.stderr
     assert len([c for c in calls(gh) if "statusCheckRollup" in c]) == 3
     assert merges(gh)
@@ -765,7 +765,7 @@ def test_merge_gates_on_the_check_named_by_the_config_not_a_hardcoded_one(run, g
     (gh["dir"] / "checks.json").write_text(
         rollup(("ci", "COMPLETED", "SUCCESS"), ("gate-x", "COMPLETED", "FAILURE")))
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "gate-x" in r.stderr
     assert merges(gh) == []
@@ -785,7 +785,7 @@ def test_a_diverged_main_checkout_is_reported_and_not_repaired(run, gh):
     diverged = git("rev-parse", "HEAD", cwd=run["main"])
     write_receipt(run, gh["head"])
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 4, r.stdout + r.stderr
 
     out = r.stdout + r.stderr
@@ -806,7 +806,7 @@ def test_a_failing_refresh_does_not_unwind_the_merge(run, gh):
     set_pr_head(gh, head)
     write_receipt(run, head)
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "refresh FAILED" in r.stdout
     assert git("rev-parse", "HEAD", cwd=run["main"]) == git(
@@ -854,7 +854,7 @@ def test_a_head_that_moves_during_the_wait_is_refused_not_merged(run, gh):
     (gh["dir"] / "head-at-2").write_text(moved)
     env = {**gh["env"], "WDD_CHECK_TIMEOUT": "30"}
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=env)
+    r = finish(run["plan_wt"], "finish", PLAN, env=env)
     assert r.returncode != 0, r.stdout + r.stderr
     # Pinned to the commit the RECEIPT covers, not to the one now on the PR.
     assert f"--match-head-commit {gh['head']}" in merges(gh)[0]
@@ -873,7 +873,7 @@ def test_a_gh_that_cannot_pin_the_head_refuses_rather_than_merging_unguarded(run
     write_receipt(run, gh["head"])
     (gh["dir"] / "no_match_head_flag").touch()
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "--match-head-commit" in r.stderr
     assert merges(gh) == []
@@ -892,7 +892,7 @@ def test_a_receipt_whose_body_names_another_commit_is_refused(run, gh):
     body = receipt_body(other, run["plan_wt"])
     write_receipt(run, gh["head"], raw=json.dumps(body))
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "names a different commit" in r.stderr
     assert merges(gh) == []
@@ -905,7 +905,7 @@ def test_a_receipt_symlinked_from_another_commits_receipt_is_refused(run, gh):
     link = real.parent / f"{gh['head']}.json"
     link.symlink_to(real.name)
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "names a different commit" in r.stderr
     assert merges(gh) == []
@@ -923,7 +923,7 @@ def test_a_pr_behind_its_base_is_refused_before_any_wait(run, gh):
     write_receipt(run, gh["head"])
     set_pr_head(gh, gh["head"], merge_state="BEHIND")
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "behind" in r.stderr.lower()
     # The remedy is a merge of the base, never a rebase, and the new head it
@@ -949,7 +949,7 @@ def test_a_base_that_moves_during_the_wait_is_refused_not_merged(run, gh):
         rollup(("ci", "COMPLETED", "SUCCESS"), merge_state="BEHIND"))
     env = {**gh["env"], "WDD_CHECK_TIMEOUT": "30"}
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=env)
+    r = finish(run["plan_wt"], "finish", PLAN, env=env)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "behind" in r.stderr.lower()
     assert merges(gh) == []
@@ -973,7 +973,7 @@ def test_a_receipt_sha_made_of_newlines_refuses_diagnosably(run, gh):
     """
     write_receipt(run, gh["head"], raw=json.dumps({"sha": "\n"}))
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert r.stderr.strip(), "refused with no diagnosis at all"
     assert "names a different commit" in r.stderr
@@ -990,7 +990,7 @@ def test_a_merge_state_of_whitespace_does_not_end_the_run_silently(run, gh):
     write_receipt(run, gh["head"])
     set_pr_head(gh, gh["head"], merge_state="\n")
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert merges(gh)
 
@@ -1005,7 +1005,7 @@ def test_a_conflicted_pr_is_refused_immediately_not_after_the_bound(run, gh):
     write_receipt(run, gh["head"])
     set_pr_head(gh, gh["head"], merge_state="DIRTY")
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "conflict" in r.stderr.lower()
     assert "never rebase" in r.stderr
@@ -1028,7 +1028,7 @@ def test_a_gh_whose_help_exceeds_the_pipe_buffer_probes_as_capable(run, gh):
     write_receipt(run, gh["head"])
     (gh["dir"] / "big_help").touch()
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert merges(gh)
 
@@ -1047,7 +1047,7 @@ def test_an_unknown_merge_state_is_read_again_before_the_wait(run, gh):
         json.dumps({"mergeStateStatus": "BEHIND"}))
     env = {**gh["env"], "WDD_MERGE_STATE_RETRY": "0"}
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=env)
+    r = finish(run["plan_wt"], "finish", PLAN, env=env)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "behind" in r.stderr.lower()
     assert merges(gh) == []
@@ -1083,7 +1083,7 @@ def test_a_duplicated_check_name_is_judged_by_its_worst_result(
     write_receipt(run, gh["head"])
     (gh["dir"] / "checks.json").write_text(rollup(*checks))
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == rc, r.stdout + r.stderr
     assert expect in r.stderr.lower()
     assert merges(gh) == []
@@ -1106,7 +1106,7 @@ def test_a_local_head_ahead_of_the_pr_is_refused_naming_both(run, gh):
     local = git("rev-parse", "HEAD", cwd=run["plan_wt"])
     assert local != gh["head"]
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     out = r.stdout + r.stderr
     assert local in out and gh["head"] in out, "name both, or the reader cannot act"
@@ -1126,7 +1126,7 @@ def test_a_pr_retargeted_to_another_base_is_refused(run, gh):
     write_receipt(run, gh["head"])
     set_pr_head(gh, gh["head"], base="release-2")
 
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "release-2" in r.stderr and "master" in r.stderr
     assert merges(gh) == []
@@ -1189,7 +1189,7 @@ def test_check_refuses_a_must_fix_verdict(run):
 def test_cleanup_does_not_ask_for_a_verdict(run):
     """`cleanup` runs after the merge; review coverage was settled before it."""
     (run["plan_wt"] / ".pitcall" / "wdd" / SLUG / "final-review-1.md").unlink()
-    r = finish(run["plan_wt"], "cleanup", PLAN)
+    r = finish(run["plan_wt"], "pack-down", PLAN)
     assert "rule 1" not in r.stderr, r.stdout + r.stderr
 
 
@@ -1198,7 +1198,7 @@ def test_merge_refuses_a_pr_head_the_last_review_did_not_see(run, gh):
     write_verdict(run["plan_wt"], reviewed=git("rev-parse", "HEAD~1", cwd=run["plan_wt"]),
                   since=git("merge-base", "origin/master", "HEAD", cwd=run["plan_wt"]))
     write_receipt(run, gh["head"])
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "rule 3" in r.stderr
     assert merges(gh) == []
@@ -1215,7 +1215,7 @@ SWEEP_LEDGER = "\n".join([
 def test_ship_appends_the_sweep_section(run, gh):
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
     (gh["dir"] / "issue-10").write_text("")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     body = (gh["dir"] / "body.txt").read_text()
     assert "## Sweep" in body
@@ -1225,7 +1225,7 @@ def test_ship_appends_the_sweep_section(run, gh):
 
 def test_ship_leaves_out_a_close_that_does_not_resolve(run, gh):
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "does not resolve" in r.stdout
     assert "Closes #10" not in (gh["dir"] / "body.txt").read_text()
@@ -1234,14 +1234,14 @@ def test_ship_leaves_out_a_close_that_does_not_resolve(run, gh):
 def test_a_second_ship_does_not_repeat_the_sweep_section(run, gh):
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
     (gh["dir"] / "issue-10").write_text("")
-    finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert (gh["dir"] / "body.txt").read_text().count("## Sweep") == 1
 
 
 def test_ship_without_sweep_lines_adds_no_section(run, gh):
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (gh["dir"] / "body.txt").exists()
 
@@ -1259,7 +1259,7 @@ def fail_ledger_step(gh, step, status=7):
     shim = Path(gh["env"]["PATH"].split(":")[0]) / "python3"
     shim.write_text(
         "#!/usr/bin/env bash\n"
-        f'case " $* " in *"/wdd-ledger {step} "*)\n'
+        f'case " $* " in *"/race-ledger {step} "*)\n'
         f'  echo "wdd-ledger: injected failure" >&2; exit {status} ;;\n'
         "esac\n"
         f'exec "{real}" "$@"\n'
@@ -1272,7 +1272,7 @@ def test_ship_says_so_when_the_sweep_section_cannot_be_built(run, gh):
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
     (gh["dir"] / "issue-10").write_text("")
     fail_ledger_step(gh, "sweep-section")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "'wdd-ledger sweep-section' exited 7" in r.stdout, r.stdout
     assert not (gh["dir"] / "body.txt").exists()
@@ -1284,7 +1284,7 @@ def test_ship_writes_no_unconfirmed_close_when_the_closes_cannot_be_listed(run, 
     #10 unchecked."""
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
     fail_ledger_step(gh, "closes")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "'wdd-ledger closes' exited 7" in r.stdout, r.stdout
     assert not (gh["dir"] / "body.txt").exists()
@@ -1293,7 +1293,7 @@ def test_ship_writes_no_unconfirmed_close_when_the_closes_cannot_be_listed(run, 
 def test_ship_refuses_a_commit_no_review_covered(run, gh):
     (run["plan_wt"] / "late.txt").write_text("changed after the review\n")
     commit_path(run["plan_wt"], "late.txt", "a change after the last review")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 1, r.stdout + r.stderr
     assert "rule 3" in r.stderr
     assert not calls(gh, "pr create"), "nothing is pushed or opened for an unreviewed commit"
@@ -1343,7 +1343,7 @@ def label_edits(gh):
 
 def test_ship_swaps_the_claim_label_for_in_review(run, gh):
     cut_for_issue(run, gh)
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     # One call per label, `in_review` first: a refusal of one never takes the
     # other down with it, and `ongoing` only comes off once `in_review` is on.
@@ -1359,7 +1359,7 @@ def test_ship_does_not_relabel_when_the_pr_could_not_be_linked(run, gh):
     """A body edit that failed leaves the PR closing nothing, and the label with it."""
     cut_for_issue(run, gh)
     (gh["dir"] / "pr_edit_fails").write_text("")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == []
     assert "no claim label changed" in r.stdout, r.stdout
@@ -1368,7 +1368,7 @@ def test_ship_does_not_relabel_when_the_pr_could_not_be_linked(run, gh):
 def test_ship_does_not_relabel_on_a_branch_that_names_no_issue(run, gh):
     """Labels configured, prefix configured -- only the branch name is missing."""
     name_the_claim_labels(run, gh)
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == []
     assert "no claim label changed" in r.stdout, r.stdout
@@ -1377,7 +1377,7 @@ def test_ship_does_not_relabel_on_a_branch_that_names_no_issue(run, gh):
 def test_ship_does_not_relabel_an_issue_that_does_not_resolve_here(run, gh):
     cut_for_issue(run, gh)
     (gh["dir"] / "issue-20").unlink()
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == []
     assert "does not resolve" in r.stdout, r.stdout
@@ -1386,7 +1386,7 @@ def test_ship_does_not_relabel_an_issue_that_does_not_resolve_here(run, gh):
 def test_ship_leaves_the_label_alone_without_an_in_review_label(run, gh):
     """Never a guessed name: the project names its labels or nothing is applied."""
     cut_for_issue(run, gh, status_labels={"ongoing": "status:ongoing"})
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == []
     assert "status_labels.in_review is not configured" in r.stdout, r.stdout
@@ -1394,7 +1394,7 @@ def test_ship_leaves_the_label_alone_without_an_in_review_label(run, gh):
 
 def test_ship_adds_in_review_alone_without_an_ongoing_label(run, gh):
     cut_for_issue(run, gh, status_labels={"in_review": "status:in-review"})
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --add-label status:in-review"]
 
@@ -1403,7 +1403,7 @@ def test_a_relabel_gh_refuses_still_ships_and_keeps_the_claim(run, gh):
     """`in_review` would not go on, so `ongoing` stays: the issue is still claimed."""
     cut_for_issue(run, gh)
     (gh["dir"] / "issue_edit_fails").write_text("")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --add-label status:in-review"]
     assert "could not put status:in-review on #20" in r.stdout, r.stdout
@@ -1414,7 +1414,7 @@ def test_a_relabel_gh_refuses_still_ships_and_keeps_the_claim(run, gh):
 def test_an_ongoing_label_gh_will_not_remove_is_reported(run, gh):
     cut_for_issue(run, gh)
     (gh["dir"] / "refuse_label").write_text("status:ongoing")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert len(label_edits(gh)) == 2
     assert "status:ongoing could not be removed" in r.stdout, r.stdout
@@ -1424,7 +1424,7 @@ def test_ship_says_so_when_no_pr_can_be_found(run, gh):
     """Nothing to link means nothing to relabel -- and the reason is the PR, not the branch."""
     cut_for_issue(run, gh)
     (gh["dir"] / "no_pr").write_text("")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "no PR found for 'feat/20-demo'" in r.stdout, r.stdout
     assert "closes no issue" not in r.stdout, "said once, by the step that knows why"
@@ -1435,7 +1435,7 @@ def test_one_label_named_for_both_states_stays_on_at_ship(run, gh):
     """A project with a single 'in progress' label names it twice. Adding it is
     a no-op; removing it afterwards would leave a claimed issue unlabelled."""
     cut_for_issue(run, gh, status_labels={"ongoing": "status:wip", "in_review": "status:wip"})
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --add-label status:wip"]
 
@@ -1448,7 +1448,7 @@ def test_an_unreadable_pr_body_is_never_overwritten(run, gh):
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
     (gh["dir"] / "issue-10").write_text("")
     (gh["dir"] / "pr_body_fails").write_text("")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert calls(gh, "pr edit") == []
     assert "could not read the PR body; add 'Closes #20' before merging." in r.stdout, r.stdout
@@ -1464,7 +1464,7 @@ def test_closes_20_in_the_body_does_not_close_2(run, gh):
     """
     cut_for_issue(run, gh, n=2)
     (gh["dir"] / "body.txt").write_text("Closes #20")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert (gh["dir"] / "body.txt").read_text().endswith("\n\nCloses #2"), r.stdout
     assert label_edits(gh) == ["issue edit 2 --add-label status:in-review",
@@ -1475,7 +1475,7 @@ def test_a_keyword_inside_a_word_does_not_close_the_issue(run, gh):
     """`encloses #20` ends in `closes #20` and closes nothing."""
     cut_for_issue(run, gh)
     (gh["dir"] / "body.txt").write_text("this encloses #20 in a box")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert (gh["dir"] / "body.txt").read_text().endswith("\n\nCloses #20"), r.stdout
 
@@ -1484,7 +1484,7 @@ def test_another_closing_keyword_already_closes_the_issue(run, gh):
     """GitHub closes on any of its keywords, in any case; so does this read."""
     cut_for_issue(run, gh)
     (gh["dir"] / "body.txt").write_text("- fix the thing\n\nfixes: #20")
-    r = finish(run["plan_wt"], "ship", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "already closes #20" in r.stdout, r.stdout
     assert calls(gh, "pr edit") == []
@@ -1501,7 +1501,7 @@ def merged_for_issue(run, gh, body="Closes #20", **overrides):
 
 def test_merge_clears_the_claim_labels_from_the_issue_it_closed(run, gh):
     merged_for_issue(run, gh)
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --remove-label status:ongoing",
                                "issue edit 20 --remove-label status:in-review"]
@@ -1514,7 +1514,7 @@ def test_merge_clears_the_claim_labels_from_the_issue_it_closed(run, gh):
 def test_merge_on_a_branch_that_names_no_issue_merges_and_says_so(run, gh):
     head = name_the_claim_labels(run, gh)
     write_receipt(run, head)
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert merges(gh)
     assert label_edits(gh) == []
@@ -1524,7 +1524,7 @@ def test_merge_on_a_branch_that_names_no_issue_merges_and_says_so(run, gh):
 def test_merge_leaves_the_label_on_an_issue_the_pr_does_not_close(run, gh):
     """The issue stays open, so its claim is still the truth about it."""
     merged_for_issue(run, gh, body="Refs #20")
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == []
     assert "does not close #20" in r.stdout, r.stdout
@@ -1534,7 +1534,7 @@ def test_merge_says_so_when_the_pr_body_cannot_be_read(run, gh):
     """Unread is not 'does not close': say which one happened."""
     merged_for_issue(run, gh)
     (gh["dir"] / "pr_body_fails").write_text("")
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == []
     assert "could not read PR #7's body" in r.stdout, r.stdout
@@ -1542,7 +1542,7 @@ def test_merge_says_so_when_the_pr_body_cannot_be_read(run, gh):
 
 def test_merge_without_claim_labels_configured_clears_nothing(run, gh):
     merged_for_issue(run, gh, status_labels={"blocked": "status:blocked"})
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == []
     assert "not configured" in r.stdout, r.stdout
@@ -1550,14 +1550,14 @@ def test_merge_without_claim_labels_configured_clears_nothing(run, gh):
 
 def test_merge_clears_only_the_claim_label_that_is_configured(run, gh):
     merged_for_issue(run, gh, status_labels={"ongoing": "status:ongoing"})
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --remove-label status:ongoing"]
 
 
 def test_one_label_named_for_both_states_is_cleared_once_at_merge(run, gh):
     merged_for_issue(run, gh, status_labels={"ongoing": "status:wip", "in_review": "status:wip"})
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --remove-label status:wip"]
 
@@ -1567,7 +1567,7 @@ def test_one_label_gh_refuses_does_not_keep_the_other_on(run, gh):
     other way round -- one refusal would bring #46's stale label back."""
     merged_for_issue(run, gh)
     (gh["dir"] / "refuse_label").write_text("status:in-review")
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert len(label_edits(gh)) == 2
     assert "cleared status:ongoing from #20" in r.stdout, r.stdout
@@ -1577,7 +1577,7 @@ def test_one_label_gh_refuses_does_not_keep_the_other_on(run, gh):
 def test_a_label_clear_gh_refuses_does_not_unwind_the_merge(run, gh):
     merged_for_issue(run, gh)
     (gh["dir"] / "issue_edit_fails").write_text("")
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "could not clear status:ongoing from #20" in r.stdout, r.stdout
     assert "could not clear status:in-review from #20" in r.stdout, r.stdout
@@ -1590,7 +1590,7 @@ def test_the_label_is_cleared_even_when_the_main_checkout_will_not_fast_forward(
     (run["main"] / "stray.txt").write_text("committed in the shared checkout\n")
     commit_path(run["main"], "stray.txt", "a local commit nobody meant to make")
     merged_for_issue(run, gh)
-    r = finish(run["plan_wt"], "merge", PLAN, env=gh["env"])
+    r = finish(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 4, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --remove-label status:ongoing",
                                "issue edit 20 --remove-label status:in-review"]
