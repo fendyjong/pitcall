@@ -1,4 +1,4 @@
-"""Task worktree creation and teardown."""
+"""Task worktree creation and removal."""
 
 import json
 import subprocess
@@ -9,10 +9,10 @@ import pytest
 from conftest import run_script
 
 #: The four keys `load_config` requires of every project, plus the one
-#: `wave-worktree` itself reads. `default_branch` matches the fixture repo's
+#: `lap-worktree` itself reads. `default_branch` matches the fixture repo's
 #: branch, though this script never consults it.
 CONFIG = {
-    "bringup": None,
+    "out_lap": None,
     "validate": "true",
     "default_branch": "main",
     "required_check": "ci",
@@ -22,7 +22,7 @@ CONFIG = {
 
 @pytest.fixture
 def repo(repo):
-    """Override the shared `repo` fixture: `wave-worktree` now refuses to run
+    """Override the shared `repo` fixture: `lap-worktree` now refuses to run
     without a `pitcall.config.json` naming `worktree_dir` — a missing key is a
     loud failure, not a fallback to some default directory (see
     `scripts/project-config`). `worktree_dir` is set to `.worktrees` here
@@ -122,7 +122,7 @@ def test_remove_refuses_to_discard_uncommitted_work(repo):
     )
     assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
-    (path / "unsaved.txt").write_text("an implementer's work\n")
+    (path / "unsaved.txt").write_text("a driver's work\n")
 
     r = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert r.returncode == 4
@@ -150,7 +150,7 @@ def _add_submodule(repo, tmp_path: Path) -> None:
     # here would be accepted and then silently ignored. The repo fixture
     # already points GIT_CONFIG_GLOBAL at a throwaway file, so writing it there
     # makes it global scope for every git call in this test, including the ones
-    # wave-worktree itself makes inside the new worktree.
+    # lap-worktree itself makes inside the new worktree.
     Path(repo.env["GIT_CONFIG_GLOBAL"]).write_text(
         '[protocol "file"]\n\tallow = always\n'
     )
@@ -187,7 +187,7 @@ def test_remove_refuses_dirty_work_a_submodule_ignore_rule_would_hide(repo, tmp_
 
     It lives in a committed `.gitmodules`, so any repo can introduce it, and a
     user's global `diff.ignoreSubmodules` does the same. Because the removal is
-    forced, a blinded check would silently destroy an implementer's work — the
+    forced, a blinded check would silently destroy a driver's work — the
     one thing this script must never do.
     """
     _add_submodule(repo, tmp_path)
@@ -203,12 +203,12 @@ def test_remove_refuses_dirty_work_a_submodule_ignore_rule_would_hide(repo, tmp_
     path = Path(created.stdout.strip())
 
     work = path / "libs/sub/unsaved.txt"
-    work.write_text("an implementer's work\n")
+    work.write_text("a driver's work\n")
 
     removed = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert removed.returncode == 4, removed.stderr
     assert "uncommitted changes" in removed.stderr
-    assert work.exists(), "the forced removal discarded an implementer's work"
+    assert work.exists(), "the forced removal discarded a driver's work"
 
 
 def test_remove_on_a_missing_worktree_exits_2(repo):
@@ -220,3 +220,9 @@ def test_usage_error_exits_2(repo):
     r = run_script("lap-worktree", "create", cwd=repo.path, env=repo.env)
     assert r.returncode == 2
     assert "usage:" in r.stderr
+
+
+def test_usage_names_the_lap_worktree(repo):
+    r = run_script("lap-worktree", cwd=repo.path, env=repo.env)
+    assert r.returncode == 2
+    assert "usage: lap-worktree create SLUG N BASE_REF | lap-worktree remove SLUG N" in r.stderr

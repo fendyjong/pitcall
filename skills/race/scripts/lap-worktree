@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create or remove one task worktree for a wave.
+# Create or remove one task worktree for a lap.
 #
 # `git worktree add` does not initialise submodules, so every submodule lands
 # empty and any tooling that reads one fails. The failure is worse than it
@@ -15,8 +15,8 @@
 # the plan branch as the parent segment.
 #
 # Usage:
-#   wave-worktree create SLUG N BASE_REF   -> prints the worktree's absolute path
-#   wave-worktree remove SLUG N
+#   lap-worktree create SLUG N BASE_REF   -> prints the worktree's absolute path
+#   lap-worktree remove SLUG N
 # Exit: 0 ok | 2 usage or no such worktree | 3 branch or path exists | 4 refused
 set -euo pipefail
 
@@ -25,7 +25,7 @@ slug=${2:-}
 n=${3:-}
 
 if [ -z "$cmd" ] || [ -z "$slug" ] || [ -z "$n" ]; then
-  echo "usage: wave-worktree create SLUG N BASE_REF | wave-worktree remove SLUG N" >&2
+  echo "usage: lap-worktree create SLUG N BASE_REF | lap-worktree remove SLUG N" >&2
   exit 2
 fi
 
@@ -40,7 +40,7 @@ case "$cmd" in
   create)
     base=${4:-}
     if [ -z "$base" ]; then
-      echo "usage: wave-worktree create SLUG N BASE_REF" >&2
+      echo "usage: lap-worktree create SLUG N BASE_REF" >&2
       exit 2
     fi
 
@@ -89,12 +89,12 @@ case "$cmd" in
     # `submodule.<name>.ignore = all` in .gitmodules -- or a user's global
     # diff.ignoreSubmodules -- makes a plain `status --porcelain` report a
     # dirty submodule as clean. Because the removal below is forced, a blinded
-    # check here silently destroys an implementer's work. This flag pins the
+    # check here silently destroys a driver's work. This flag pins the
     # answer regardless of ambient config.
     if [ -n "$(git -C "$dir" status --porcelain --ignore-submodules=none)" ]; then
       echo "refusing: $dir has uncommitted changes." >&2
       echo "Commit them or remove the worktree by hand -- silently discarding an" >&2
-      echo "implementer's work is never this script's call." >&2
+      echo "driver's work is never this script's call." >&2
       exit 4
     fi
 
