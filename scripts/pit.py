@@ -705,13 +705,13 @@ def _cmd_run(session: str, worktree: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="lane",
+        prog="pit",
         description="Serialise stack bring-ups across every worktree on this machine.",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p_run = sub.add_parser(
-        "run",
+        "lane",
         help="acquire the lane, run bringup + validate, release, name the next session",
     )
     p_run.add_argument("--session", required=True, help="this session's addressable name")
@@ -731,7 +731,7 @@ def main(argv: list[str] | None = None) -> int:
     p_drop.add_argument("--session", required=True)
 
     args = ap.parse_args(argv)
-    if args.cmd == "run":
+    if args.cmd == "lane":
         # The caller's own checkout, NOT the shared root: defaulting to the
         # main checkout would run the bring-up against code this session is not
         # working on, and the result would look perfectly plausible.

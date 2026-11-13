@@ -1,5 +1,5 @@
 ---
-name: wave-driven-development
+name: race
 description: Use when taking an approved spec through implementation to a mergeable branch, in the current session
 ---
 
@@ -341,7 +341,7 @@ without getting stuck? Its calibration is deliberately loose — it flags only
 what would cause real problems during implementation — so an Issues Found
 verdict is worth acting on rather than arguing with. Fix what it raises, then:
 
-**Validate:** `scripts/plan-tasks --validate PLAN_FILE` (script paths here and
+**Validate:** `scripts/qualifying PLAN_FILE` (script paths here and
 in Phase 2 are relative to this skill's own directory, wherever the plugin is
 installed). Fix the plan and re-run until it exits 0 — the printed problems
 name the exact rule and tasks involved. A plan that fails validation is not
@@ -396,7 +396,7 @@ the plan branch, ready for Final Review.
    its task-worktree guard on `"${slug}-t"[0-9]*`, so a shortened slug is a
    pattern the real worktrees never match, and `wdd-workspace` run inside
    one would silently create an orphan workspace instead of refusing.
-3. Resolve the workspace: `scripts/wdd-workspace PLAN_FILE` prints the
+3. Resolve the workspace: `scripts/race-workspace PLAN_FILE` prints the
    absolute path used for briefs, reports, review packages, and the ledger.
    Another plan's directory is never yours to read or write. The workspace is
    git-ignored scratch, so a `git clean -fdx` destroys it; if that happens,
@@ -432,7 +432,7 @@ the plan branch, ready for Final Review.
    record each ruling beside its row. If the scan is clean, proceed without
    comment. The review loop remains the net for conflicts that only emerge from
    implementation.
-7. Re-run `scripts/plan-tasks --validate PLAN_FILE`. A plan can be
+7. Re-run `scripts/qualifying PLAN_FILE`. A plan can be
    hand-edited between Phase 1 and Phase 2; re-validate before any worktree
    is created.
 
@@ -446,7 +446,7 @@ expensive one. Tiers: see Model Selection, below.
 1. **Create each task's worktree.** Capture the branch point once per wave:
    `BASE=$(git rev-parse HEAD)`. Record it — it does not move again until
    step 6 merges this wave, so every review and re-review below reuses this
-   same value. Then `scripts/wave-worktree create <slug> <N> "$BASE"`
+   same value. Then `scripts/lap-worktree create <slug> <N> "$BASE"`
    (worktree + branch `<slug>-t<N>`), and `scripts/task-brief PLAN_FILE <N>`
    to write its brief. **The report file has no script of its own — name it
    by convention:** the brief's filename with `-brief` replaced by
@@ -532,7 +532,7 @@ expensive one. Tiers: see Model Selection, below.
    `wave-worktree remove <slug> <N>` still works normally afterward; it only
    checks for a worktree at that path.
 4. **Dispatch the whole wave's implementers in one message**, one per task
-   worktree, using `implementer-prompt.md`, so they run concurrently. **Read
+   worktree, using `driver-prompt.md`, so they run concurrently. **Read
    each task's `Model:` line and pass that tier's model as the dispatch's
    `model` parameter** — the plan already decided this (Phase 1, Building the
    waves, step 5); here you only resolve tier to the concrete model available
@@ -858,7 +858,7 @@ Every ruling is a ledger line, written as
 `Ruling: <what you decided> — <why> — <what it costs if wrong>`.
 
 **The sweep's lines** (Final Review, below) are anchored at the start of the line and read by
-`scripts/wdd-ledger`, the one parser of these formats — the example below is fed through it by
+`scripts/race-ledger`, the one parser of these formats — the example below is fed through it by
 the test suite, so a format changed here and not there fails a test rather than a run:
 
 | Line | Written |
@@ -1026,7 +1026,7 @@ branches before dying. Merging a branch that is already an ancestor reports "Alr
 changes nothing, so integration is idempotent — re-dispatch it over the wave's full branch list and
 let git skip what already landed. Do not try to work out which merges happened.
 
-**3. Re-validate the plan** with `scripts/plan-tasks --validate PLAN_FILE`. It may have been
+**3. Re-validate the plan** with `scripts/qualifying PLAN_FILE`. It may have been
 hand-edited between sessions, and the check is cheap.
 
 **4. Recover per-task state** for every task in the open wave with no `Task <N>: complete` line:
@@ -1059,7 +1059,7 @@ implementer's work, and guessing permissively destroys real work.
 line, only the branch survives. Degrade to commits-only and say so in the dispatch.
 
 **5. Resume dispatching.** For every task recovered in step 4, dispatch a fresh implementer per
-`implementer-prompt.md` — the original implementer's context does not survive a session death. The
+`driver-prompt.md` — the original implementer's context does not survive a session death. The
 dispatch **must state explicitly that a prior attempt was interrupted**: that sentence is what
 activates "If You Are Picking Up an Interrupted Task" in the template, which is skipped by default —
 a dispatch that omits it gets an implementer that believes its worktree is clean and silently
@@ -1094,7 +1094,7 @@ resumed dispatch, so nothing else carries this forward.
 | The integrator hits a merge conflict | Hard BLOCKED. Under the core invariant this cannot happen unless the plan violated its own guarantee, so it is a planning defect, not a merge to resolve. Re-validate the plan and surface it. |
 | A task's diff touches an undeclared path | Spec failure for that task; it enters the fix loop. If the file is genuinely needed, the plan is wrong — fix the plan and re-validate before continuing. |
 | An implementer reports NEEDS_CONTEXT | Answer and re-dispatch. Siblings continue unaffected. |
-| A sweep task cannot finish — its 5-round cap, or its item outgrows admission | It is never merged, and no wave runs after the sweep range. A `sweep` or approved `ask` item is re-routed `issue`, its amendment line struck through; a `must-fix` item becomes `Sweep: introduced must-fix (late)` for review #2's fix dispatch. Remove its worktree (`scripts/wave-worktree remove <slug> <N>`, which keeps the branch), rename the branch out of the task namespace with `git branch -m <slug>-t<N> <slug>-dropped-t<N>`, push it (`git push origin <slug>-dropped-t<N>`) so the re-routed issue, which names the branch and its tip sha, links to something that resolves, and record `Ruling: <item> dropped, branch <slug>-dropped-t<N> at <sha7> — <why it could not finish> — <what it costs if wrong>`: `wdd` refuses every unmerged `<slug>-t<N>`, and merging the branch to quiet it would land the work this row exists to keep out. `cleanup` leaves the renamed branch alone — it is the only copy of the attempt. The retry-in-the-next-wave above does not apply. |
+| A sweep task cannot finish — its 5-round cap, or its item outgrows admission | It is never merged, and no wave runs after the sweep range. A `sweep` or approved `ask` item is re-routed `issue`, its amendment line struck through; a `must-fix` item becomes `Sweep: introduced must-fix (late)` for review #2's fix dispatch. Remove its worktree (`scripts/lap-worktree remove <slug> <N>`, which keeps the branch), rename the branch out of the task namespace with `git branch -m <slug>-t<N> <slug>-dropped-t<N>`, push it (`git push origin <slug>-dropped-t<N>`) so the re-routed issue, which names the branch and its tip sha, links to something that resolves, and record `Ruling: <item> dropped, branch <slug>-dropped-t<N> at <sha7> — <why it could not finish> — <what it costs if wrong>`: `wdd` refuses every unmerged `<slug>-t<N>`, and merging the branch to quiet it would land the work this row exists to keep out. `cleanup` leaves the renamed branch alone — it is the only copy of the attempt. The retry-in-the-next-wave above does not apply. |
 | Review #3, or any later review, leaves a must-fix open | `Final review #<k>: BLOCKED at <sha7>`; stop, and hand over the open findings, every review report, and the fix history. |
 
 ## Automation boundary
@@ -1285,7 +1285,7 @@ the item's reproduction or failing check, written as the failing test** — a sw
 without the test that would have caught it. `must-fix` items are planned the same way. Items that
 share a file may share a task, if it stays right-sized.
 
-Then the usual self-review, one plan review, and `scripts/plan-tasks --validate`, whose Rule 8
+Then the usual self-review, one plan review, and `scripts/qualifying`, whose Rule 8
 refuses a second `## Sweep` section and a sweep task in any wave at or before the last spec wave.
 Append `Sweep plan: waves <A>-<B>`, and run those waves exactly as Phase 2 runs any wave. Write a
 `Fixed:` line as each `sweep` or approved `ask` item's task completes.
@@ -1308,7 +1308,7 @@ the sweep range** — `wdd` refuses a wave dispatched after `<B>`, and a second 
 
 **Either way, its branch leaves the task namespace.** `wdd` refuses every `<slug>-t<N>` branch that
 is not merged into the plan branch, and merging this one to quiet it would land exactly the work
-this paragraph keeps out. Remove the task's worktree with `scripts/wave-worktree remove <slug> <N>`
+this paragraph keeps out. Remove the task's worktree with `scripts/lap-worktree remove <slug> <N>`
 (which keeps the branch), rename the branch with
 `git branch -m <slug>-t<N> <slug>-dropped-t<N>`, push it with
 `git push origin <slug>-dropped-t<N>` — task branches are otherwise local, and a link to a ref in
@@ -1422,19 +1422,19 @@ reads `leave it, #<N> blocked`, post one comment on `#N` — `Found during #<spe
 is reported in your final message and blocks nothing. After the rulings, your final message lists
 the issues the sweep closed, filed and noted. A `BLOCKED` run files nothing and posts nothing.
 
-Run `scripts/wdd`, from the **plan worktree**:
+Run `scripts/race`, from the **plan worktree**:
 
 ```bash
-scripts/wdd check   PLAN_FILE   # verify only, no side effects
-scripts/wdd ship    PLAN_FILE   # check, push, open PR, sweep section, in_review label
+scripts/race check   PLAN_FILE   # verify only, no side effects
+scripts/race grid    PLAN_FILE   # check, push, open PR, sweep section, in_review label
 
 # bringup + validate -> a receipt for this exact commit
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run --session <session-name>
 
-scripts/wdd merge   PLAN_FILE   # receipt + green -> merge, clear claim label, sync main
+scripts/race finish   PLAN_FILE   # receipt + green -> merge, clear claim label, sync main
 # per owner-approved `full` fix of a blocked issue, if any (below)
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/block.py <N> --clear
-scripts/wdd cleanup PLAN_FILE   # task branches, worktrees, workspace
+scripts/race pack-down PLAN_FILE   # task branches, worktrees, workspace
 ```
 
 **The lane step is yours to run, not the human's** (Automation boundary). Put

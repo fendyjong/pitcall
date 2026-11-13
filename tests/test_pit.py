@@ -20,7 +20,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-import lane  # noqa: E402
+import pit  # noqa: E402
 import lane_config  # noqa: E402
 
 # Identity and protocol settings passed per-command so these repositories build
@@ -68,7 +68,7 @@ def _new_repo(path: Path) -> Path:
 def test_lane_dir_is_the_callers_project_not_the_modules_own_repository(tmp_path, monkeypatch):
     project = _new_repo(tmp_path / "project")
     monkeypatch.chdir(project)
-    assert lane.lane_dir() == project / ".pitcall"
+    assert pit.lane_dir() == project / ".pitcall"
 
 
 def test_every_worktree_of_one_project_resolves_to_one_lane(tmp_path, monkeypatch):
@@ -84,9 +84,9 @@ def test_every_worktree_of_one_project_resolves_to_one_lane(tmp_path, monkeypatc
     _git("worktree", "add", "-q", str(linked), "-b", "side", cwd=project)
 
     monkeypatch.chdir(project)
-    from_main = lane.lane_dir()
+    from_main = pit.lane_dir()
     monkeypatch.chdir(linked)
-    assert lane.lane_dir() == from_main
+    assert pit.lane_dir() == from_main
     # Two callers agreeing on the SAME WRONG directory would satisfy the line
     # above, so name the one they have to agree on.
     assert from_main == project / ".pitcall"
@@ -116,7 +116,7 @@ def test_the_lock_is_shared_while_the_checkout_and_config_are_the_callers(
     monkeypatch.chdir(linked)
 
     # The lock is shared with every other worktree of this project.
-    assert lane.lane_dir() == project / ".pitcall"
+    assert pit.lane_dir() == project / ".pitcall"
 
     # The config is the one committed on THIS branch, in THIS checkout.
     assert lane_config.config_path() == linked / ".pitcall" / "config.json"
@@ -125,9 +125,9 @@ def test_the_lock_is_shared_while_the_checkout_and_config_are_the_callers(
     # through main() rather than by re-deriving it, because the wiring of the
     # default is the part that was wrong.
     seen = {}
-    monkeypatch.setattr(lane, "_cmd_run",
+    monkeypatch.setattr(pit, "_cmd_run",
                         lambda session, worktree: (seen.update(worktree=worktree), 0)[1])
-    assert lane.main(["run", "--session", "sess-a"]) == 0
+    assert pit.main(["lane", "--session", "sess-a"]) == 0
     assert seen["worktree"] == str(linked)
 
 
@@ -152,7 +152,7 @@ def test_lane_dir_from_inside_a_submodule_is_the_superprojects(tmp_path, monkeyp
     assert Path(own).parent != project, \
         "expected the submodule to resolve elsewhere — otherwise this test is vacuous"
 
-    assert lane.lane_dir() == project / ".pitcall"
+    assert pit.lane_dir() == project / ".pitcall"
 
 
 def test_a_worktree_of_a_submodule_still_resolves_the_projects_lane(tmp_path, monkeypatch):
@@ -186,8 +186,8 @@ def test_a_worktree_of_a_submodule_still_resolves_the_projects_lane(tmp_path, mo
                       cwd=sub_worktree)).parent
     assert naive != project, "the wrong answer is not reachable — this test is vacuous"
 
-    assert lane.lane_dir() == project / ".pitcall"
-    assert ".git" not in lane.lane_dir().parts, "the lane must never live inside a git dir"
+    assert pit.lane_dir() == project / ".pitcall"
+    assert ".git" not in pit.lane_dir().parts, "the lane must never live inside a git dir"
     # The lane has a defensible answer here; the CHECKOUT does not. The session
     # is working on the submodule, the bring-up belongs to the project, and
     # picking either silently would validate a checkout nobody on this branch
@@ -220,7 +220,7 @@ def test_worktrees_of_sibling_submodules_do_not_form_a_private_shared_lane(
         monkeypatch.chdir(wt)
         naive[name] = Path(_git("rev-parse", "--path-format=absolute", "--git-common-dir",
                                 cwd=wt)).parent
-        assert lane.lane_dir() == project / ".pitcall"
+        assert pit.lane_dir() == project / ".pitcall"
 
     # Non-vacuity, and a record of the shape: naively the two siblings agree with
     # each other and disagree with the project — the exact inversion of what the
@@ -255,7 +255,7 @@ def test_a_submodule_under_a_linked_worktree_of_the_project_resolves_the_project
     # A submodule sitting in its normal place inside that linked worktree: the
     # lane is the project's, while the checkout being worked on is the worktree.
     monkeypatch.chdir(linked / "libs" / "a")
-    assert lane.lane_dir() == project / ".pitcall"
+    assert pit.lane_dir() == project / ".pitcall"
     assert lane_config.worktree_root() == linked
 
     # And a linked worktree OF that submodule, where git stops answering.
@@ -266,7 +266,7 @@ def test_a_submodule_under_a_linked_worktree_of_the_project_resolves_the_project
     common = _git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=deep)
     assert ".git/modules" not in common, \
         "this layout is supposed to lack .git/modules — otherwise it is not the case under test"
-    assert lane.lane_dir() == project / ".pitcall"
+    assert pit.lane_dir() == project / ".pitcall"
     # ...while "which checkout" REFUSES here rather than guessing. This
     # assertion replaces `".git" not in worktree_root().parts`, which was
     # written to pass rather than to pin: the main checkout satisfied it, so
@@ -300,7 +300,7 @@ def test_a_submodule_of_a_submodule_resolves_the_project_and_refuses_a_checkout(
     nested = project / "libs" / "outer" / "vendor" / "inner"
     assert nested.is_dir(), "the recursive checkout did not materialise"
     monkeypatch.chdir(nested)
-    assert lane.lane_dir() == project / ".pitcall"
+    assert pit.lane_dir() == project / ".pitcall"
     assert lane_config.worktree_root() == project
 
     # A worktree of that inner submodule: the lane still resolves, the checkout
@@ -309,7 +309,7 @@ def test_a_submodule_of_a_submodule_resolves_the_project_and_refuses_a_checkout(
     _git("worktree", "add", "-q", str(deep), "-b", "deep-side", cwd=nested)
     deep = deep.resolve()
     monkeypatch.chdir(deep)
-    assert lane.lane_dir() == project / ".pitcall"
+    assert pit.lane_dir() == project / ".pitcall"
     with pytest.raises(RuntimeError, match="--worktree"):
         lane_config.worktree_root()
 
@@ -328,7 +328,7 @@ def test_lane_dir_outside_any_repository_raises_instead_of_using_cwd(tmp_path, m
     assert probe.returncode != 0, "tmp_path is inside a repository — this test proves nothing"
 
     with pytest.raises(RuntimeError):
-        lane.lane_dir()
+        pit.lane_dir()
     assert not (plain / ".pitcall").exists(), "a lane was created outside a project"
 
 
@@ -336,21 +336,21 @@ def test_lane_dir_outside_any_repository_raises_instead_of_using_cwd(tmp_path, m
 
 
 def test_acquire_succeeds_when_free(tmp_path, monkeypatch):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    with lane.acquire("sess-a", "/wt/a") as held:
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    with pit.acquire("sess-a", "/wt/a") as held:
         assert held is not None
 
 
 def test_second_acquire_fails_while_held(tmp_path, monkeypatch):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    with lane.acquire("sess-a", "/wt/a"):
-        assert lane.acquire("sess-b", "/wt/b") is None
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    with pit.acquire("sess-a", "/wt/a"):
+        assert pit.acquire("sess-b", "/wt/b") is None
 
 
 def test_holder_is_recorded_once_in_the_lock(tmp_path, monkeypatch):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    with lane.acquire("sess-a", "/wt/a"):
-        st = lane.status()
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    with pit.acquire("sess-a", "/wt/a"):
+        st = pit.status()
         assert st["holder"]["session"] == "sess-a"
         assert st["holder"]["worktree"] == "/wt/a"
         # No DECISION keys on the pid, but it is not unread: status() surfaces it,
@@ -363,33 +363,33 @@ def test_holder_is_recorded_once_in_the_lock(tmp_path, monkeypatch):
 
 
 def test_queued_session_is_recorded_when_lane_is_held(tmp_path, monkeypatch):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    with lane.acquire("sess-a", "/wt/a"):
-        lane.acquire("sess-b", "/wt/b")
-        assert [e["session"] for e in lane.status()["waiting"]] == ["sess-b"]
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    with pit.acquire("sess-a", "/wt/a"):
+        pit.acquire("sess-b", "/wt/b")
+        assert [e["session"] for e in pit.status()["waiting"]] == ["sess-b"]
 
 
 def test_release_returns_the_next_waiter(tmp_path, monkeypatch):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    a = lane.acquire("sess-a", "/wt/a")
-    lane.acquire("sess-b", "/wt/b")
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    a = pit.acquire("sess-a", "/wt/a")
+    pit.acquire("sess-b", "/wt/b")
     assert a.release() == "sess-b"
     # The hand-off target survives the block, which is what `lane run` reports.
     assert a.next_session == "sess-b"
 
 
 def test_release_returns_none_when_queue_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    assert lane.acquire("sess-a", "/wt/a").release() is None
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    assert pit.acquire("sess-a", "/wt/a").release() is None
 
 
 def test_releasing_frees_the_lane_for_the_next_acquirer(tmp_path, monkeypatch):
     # The kernel lock must be dropped, not just the record: a released lane that
     # still holds LOCK_EX would refuse every future acquirer with no way back.
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    lane.acquire("sess-a", "/wt/a").release()
-    assert lane.status()["holder"] is None
-    with lane.acquire("sess-b", "/wt/b") as held:
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    pit.acquire("sess-a", "/wt/a").release()
+    assert pit.status()["holder"] is None
+    with pit.acquire("sess-b", "/wt/b") as held:
         assert held is not None
 
 
@@ -403,11 +403,11 @@ def test_departed_holders_record_is_reclaimable_and_its_pid_is_ignored(tmp_path,
     liveness comes from the absence of a flock, and reclaim happens whatever
     the pid says.
     """
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    (tmp_path / lane.LOCK).write_text(json.dumps(
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    (tmp_path / pit.LOCK).write_text(json.dumps(
         {"session": "ghost", "worktree": "/wt/ghost", "pid": 4194304, "acquired_at": time.time()}
     ))
-    with lane.acquire("sess-b", "/wt/b") as held:
+    with pit.acquire("sess-b", "/wt/b") as held:
         assert held is not None
 
 
@@ -428,23 +428,23 @@ def test_a_departed_holders_record_is_reclaimable_even_when_its_pid_is_live(
     while every other test in the file still passes — so nothing else here can
     tell the two designs apart.
     """
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    (tmp_path / lane.LOCK).write_text(json.dumps(
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    (tmp_path / pit.LOCK).write_text(json.dumps(
         {"session": "ghost", "worktree": "/wt/ghost",
          "pid": os.getpid(), "acquired_at": time.time()}
     ))
-    with lane.acquire("sess-b", "/wt/b") as held:
+    with pit.acquire("sess-b", "/wt/b") as held:
         assert held is not None
-        assert lane.status()["holder"]["session"] == "sess-b"
+        assert pit.status()["holder"]["session"] == "sess-b"
 
 
 def test_live_holder_is_never_reclaimed_at_any_age(tmp_path, monkeypatch):
     # There is no timeout by design. An hour-old live holder still holds.
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    with lane.acquire("sess-a", "/wt/a"):
-        p = tmp_path / lane.LOCK
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    with pit.acquire("sess-a", "/wt/a"):
+        p = tmp_path / pit.LOCK
         d = json.loads(p.read_text()); d["acquired_at"] = 0; p.write_text(json.dumps(d))
-        assert lane.acquire("sess-b", "/wt/b") is None
+        assert pit.acquire("sess-b", "/wt/b") is None
 
 
 def test_reacquiring_your_own_lane_succeeds_instead_of_queueing(tmp_path, monkeypatch):
@@ -459,17 +459,17 @@ def test_reacquiring_your_own_lane_succeeds_instead_of_queueing(tmp_path, monkey
     no — see `test_lane_run_refuses_a_second_bringup_under_its_own_live_hold`.
     Asserting only the handle here is what let `_cmd_run` run one anyway.
     """
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    with lane.acquire("sess-a", "/wt/a") as outer:
-        again = lane.acquire("sess-a", "/wt/a")
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    with pit.acquire("sess-a", "/wt/a") as outer:
+        again = pit.acquire("sess-a", "/wt/a")
         assert again is not None
         assert again.reentrant is True
-        assert lane.status()["waiting"] == [], "must not queue behind itself"
+        assert pit.status()["waiting"] == [], "must not queue behind itself"
         # The re-entrant handle took no kernel lock, so it must free nothing:
         # releasing here would drop the lane out from under the outer bring-up.
         assert again.release() is None
-        assert lane.status()["holder"]["session"] == "sess-a"
-        assert lane.acquire("sess-b", "/wt/b") is None, "outer hold must survive"
+        assert pit.status()["holder"]["session"] == "sess-a"
+        assert pit.acquire("sess-b", "/wt/b") is None, "outer hold must survive"
     assert outer.next_session == "sess-b"
 
 
@@ -478,25 +478,25 @@ def test_release_raises_when_lane_is_not_held(tmp_path, monkeypatch):
     so a naive implementation falls through and pops a real queue entry on
     behalf of a session that never held the lane — double-advancing the queue
     past a waiter that is never released to. release() must refuse instead."""
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    a = lane.acquire("sess-a", "/wt/a")
-    lane.acquire("sess-b", "/wt/b")     # queued behind sess-a
-    lane.acquire("sess-c", "/wt/c")     # and sess-c behind that
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    a = pit.acquire("sess-a", "/wt/a")
+    pit.acquire("sess-b", "/wt/b")     # queued behind sess-a
+    pit.acquire("sess-c", "/wt/c")     # and sess-c behind that
     assert a.release() == "sess-b"      # lane now free; sess-b popped
     with pytest.raises(RuntimeError):
         a.release()                     # sess-a holds nothing anymore — must raise
-    assert [e["session"] for e in lane.status()["waiting"]] == ["sess-c"], \
+    assert [e["session"] for e in pit.status()["waiting"]] == ["sess-c"], \
         "the refused release must not have advanced the queue past sess-c"
 
 
 def test_drop_and_next_skips_the_unreachable_entry(tmp_path, monkeypatch):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    a = lane.acquire("sess-a", "/wt/a")
-    lane.acquire("sess-b", "/wt/b")
-    lane.acquire("sess-c", "/wt/c")
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    a = pit.acquire("sess-a", "/wt/a")
+    pit.acquire("sess-b", "/wt/b")
+    pit.acquire("sess-c", "/wt/c")
     assert a.release() == "sess-b"
-    assert lane.drop_and_next("sess-b") == "sess-c"
-    assert [e["session"] for e in lane.status()["waiting"]] == ["sess-c"]
+    assert pit.drop_and_next("sess-b") == "sess-c"
+    assert [e["session"] for e in pit.status()["waiting"]] == ["sess-c"]
 
 
 # --- Liveness is the kernel lock, not a recorded pid ----------------------
@@ -511,7 +511,7 @@ def test_drop_and_next_skips_the_unreachable_entry(tmp_path, monkeypatch):
 
 def _hold_until_killed(lane_dir_str, session, ready):
     """Acquire in a child process and keep holding until the parent kills us."""
-    lane_mod = importlib.import_module("lane")
+    lane_mod = importlib.import_module("pit")
     lane_mod.lane_dir = lambda: Path(lane_dir_str)
     held = lane_mod.acquire(session, "/wt/holder")
     ready.put(held is not None)
@@ -519,18 +519,18 @@ def _hold_until_killed(lane_dir_str, session, ready):
 
 
 def test_a_running_holder_is_never_reclaimed_and_a_gone_one_always_is(tmp_path, monkeypatch):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     ctx = mp.get_context("fork")
     ready = ctx.Queue()
     child = ctx.Process(target=_hold_until_killed, args=(str(tmp_path), "sess-holder", ready))
     child.start()
     try:
         assert ready.get(timeout=15) is True
-        recorded_pid = lane.status()["holder"]["pid"]
+        recorded_pid = pit.status()["holder"]["pid"]
         assert recorded_pid == child.pid
 
         # Still running: the lane must NOT be reclaimable, at any age.
-        assert lane.acquire("sess-b", "/wt/b") is None
+        assert pit.acquire("sess-b", "/wt/b") is None
 
         # SIGKILL, so nothing in the holder runs on the way out — no cleanup, no
         # release, exactly what a crashed or rebooted session looks like.
@@ -545,17 +545,17 @@ def test_a_running_holder_is_never_reclaimed_and_a_gone_one_always_is(tmp_path, 
     # The record still names the dead holder — which is why nothing may key on
     # it — but the kernel dropped the flock at process teardown, so the lane is
     # free and the next acquirer takes it.
-    assert lane.status()["holder"]["session"] == "sess-holder"
-    with lane.acquire("sess-c", "/wt/c") as got:
+    assert pit.status()["holder"]["session"] == "sess-holder"
+    with pit.acquire("sess-c", "/wt/c") as got:
         assert got is not None
-        assert lane.status()["holder"]["session"] == "sess-c"
+        assert pit.status()["holder"]["session"] == "sess-c"
 
 
 def test_lane_run_queues_instead_of_running_while_another_process_holds(
         tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     ran = tmp_path / "ran"
-    monkeypatch.setattr(lane, "load_config",
+    monkeypatch.setattr(pit, "load_config",
                         lambda checkout=None: {"bringup": f"touch {ran}", "validate": None, "teardown": None})
     ctx = mp.get_context("fork")
     ready = ctx.Queue()
@@ -563,13 +563,13 @@ def test_lane_run_queues_instead_of_running_while_another_process_holds(
     child.start()
     try:
         assert ready.get(timeout=15) is True
-        assert lane._cmd_run("sess-b", str(tmp_path)) == lane.EXIT_QUEUED
+        assert pit._cmd_run("sess-b", str(tmp_path)) == pit.EXIT_QUEUED
     finally:
         child.kill()
         child.join(timeout=15)
     assert not ran.exists(), "bringup ran while another process held the lane"
     assert "STOP HERE" in capsys.readouterr().out
-    assert [e["session"] for e in lane.status()["waiting"]] == ["sess-b"]
+    assert [e["session"] for e in pit.status()["waiting"]] == ["sess-b"]
 
 
 def test_lane_run_refuses_a_second_bringup_under_its_own_live_hold(
@@ -587,9 +587,9 @@ def test_lane_run_refuses_a_second_bringup_under_its_own_live_hold(
     The child here is a real second process holding under the SAME session name,
     so this is the reachable shape and not an in-process simulation of it.
     """
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     ran = tmp_path / "ran"
-    monkeypatch.setattr(lane, "load_config",
+    monkeypatch.setattr(pit, "load_config",
                         lambda checkout=None: {"bringup": f"touch {ran}", "validate": None, "teardown": None})
     ctx = mp.get_context("fork")
     ready = ctx.Queue()
@@ -597,16 +597,16 @@ def test_lane_run_refuses_a_second_bringup_under_its_own_live_hold(
     child.start()
     try:
         assert ready.get(timeout=15) is True
-        assert lane._cmd_run("sess-a", str(tmp_path)) == lane.EXIT_ALREADY_RUNNING
+        assert pit._cmd_run("sess-a", str(tmp_path)) == pit.EXIT_ALREADY_RUNNING
         assert not ran.exists(), "a second bring-up started on top of a running one"
         # Distinct from EXIT_QUEUED because the caller is NOT queued: nothing will
         # ever push it, so telling it to wait would be telling it to wait forever.
-        assert lane.EXIT_ALREADY_RUNNING != lane.EXIT_QUEUED
-        assert lane.status()["waiting"] == [], "must not queue behind its own hold"
+        assert pit.EXIT_ALREADY_RUNNING != pit.EXIT_QUEUED
+        assert pit.status()["waiting"] == [], "must not queue behind its own hold"
         # Refusing must not free the lane out from under the run that is still going.
-        holder = lane.status()["holder"]
+        holder = pit.status()["holder"]
         assert holder["session"] == "sess-a" and holder["pid"] == child.pid
-        assert lane.acquire("sess-b", "/wt/b") is None, "the live hold must survive"
+        assert pit.acquire("sess-b", "/wt/b") is None, "the live hold must survive"
         assert "REFUSING" in capsys.readouterr().out
     finally:
         child.kill()
@@ -619,9 +619,9 @@ _PROBE = """\
 import json, sys
 from pathlib import Path
 sys.path.insert(0, {scripts!r})
-import lane
-lane.lane_dir = lambda: Path({lane_dir!r})
-held = lane.acquire("sess-probe", "/wt/probe")
+import pit
+pit.lane_dir = lambda: Path({lane_dir!r})
+held = pit.acquire("sess-probe", "/wt/probe")
 Path({out!r}).write_text(json.dumps({{"acquired": held is not None}}))
 """
 
@@ -634,21 +634,21 @@ def test_lane_run_holds_the_lane_across_bringup_and_validate(tmp_path, monkeypat
     that recorded the pid had exited. The probe must be refused, and the lane
     must be free again once `run` returns.
     """
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     probe_py = tmp_path / "probe.py"
     out = tmp_path / "probe.json"
     probe_py.write_text(_PROBE.format(
         scripts=str(ROOT / "scripts"), lane_dir=str(tmp_path), out=str(out)))
-    monkeypatch.setattr(lane, "load_config", lambda checkout=None: {
+    monkeypatch.setattr(pit, "load_config", lambda checkout=None: {
         "bringup": f"{sys.executable} {probe_py}",
         "validate": f"test -f {out}",   # runs only if bringup succeeded
         "teardown": None,
     })
 
-    assert lane._cmd_run("sess-run", str(tmp_path)) == 0
+    assert pit._cmd_run("sess-run", str(tmp_path)) == 0
     assert json.loads(out.read_text()) == {"acquired": False}, \
         "a concurrent process acquired the lane while `run` was mid-bringup"
-    assert lane.status()["holder"] is None, "`run` must release when it finishes"
+    assert pit.status()["holder"] is None, "`run` must release when it finishes"
     # The probe enqueued itself, so `run` must name it as the hand-off target.
     assert "HAND OFF TO: sess-probe" in capsys.readouterr().out
 
@@ -662,25 +662,25 @@ def test_lane_run_reads_the_config_from_the_checkout_it_runs_in(tmp_path, monkey
     argument rather than accepting any, because a double that ignores what it
     is passed cannot tell a threaded value from a dropped one.
     """
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     seen = {}
 
     def fake_load_config(checkout=None):
         seen["checkout"] = checkout
         return {"bringup": None, "validate": None, "teardown": None}
 
-    monkeypatch.setattr(lane, "load_config", fake_load_config)
-    assert lane._cmd_run("sess-a", "/wt/somewhere") == 0
+    monkeypatch.setattr(pit, "load_config", fake_load_config)
+    assert pit._cmd_run("sess-a", "/wt/somewhere") == 0
     assert seen["checkout"] == "/wt/somewhere"
 
 
 def test_lane_run_reports_failure_but_still_releases(tmp_path, monkeypatch):
-    monkeypatch.setattr(lane, "lane_dir", lambda: tmp_path)
-    monkeypatch.setattr(lane, "load_config",
+    monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
+    monkeypatch.setattr(pit, "load_config",
                         lambda checkout=None: {"bringup": "false", "validate": "true", "teardown": None})
-    assert lane._cmd_run("sess-run", str(tmp_path)) == 1
+    assert pit._cmd_run("sess-run", str(tmp_path)) == 1
     # A failed bring-up must not strand the lane — the next session still needs it.
-    assert lane.status()["holder"] is None
+    assert pit.status()["holder"] is None
 
 
 # --- Receipts: evidence that a commit was validated ----------------------
@@ -713,7 +713,7 @@ def _repo_with_config(path: Path, **steps) -> Path:
 def _receipts(project: Path) -> list[str]:
     """Every receipt on disk, read WITHOUT creating the directory.
 
-    Deliberately not routed through `lane.receipts_dir()`, which creates what
+    Deliberately not routed through `pit.receipts_dir()`, which creates what
     it returns: a negative assertion made through it cannot tell "nothing was
     written" from "the directory did not exist until this assertion made it".
     The literal layout is spelled out rather than derived for the same reason
@@ -748,7 +748,7 @@ def test_a_passing_validate_records_the_commit_of_the_checkout_it_ran_in(
         "the two checkouts must sit on different commits, or this proves nothing"
 
     monkeypatch.chdir(project)
-    assert lane._cmd_run("sess-a", str(linked)) == 0
+    assert pit._cmd_run("sess-a", str(linked)) == 0
 
     # Exactly one receipt, and it is the validated worktree's commit. Naming
     # the absent one too: "a receipt exists" would pass on the wrong sha.
@@ -761,9 +761,9 @@ def test_a_passing_validate_records_the_commit_of_the_checkout_it_ran_in(
     # One set of receipts per project, for the same reason there is one lock:
     # a merge step consulting a per-worktree directory would be consulting
     # receipts nobody else ever wrote to.
-    assert lane.receipts_dir() == project / ".pitcall" / "receipts"
+    assert pit.receipts_dir() == project / ".pitcall" / "receipts"
     monkeypatch.chdir(linked)
-    assert lane.receipts_dir() == project / ".pitcall" / "receipts"
+    assert pit.receipts_dir() == project / ".pitcall" / "receipts"
 
 
 def test_a_failing_validate_leaves_no_receipt(tmp_path, monkeypatch):
@@ -773,7 +773,7 @@ def test_a_failing_validate_leaves_no_receipt(tmp_path, monkeypatch):
     project = _repo_with_config(tmp_path / "project", bringup="true", validate="false")
     monkeypatch.chdir(project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 1
+    assert pit._cmd_run("sess-a", str(project)) == 1
     assert _receipts(project) == []
 
 
@@ -787,7 +787,7 @@ def test_a_failed_bringup_leaves_no_receipt_because_validate_never_ran(
                                 bringup="false", validate=f"touch {marker}")
     monkeypatch.chdir(project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 1
+    assert pit._cmd_run("sess-a", str(project)) == 1
     assert not marker.exists(), \
         "validate ran after a failed bringup — this test is not testing what it says"
     assert _receipts(project) == []
@@ -806,7 +806,7 @@ def test_an_unconfigured_validate_leaves_no_receipt(tmp_path, monkeypatch):
     project = _repo_with_config(tmp_path / "project", bringup="true", validate=None)
     monkeypatch.chdir(project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 0, \
+    assert pit._cmd_run("sess-a", str(project)) == 0, \
         "a skipped step is not a failure — the run still succeeds"
     assert _receipts(project) == []
 
@@ -819,7 +819,7 @@ def test_two_runs_at_different_commits_leave_two_receipts(tmp_path, monkeypatch)
     project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
     monkeypatch.chdir(project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 0
+    assert pit._cmd_run("sess-a", str(project)) == 0
     before = _git("rev-parse", "HEAD", cwd=project)
 
     (project / "fix.txt").write_text("a review fix\n")
@@ -828,7 +828,7 @@ def test_two_runs_at_different_commits_leave_two_receipts(tmp_path, monkeypatch)
     after = _git("rev-parse", "HEAD", cwd=project)
     assert before != after, "the second run must be at a different commit"
 
-    assert lane._cmd_run("sess-b", str(project)) == 0
+    assert pit._cmd_run("sess-b", str(project)) == 0
 
     assert _receipts(project) == sorted([f"{before}.json", f"{after}.json"])
     receipts = project / ".pitcall" / "receipts"
@@ -868,7 +868,7 @@ def test_a_commit_landing_during_the_run_leaves_no_receipt(
     monkeypatch.chdir(project)
     before = _git("rev-parse", "HEAD", cwd=project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 0, \
+    assert pit._cmd_run("sess-a", str(project)) == 0, \
         "validate itself succeeded — the run is not a failure, it is unattestable"
 
     after = _git("rev-parse", "HEAD", cwd=project)
@@ -890,7 +890,7 @@ def test_the_receipt_body_is_the_shape_the_merge_step_reads(tmp_path, monkeypatc
     project = _repo_with_config(tmp_path / "project",
                                 bringup="true", validate="true")
     monkeypatch.chdir(project)
-    assert lane._cmd_run("sess-a", str(project)) == 0
+    assert pit._cmd_run("sess-a", str(project)) == 0
 
     sha = _git("rev-parse", "HEAD", cwd=project)
     body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
@@ -916,7 +916,7 @@ def test_a_detached_head_records_a_null_branch_rather_than_the_word_head(
     _git("checkout", "-q", "--detach", cwd=project)
     monkeypatch.chdir(project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 0
+    assert pit._cmd_run("sess-a", str(project)) == 0
     sha = _git("rev-parse", "HEAD", cwd=project)
     body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
     assert body["branch"] is None
@@ -940,7 +940,7 @@ def test_a_checkout_in_another_project_is_refused_before_the_lane_is_taken(
     assert here != elsewhere, "the two projects must differ, or this proves nothing"
 
     monkeypatch.chdir(here)
-    assert lane._cmd_run("sess-a", str(elsewhere)) == lane.EXIT_WRONG_PROJECT
+    assert pit._cmd_run("sess-a", str(elsewhere)) == pit.EXIT_WRONG_PROJECT
 
     # No receipt anywhere: not in the lane we hold, not in the project we would
     # have validated.
@@ -948,8 +948,8 @@ def test_a_checkout_in_another_project_is_refused_before_the_lane_is_taken(
     assert _receipts(elsewhere) == []
     # The lane was never taken, so nobody in `here` is blocked and no waiter was
     # enqueued behind a run that never started.
-    assert lane.status()["holder"] is None
-    assert lane.status()["waiting"] == []
+    assert pit.status()["holder"] is None
+    assert pit.status()["waiting"] == []
     # And the other project was left entirely alone.
     assert not (elsewhere / ".pitcall").exists()
 
@@ -977,7 +977,7 @@ def test_an_uncommitted_change_to_a_tracked_file_leaves_no_receipt(
     monkeypatch.chdir(project)
     sha = _git("rev-parse", "HEAD", cwd=project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 0, \
+    assert pit._cmd_run("sess-a", str(project)) == 0, \
         "validate passed — on a state that is in no commit"
     assert _git("rev-parse", "HEAD", cwd=project) == sha, \
         "HEAD must NOT move — the other guards would mask what this one tests"
@@ -1003,7 +1003,7 @@ def test_an_untracked_file_does_not_block_a_receipt(tmp_path, monkeypatch):
     (project / "scratch.log").write_text("noise nobody tracks\n")
     monkeypatch.chdir(project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 0
+    assert pit._cmd_run("sess-a", str(project)) == 0
     sha = _git("rev-parse", "HEAD", cwd=project)
     assert _receipts(project) == [f"{sha}.json"]
 
@@ -1023,7 +1023,7 @@ def test_a_commit_landing_during_bringup_leaves_no_receipt(tmp_path, monkeypatch
     monkeypatch.chdir(project)
     before = _git("rev-parse", "HEAD", cwd=project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 0
+    assert pit._cmd_run("sess-a", str(project)) == 0
     after = _git("rev-parse", "HEAD", cwd=project)
     assert before != after, "bringup did not commit — this test proves nothing"
 
@@ -1045,9 +1045,9 @@ def test_shas_are_compared_in_full_not_by_a_short_prefix(tmp_path, monkeypatch):
     after = "abc1234" + "b" * 33
     assert before[:7] == after[:7] and before != after and len(before) == len(after) == 40
 
-    monkeypatch.setattr(lane, "_worktree_sha", lambda worktree: after)
-    lane._record_receipt("sess-a", str(project),
-                         lane._Checkout(sha=before, branch="main", dirt=None), "true")
+    monkeypatch.setattr(pit, "_worktree_sha", lambda worktree: after)
+    pit._record_receipt("sess-a", str(project),
+                         pit._Checkout(sha=before, branch="main", dirt=None), "true")
 
     assert _receipts(project) == [], "compared by prefix, these two look like one commit"
 
@@ -1065,7 +1065,7 @@ def test_the_branch_recorded_is_the_one_validation_ran_on(tmp_path, monkeypatch)
     _git("branch", "other", cwd=project)     # same commit, different name
     monkeypatch.chdir(project)
 
-    assert lane._cmd_run("sess-a", str(project)) == 0
+    assert pit._cmd_run("sess-a", str(project)) == 0
     assert _git("symbolic-ref", "--short", "HEAD", cwd=project) == "other", \
         "the run did not switch branches — this test proves nothing"
 
@@ -1090,14 +1090,14 @@ def test_a_receipt_that_cannot_be_written_still_hands_the_lane_off(
 
     project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
     monkeypatch.chdir(project)
-    receipts = lane.receipts_dir()
+    receipts = pit.receipts_dir()
     # A waiter that must be handed off to no matter what happens above it.
-    lane._write_json(lane.lane_dir() / lane.QUEUE,
+    pit._write_json(pit.lane_dir() / pit.QUEUE,
                      [{"session": "sess-waiter", "worktree": "/wt/w", "queued_at": 0.0}])
 
     receipts.chmod(0o500)
     try:
-        assert lane._cmd_run("sess-a", str(project)) == 0
+        assert pit._cmd_run("sess-a", str(project)) == 0
     finally:
         receipts.chmod(0o700)   # or pytest cannot clean the directory up
 
@@ -1105,7 +1105,7 @@ def test_a_receipt_that_cannot_be_written_still_hands_the_lane_off(
     assert "receipt could not be written" in out
     assert "HAND OFF TO: sess-waiter" in out, "the waiter was dropped in silence"
     assert _receipts(project) == [], "fail closed: no receipt means the merge refuses"
-    assert lane.status()["holder"] is None, "the lane must still be released"
+    assert pit.status()["holder"] is None, "the lane must still be released"
 
 
 # --- Real concurrency ----------------------------------------------------
@@ -1123,7 +1123,7 @@ def test_a_receipt_that_cannot_be_written_still_hands_the_lane_off(
 def _acquire_worker(lane_dir_str, session, worktree, results, barrier, done):
     """Run in a forked child: point this process's `lane` module at the shared
     lane dir, wait for every sibling to be ready, then race acquire()."""
-    lane_mod = importlib.import_module("lane")
+    lane_mod = importlib.import_module("pit")
     lane_mod.lane_dir = lambda: Path(lane_dir_str)
     try:
         barrier.wait(timeout=10)
@@ -1148,7 +1148,7 @@ def _race_acquire(d: Path, n: int, seed: dict | None) -> list[tuple[str, bool, s
         shutil.rmtree(d)
     d.mkdir(parents=True)
     if seed is not None:
-        (d / lane.LOCK).write_text(json.dumps(seed))
+        (d / pit.LOCK).write_text(json.dumps(seed))
     ctx = mp.get_context("fork")
     results = ctx.Queue()
     barrier = ctx.Barrier(n)
@@ -1212,9 +1212,9 @@ def test_concurrent_enqueue_behind_held_lane_all_entries_survive(tmp_path, monke
     with plain write_text (not atomic), so concurrent writers clobber each
     other's read of the queue and can also interleave two writes into one
     corrupt file. Reproduced by the reviewer: 25/30 two-way enqueues lost an
-    entry outright, 5/30 produced unparseable JSON — which lane._read()
+    entry outright, 5/30 produced unparseable JSON — which pit._read()
     silently turns into None, discarding the *entire* queue. This test parses
-    the raw file directly with json.loads (not lane._read) so a torn write
+    the raw file directly with json.loads (not pit._read) so a torn write
     raises JSONDecodeError instead of silently reading back as "empty queue"."""
     n = 6
     for round_ in range(15):
@@ -1222,11 +1222,11 @@ def test_concurrent_enqueue_behind_held_lane_all_entries_survive(tmp_path, monke
         if d.exists():
             shutil.rmtree(d)
         d.mkdir(parents=True)
-        monkeypatch.setattr(lane, "lane_dir", lambda d=d: d)
+        monkeypatch.setattr(pit, "lane_dir", lambda d=d: d)
         # Hold the lane from THIS process and keep holding for the whole round.
         # The hold is a kernel lock, so it is real for every racer below rather
         # than a claim written into a file.
-        holder = lane.acquire("holder", "/wt/holder")
+        holder = pit.acquire("holder", "/wt/holder")
         assert holder is not None
         ctx = mp.get_context("fork")
         results = ctx.Queue()
@@ -1251,7 +1251,7 @@ def test_concurrent_enqueue_behind_held_lane_all_entries_survive(tmp_path, monke
         # The lane is held throughout — nobody should have acquired it.
         assert all(ok is False for _, ok, _ in outcomes), f"round {round_}: {outcomes}"
 
-        raw_text = (d / lane.QUEUE).read_text()
+        raw_text = (d / pit.QUEUE).read_text()
         q = json.loads(raw_text)  # raises JSONDecodeError on a torn/corrupt write
         got = {e["session"] for e in q}
         want = {f"sess-{i}" for i in range(n)}
@@ -1283,7 +1283,7 @@ def test_a_worktree_whose_status_cannot_be_read_leaves_no_receipt(
         "rev-parse must still answer, or this tests the sha guard instead"
 
     monkeypatch.chdir(project)
-    assert lane._cmd_run("sess-a", str(project)) == 0
+    assert pit._cmd_run("sess-a", str(project)) == 0
 
     assert _receipts(project) == []
     out = capsys.readouterr().out

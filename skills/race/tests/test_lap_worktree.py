@@ -49,14 +49,14 @@ def test_create_works_when_the_worktrees_dir_does_not_exist_yet(repo):
     """
     assert not (repo.path / ".worktrees").exists()
     head = repo.git("rev-parse", "HEAD").stdout.strip()
-    r = run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
     assert (repo.path / ".worktrees/myplan-t1").is_dir()
 
 
 def test_create_makes_worktree_and_branch_and_prints_path(repo):
     head = repo.git("rev-parse", "HEAD").stdout.strip()
-    r = run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
 
     path = Path(r.stdout.strip())
@@ -73,17 +73,17 @@ def test_create_branches_from_the_given_ref_not_from_head(repo):
     repo.git("add", "-A")
     repo.git("commit", "-qm", "later")
 
-    r = run_script("wave-worktree", "create", "myplan", "1", first, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", first, cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
     assert not (Path(r.stdout.strip()) / "later.txt").exists()
 
 
 def test_create_refuses_when_the_branch_already_exists(repo):
     head = repo.git("rev-parse", "HEAD").stdout.strip()
-    run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
-    run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
 
-    r = run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
     assert r.returncode == 3
     assert "already exists" in r.stderr
     assert "git branch -D myplan-t1" in r.stderr
@@ -95,7 +95,7 @@ def test_create_refuses_when_the_worktree_dir_is_not_ignored(repo):
     repo.git("commit", "-qm", "unignore worktrees")
 
     head = repo.git("rev-parse", "HEAD").stdout.strip()
-    r = run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
     assert r.returncode == 4
     assert "not git-ignored" in r.stderr
     assert not (repo.path / ".worktrees/myplan-t1").exists()
@@ -104,12 +104,12 @@ def test_create_refuses_when_the_worktree_dir_is_not_ignored(repo):
 def test_remove_deletes_the_worktree_but_keeps_the_branch(repo):
     head = repo.git("rev-parse", "HEAD").stdout.strip()
     created = run_script(
-        "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
+        "lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
     assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
 
-    r = run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
     assert not path.exists()
     assert "myplan-t1" in _branches(repo)
@@ -118,13 +118,13 @@ def test_remove_deletes_the_worktree_but_keeps_the_branch(repo):
 def test_remove_refuses_to_discard_uncommitted_work(repo):
     head = repo.git("rev-parse", "HEAD").stdout.strip()
     created = run_script(
-        "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
+        "lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
     assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
     (path / "unsaved.txt").write_text("an implementer's work\n")
 
-    r = run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert r.returncode == 4
     assert "uncommitted changes" in r.stderr
     assert path.exists()
@@ -170,13 +170,13 @@ def test_create_and_remove_round_trip_with_a_submodule(repo, tmp_path):
 
     head = repo.git("rev-parse", "HEAD").stdout.strip()
     created = run_script(
-        "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
+        "lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
     assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
     assert (path / "libs/sub/s.txt").exists(), "submodule was not initialised"
 
-    removed = run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    removed = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert removed.returncode == 0, removed.stderr
     assert not path.exists()
     assert "myplan-t1" in _branches(repo)
@@ -197,7 +197,7 @@ def test_remove_refuses_dirty_work_a_submodule_ignore_rule_would_hide(repo, tmp_
 
     head = repo.git("rev-parse", "HEAD").stdout.strip()
     created = run_script(
-        "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
+        "lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
     assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
@@ -205,18 +205,18 @@ def test_remove_refuses_dirty_work_a_submodule_ignore_rule_would_hide(repo, tmp_
     work = path / "libs/sub/unsaved.txt"
     work.write_text("an implementer's work\n")
 
-    removed = run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    removed = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert removed.returncode == 4, removed.stderr
     assert "uncommitted changes" in removed.stderr
     assert work.exists(), "the forced removal discarded an implementer's work"
 
 
 def test_remove_on_a_missing_worktree_exits_2(repo):
-    r = run_script("wave-worktree", "remove", "myplan", "7", cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "remove", "myplan", "7", cwd=repo.path, env=repo.env)
     assert r.returncode == 2
 
 
 def test_usage_error_exits_2(repo):
-    r = run_script("wave-worktree", "create", cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", cwd=repo.path, env=repo.env)
     assert r.returncode == 2
     assert "usage:" in r.stderr

@@ -30,14 +30,14 @@
 # first time it does not, with nothing observing the failure.
 #
 # Usage:
-#   wdd check   PLAN_FILE   # verify only, no side effects
-#   wdd ship    PLAN_FILE   # check, push, open PR, append the sweep section,
+#   race check  PLAN_FILE   # verify only, no side effects
+#   race grid    PLAN_FILE   # check, push, open PR, append the sweep section,
 #                           # swap the issue's claim label for in_review
-#   wdd merge   PLAN_FILE   # require a lane receipt for the PR's head
+#   race finish  PLAN_FILE   # require a lane receipt for the PR's head
 #                           # sha, wait for green, merge server-side,
 #                           # clear the claim label, fast-forward the
 #                           # main checkout
-#   wdd cleanup PLAN_FILE   # AFTER the PR merges: branches + worktrees + workspace
+#   race pack-down PLAN_FILE   # AFTER the PR merges: branches + worktrees + workspace
 #
 # Exit: 0 ok | 1 verification failed, or merge refused (nothing landed)
 #       2 usage or wrong location
@@ -48,7 +48,7 @@
 set -Eeuo pipefail
 
 CMD="${1:-}"; PLAN="${2:-}"
-case "$CMD" in check|ship|merge|cleanup) ;; *)
+case "$CMD" in check|grid|finish|pack-down) ;; *)
   sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
 [ -n "$PLAN" ] || { echo "wdd: PLAN_FILE required" >&2; exit 2; }
@@ -172,8 +172,8 @@ receipts_dir() {
   python3 - "$HERE" <<'PY'
 import pathlib, sys
 sys.path.insert(0, str(pathlib.Path(sys.argv[1]).resolve().parents[2] / "scripts"))
-import lane
-print(lane.receipts_dir())
+import pit
+print(pit.receipts_dir())
 PY
 }
 
@@ -386,7 +386,7 @@ attach_sweep_section() {
   [ -n "$pr_ref" ] || return 0
 
   rc=0
-  listed="$("$HERE/wdd-ledger" closes "$LEDGER")" || rc=$?
+  listed="$("$HERE/race-ledger" closes "$LEDGER")" || rc=$?
   if [ "$rc" != 0 ]; then
     note "the sweep section was not added: 'wdd-ledger closes' exited $rc, so no closing keyword could be confirmed."
     return 0
@@ -399,7 +399,7 @@ attach_sweep_section() {
   done
 
   rc=0
-  section="$("$HERE/wdd-ledger" sweep-section "$LEDGER" --unresolved "$unresolved")" || rc=$?
+  section="$("$HERE/race-ledger" sweep-section "$LEDGER" --unresolved "$unresolved")" || rc=$?
   if [ "$rc" != 0 ]; then
     note "the sweep section was not added: 'wdd-ledger sweep-section' exited $rc."
     return 0
@@ -427,7 +427,7 @@ bad()  { printf '  FAIL: %s\n' "$*" >&2; fail=1; }
 # Verification, shared by every subcommand. Reads the ledger, which is the only
 # durable record of what the run actually did.
 # ---------------------------------------------------------------------------
-WORKSPACE="$("$HERE/wdd-workspace" "$PLAN")"
+WORKSPACE="$("$HERE/race-workspace" "$PLAN")"
 LEDGER="$WORKSPACE/progress.md"
 echo "wdd $CMD: plan '$SLUG' on branch '$BRANCH'"
 
@@ -448,7 +448,7 @@ else
   # that merely described a gate (#10), and pushed the operator toward the one
   # repair that must not happen -- editing the ledger until the tool passes.
   stop_rc=0
-  stops="$("$HERE/wdd-ledger" stops "$LEDGER" 2>&1)" || stop_rc=$?
+  stops="$("$HERE/race-ledger" stops "$LEDGER" 2>&1)" || stop_rc=$?
   case "$stop_rc" in
     0) ;;
     1) bad "ledger has an unresolved stop marker: $(printf '%s' "$stops" | paste -sd ';' -) -- a later line for the same subject resolves it; editing the ledger does not" ;;
@@ -456,7 +456,7 @@ else
   esac
   # One sweep pass per run: no second `Sweep plan:`, no wave after its range.
   guard_rc=0
-  guard="$("$HERE/wdd-ledger" sweep-guard "$LEDGER" 2>&1)" || guard_rc=$?
+  guard="$("$HERE/race-ledger" sweep-guard "$LEDGER" 2>&1)" || guard_rc=$?
   [ "$guard_rc" = 0 ] || bad "${guard#wdd: }"
   note "waves: $(printf '%s' "$dispatched" | tr '\n' ' ')— all integrated"
 fi
@@ -486,10 +486,10 @@ fi
 check_verdict_chain() {
   local sha="$1" chain_rc=0 chain
   require_base_branch
-  chain="$("$HERE/wdd-ledger" chain "$WORKSPACE" "$sha" "origin/$BASE" 2>&1)" || chain_rc=$?
+  chain="$("$HERE/race-ledger" chain "$WORKSPACE" "$sha" "origin/$BASE" 2>&1)" || chain_rc=$?
   if [ "$chain_rc" = 0 ]; then note "$chain"; else bad "${chain#wdd: }"; fi
 }
-case "$CMD" in check|ship) check_verdict_chain "$(git rev-parse HEAD)" ;; esac
+case "$CMD" in check|grid) check_verdict_chain "$(git rev-parse HEAD)" ;; esac
 
 [ "$fail" = 0 ] || { echo "wdd: verification failed." >&2; exit 1; }
 note "verification OK"
@@ -499,7 +499,7 @@ case "$CMD" in
 
 check) exit 0 ;;
 
-ship)
+grid)
   require_base_branch
   git push -u origin "$BRANCH"
   if command -v gh >/dev/null 2>&1; then
@@ -522,7 +522,7 @@ ship)
   note "any push after the lane run means running the lane again."
   ;;
 
-merge)
+finish)
   require_base_branch
   require_check_name
   command -v gh >/dev/null 2>&1 || {
@@ -1054,7 +1054,7 @@ PY
   note "Then: wdd cleanup $PLAN"
   ;;
 
-cleanup)
+pack-down)
   # Refuse until the work is actually on the remote default branch. Deleting a
   # task branch whose work has not landed destroys the only copy.
   require_base_branch

@@ -7,7 +7,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
-import block as block_mod  # noqa: E402
+import red_flag as block_mod  # noqa: E402
 import tracker  # noqa: E402
 
 LABEL = "status:blocked"

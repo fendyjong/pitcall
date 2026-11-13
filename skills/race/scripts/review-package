@@ -28,7 +28,7 @@ git rev-parse --verify --quiet "$head" >/dev/null || { echo "bad HEAD: $head" >&
 if [ $# -eq 4 ]; then
   out=$4
 else
-  dir=$("$(cd "$(dirname "$0")" && pwd)/wdd-workspace" "$plan")
+  dir=$("$(cd "$(dirname "$0")" && pwd)/race-workspace" "$plan")
   out="$dir/review-$(git rev-parse --short "$base")..$(git rev-parse --short "$head").diff"
 fi
 

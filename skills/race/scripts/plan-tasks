@@ -478,23 +478,17 @@ def validate(
     return problems
 
 
-def main() -> int:
-    args = sys.argv[1:]
-    validating = False
-    if args and args[0] == "--validate":
-        validating = True
-        args = args[1:]
+def read_tasks(plan: Path):
+    """The plan's text and tasks, or `(None, None, exit_code)` when unusable.
 
-    if len(args) != 1:
-        print("usage: plan-tasks [--validate] PLAN_FILE", file=sys.stderr)
-        return 2
-
-    plan = Path(args[0])
+    Shared by the summary below and by `qualify`, so both read a plan the same
+    way and fail with the same codes: 2 unreadable, 3 no tasks.
+    """
     try:
         text = plan.read_text(encoding="utf-8")
     except OSError as exc:
         print(f"cannot read plan file: {exc}", file=sys.stderr)
-        return 2
+        return None, None, 2
 
     tasks, warnings = parse(text)
     if not tasks:
@@ -502,14 +496,18 @@ def main() -> int:
             f"no tasks found in {plan} (no heading matching '# Task <N>')",
             file=sys.stderr,
         )
-        return 3
+        return None, None, 3
 
     for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)
+    return text, tasks, 0
 
-    if not validating:
-        print(render(plan, tasks))
-        return 0
+
+def qualify(plan: Path) -> int:
+    """`qualifying PLAN_FILE`: 0 valid, 1 problems printed, 2 unreadable, 3 no tasks."""
+    text, tasks, code = read_tasks(plan)
+    if code:
+        return code
 
     rows = parse_waves(text)
     problems = validate(tasks, rows, sweep_heading_count(text))
@@ -522,6 +520,29 @@ def main() -> int:
     print(f"{plan}: {len(tasks)} tasks in {wave_count} waves — valid")
     return 0
 
+
+def main() -> int:
+    args = sys.argv[1:]
+
+    if args and args[0] == "--validate":
+        # deprecated(0.16.0): `plan-tasks --validate` is `qualifying` now; this
+        # forward goes in 0.17.0.
+        here = Path(__file__).resolve().parent
+        sys.path.insert(0, str(here.parents[2] / "scripts"))
+        import alias
+        alias.forward("plan-tasks --validate", "qualifying",
+                      [str(here / "qualifying"), *args[1:]])
+
+    if len(args) != 1:
+        print("usage: plan-tasks [--validate] PLAN_FILE", file=sys.stderr)
+        return 2
+
+    plan = Path(args[0])
+    text, tasks, code = read_tasks(plan)
+    if code:
+        return code
+    print(render(plan, tasks))
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())
