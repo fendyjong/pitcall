@@ -35,6 +35,10 @@ silently bypasses the whole route:
 gh issue view <n> --repo <owner>/<repo> --json labels --jq '.labels[].name'
 ```
 
+<!-- deprecated(0.16.0) -->
+An issue still labelled `solution-ready` is treated exactly as `green-flag` until 0.17.0, and
+is never relabelled.
+
 Find the spec **by its `# Spec:` first line, never by position** — comments accumulate, so the
 newest is not the spec and neither, once anyone has replied, is the first:
 
@@ -167,7 +171,7 @@ Why a reading pass cannot substitute for this. Each of the following shipped in 
 
 **Every one of them reads perfectly, because every one is internally consistent and externally
 false.** There is nothing in the document to notice. Three were caught by a later review and two by
-a driver who tried to build the thing and could not — none by reading the spec. The four checks
+whoever tried to build the thing and could not — none by reading the spec. The four checks
 above are earlier and cheaper than either.
 
 ---
