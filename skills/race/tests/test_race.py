@@ -1301,7 +1301,7 @@ def test_grid_refuses_a_commit_no_review_covered(run, gh):
 
 
 # ---------------------------------------------------------------------------
-# The claim label follows the PR (#20, #46). `claim` puts `ongoing` on; `grid`
+# The claim label follows the PR (#20, #46). `enter` puts `ongoing` on; `grid`
 # swaps it for `in_review` once the PR closes the issue; `finish` takes both off
 # once that PR has landed. Only ever the issue the BRANCH names, and only the
 # two labels this workflow applies -- `blocked` belongs to whoever set it.
@@ -1332,7 +1332,7 @@ def name_the_claim_labels(run, gh, branch=None, **overrides):
 
 
 def cut_for_issue(run, gh, n=20, **overrides):
-    """The plan branch where `claim` cuts it, `feat/<n>-demo`, with #<n> resolving."""
+    """The plan branch where `enter` cuts it, `feat/<n>-demo`, with #<n> resolving."""
     head = name_the_claim_labels(run, gh, branch=f"feat/{n}-demo", **overrides)
     (gh["dir"] / f"issue-{n}").write_text("")
     return head

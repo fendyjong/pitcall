@@ -41,7 +41,7 @@ def _repo_remote_only(tmp_path, commits_on_work=0):
     """Same shape as `_repo`, but issue 19's branch exists ONLY as a
     remote-tracking ref -- the shape of a clone that has fetched `origin` but
     never checked the branch out locally, which is every clone but the one
-    that ran `claim`, since `claim` never pushes what it cuts."""
+    that ran `enter`, since `enter` never pushes what it cuts."""
     repo = tmp_path / "r"
     repo.mkdir()
     def g(*a):

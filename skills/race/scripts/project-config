@@ -45,7 +45,7 @@ or `unset` — because `false` and `unset` are different facts: `false` is a
 project's decision, `unset` is no decision, and brainstorming's bounded path
 warns only on the second. Absent and `null` both read `unset`. Unlike every
 other mode, a checkout with NO config file answers `unset` rather than
-failing: brainstorming runs in projects that never ran `init`, and a project
+failing: brainstorming runs in projects that never ran `setup`, and a project
 with no config has made no decision. A config that exists but cannot be read,
 and a value that is not a JSON boolean, are errors — a flag that half-reads as
 true is worse than one that refuses. A config that exists but lacks the

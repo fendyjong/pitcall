@@ -1023,7 +1023,7 @@ The scan for ledgers globs `<root>/.pitcall/race/*/progress.md` and then
 `<root>/.pitcall/wdd/*/progress.md`; a run found in the old directory carries on there, and a
 ledger never moves mid-run. A ledger begun on 0.15.0 has `Wave <N>:` lines and a
 `Sweep plan: waves …` line: read them exactly as `Lap <N>:` and `Sweep plan: laps …`; write only
-the new forms, even into an old ledger.
+the new forms, even into an old ledger. Read a `## Waves` table wherever this skill says `## Laps`.
 
 **1. Find the open lap** — a `Lap N: dispatched` with no matching `Lap N: integrated`.
 
@@ -1483,8 +1483,7 @@ Run it from the plan worktree, and pass `--worktree` explicitly when standing
 in a submodule's worktree, where the caller's checkout is ambiguous. It takes a
 machine-wide mutex and may wait behind another session; that is a queue, not a
 question. **Its exit status is not the verdict** — the pit pass's existence is
-(see below), and the pit lane has been observed exiting 0 on a failed
-`validate` (#25).
+(see below).
 
 `pit.py` is spelled from `${CLAUDE_PLUGIN_ROOT}` while `race` is bare because
 they live in different places: `race` is this skill's own script, and the pit
@@ -1506,7 +1505,7 @@ nothing else in the workflow would notice.
 project config's `default_branch` — every one but `pack-down` needs it for the
 verdict chain's rule 5 — the same source Phase 2 step 1 uses, and never
 `origin/HEAD`, which is a clone-time cache that survives a remote renaming its
-default branch and is absent entirely from an `init`+`fetch` checkout.
+default branch and is absent entirely from a `git init` + `git fetch` checkout.
 `pack-down` gates branch deletion on that ref, so a stale name that is still a
 live branch would decide the fate of the only copy of a task's work. All four
 refuse rather than guess.

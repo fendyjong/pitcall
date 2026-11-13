@@ -76,7 +76,7 @@ fi
 #
 # Not `origin/HEAD`. That is a clone-time cache, and it is wrong in both
 # directions: after a remote renames its default branch it still reports the
-# OLD name, `fetch --prune` included, and a clone built by `init` + `fetch`
+# OLD name, `fetch --prune` included, and a clone built by `git init` + `git fetch`
 # -- what CI checkouts do -- never sets it at all.
 #
 # The stale case is the dangerous one, because `pack-down` gates branch DELETION
@@ -272,7 +272,7 @@ attach_closing_keyword() {
 }
 
 # --- the claim label follows the PR -------------------------------------------
-# `claim` puts `status_labels.ongoing` on an issue, and before this nothing ever
+# `enter` puts `status_labels.ongoing` on an issue, and before this nothing ever
 # took it off: closed issues kept advertising themselves as in flight, and only
 # a human noticing ever cleared one (#46). Opening the PR changes the issue's
 # state from claimed to in review, and `gh issue list` does not show linked

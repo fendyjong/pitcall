@@ -130,7 +130,7 @@ After your human partner approves the short design:
      sentences stating the request. Then claim it, whether you just
      created it or it already existed:
      `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/enter.py <n> --session <session-url>`.
-     `claim` resumes this session's own live claim, refuses another
+     `enter` resumes this session's own live claim, refuses another
      session's, and cuts `<branch_prefix><n>-<slug>` from the default
      branch. If it refuses (another session's live claim, or no
      `branch_prefix` configured), say so and ask how to proceed; do not
@@ -363,7 +363,7 @@ implementation starts.
   `WorktreeCreate`, or a `--worktree` flag — over hand-rolled git. It owns
   placement, branching, and cleanup; a hand-rolled `git worktree add` used
   alongside one creates phantom state the harness can't see or manage.
-- **The work issue already claimed? Adopt its branch.** `claim` cuts
+- **The work issue already claimed? Adopt its branch.** `enter` cuts
   `<branch_prefix><n>-<slug>` from the default branch, so when the issue
   was claimed — before brainstorming, or by the bounded path's through-race
   ending — that branch already exists, and the `-b` form below fails on it

@@ -456,7 +456,7 @@ def test_reacquiring_your_own_lane_succeeds_instead_of_queueing(tmp_path, monkey
 
     This asserts the LIBRARY property and nothing more. Whether the *caller* may
     then go on to run a second out_lap is a separate question, and the answer is
-    no — see `test_lane_run_refuses_a_second_out_lap_under_its_own_live_hold`.
+    no — see `test_pit_lane_refuses_a_second_out_lap_under_its_own_live_hold`.
     Asserting only the handle here is what let `_cmd_run` run one anyway.
     """
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
@@ -551,7 +551,7 @@ def test_a_running_holder_is_never_reclaimed_and_a_gone_one_always_is(tmp_path, 
         assert pit.status()["holder"]["session"] == "sess-c"
 
 
-def test_lane_run_queues_instead_of_running_while_another_process_holds(
+def test_pit_lane_queues_instead_of_running_while_another_process_holds(
         tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     ran = tmp_path / "ran"
@@ -572,7 +572,7 @@ def test_lane_run_queues_instead_of_running_while_another_process_holds(
     assert [e["session"] for e in pit.status()["waiting"]] == ["sess-b"]
 
 
-def test_lane_run_refuses_a_second_out_lap_under_its_own_live_hold(
+def test_pit_lane_refuses_a_second_out_lap_under_its_own_live_hold(
         tmp_path, monkeypatch, capsys):
     """Reentrancy must stop the caller, not let it through.
 
@@ -626,7 +626,7 @@ Path({out!r}).write_text(json.dumps({{"acquired": held is not None}}))
 """
 
 
-def test_lane_run_holds_the_lane_across_out_lap_and_validate(tmp_path, monkeypatch, capsys):
+def test_pit_lane_holds_the_lane_across_out_lap_and_validate(tmp_path, monkeypatch, capsys):
     """The wiring the pid design was missing: one process that holds for the whole run.
 
     A separate OS process probes the pit lane from inside the out_lap step — the
@@ -653,7 +653,7 @@ def test_lane_run_holds_the_lane_across_out_lap_and_validate(tmp_path, monkeypat
     assert "HAND OFF TO: sess-probe" in capsys.readouterr().out
 
 
-def test_lane_run_reads_the_config_from_the_checkout_it_runs_in(tmp_path, monkeypatch):
+def test_pit_lane_reads_the_config_from_the_checkout_it_runs_in(tmp_path, monkeypatch):
     """One answer to "which checkout", not two that can disagree.
 
     `--worktree X` used to run the steps in X while reading the config from
@@ -674,7 +674,7 @@ def test_lane_run_reads_the_config_from_the_checkout_it_runs_in(tmp_path, monkey
     assert seen["checkout"] == "/wt/somewhere"
 
 
-def test_lane_run_reports_failure_but_still_releases(tmp_path, monkeypatch):
+def test_pit_lane_reports_failure_but_still_releases(tmp_path, monkeypatch):
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     monkeypatch.setattr(pit, "load_config",
                         lambda checkout=None: {"out_lap": "false", "validate": "true", "in_lap": None})

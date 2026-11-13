@@ -46,8 +46,8 @@ entry point that holds it across `out_lap` and `validate` in one process.
 
 A successful `validate` leaves `.pitcall/pit-passes/<sha>.json`, naming the commit
 it covered. A later step merges a pull request once its checks are green, and
-what makes that safe is a rule that nothing merges without having passed a pit lane
-run — so the pit pass turns that rule from something a session remembers into
+what makes that safe is a rule that nothing merges without having passed a run of the pit lane
+— so the pit pass turns that rule from something a session remembers into
 something a machine can check.
 
 It is keyed by SHA, never by branch: the ordinary failure is a review fix landing
