@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wdd — Phase 3. Take a plan branch whose waves are all integrated to a merged
+# race — Phase 3. Take a plan branch whose laps are all integrated to a merged
 # PR, then remove everything the run created.
 #
 # WHY THIS IS A SCRIPT AND NOT AN INSTRUCTION.
@@ -17,26 +17,25 @@
 # was only fixed by making the wrong thing mechanically impossible. So: this
 # script refuses to run anywhere but a plan worktree, and never touches the
 # main checkout at all -- with one deliberate exception, the --ff-only sync at
-# the end of `merge`, which cannot create a commit.
+# the end of `finish`, which cannot create a commit.
 #
 # It also closes a gap a menu never covered. SKILL.md says task branches
 # "persist until the final PR"; nothing then deleted them. Measured on one
 # repository: 33 task branches on disk, 20 of them already merged.
 #
-# `ship` does NOT merge. `merge` is a separate invocation, and it lands a PR on
-# EVIDENCE rather than on attention: it refuses unless the lane left a receipt
+# `grid` does NOT merge. `finish` is a separate invocation, and it lands a PR on
+# EVIDENCE rather than on attention: it refuses unless the pit lane left a pit pass
 # for the exact commit the PR is about to merge. What it replaces is a human
 # remembering that the branch was validated -- a bound that holds until the
 # first time it does not, with nothing observing the failure.
 #
 # Usage:
-#   race check  PLAN_FILE   # verify only, no side effects
-#   race grid    PLAN_FILE   # check, push, open PR, append the sweep section,
-#                           # swap the issue's claim label for in_review
-#   race finish  PLAN_FILE   # require a lane receipt for the PR's head
-#                           # sha, wait for green, merge server-side,
-#                           # clear the claim label, fast-forward the
-#                           # main checkout
+#   race check     PLAN_FILE   # verify only, no side effects
+#   race grid      PLAN_FILE   # check, push, open PR, append the sweep section,
+#                              # swap the issue's claim label for in_review
+#   race finish    PLAN_FILE   # require a pit pass for the PR's head sha, wait
+#                              # for green, merge server-side, clear the claim
+#                              # label, fast-forward the main checkout
 #   race pack-down PLAN_FILE   # AFTER the PR merges: branches + worktrees + workspace
 #
 # Exit: 0 ok | 1 verification failed, or merge refused (nothing landed)
@@ -51,7 +50,7 @@ CMD="${1:-}"; PLAN="${2:-}"
 case "$CMD" in check|grid|finish|pack-down) ;; *)
   sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
-[ -n "$PLAN" ] || { echo "wdd: PLAN_FILE required" >&2; exit 2; }
+[ -n "$PLAN" ] || { echo "race: PLAN_FILE required" >&2; exit 2; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(git rev-parse --show-toplevel)"
@@ -66,7 +65,7 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 GIT_DIR="$(git rev-parse --path-format=absolute --git-dir)"
 GIT_COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
 if [ "$GIT_DIR" = "$GIT_COMMON" ]; then
-  echo "wdd: refusing to run in the main checkout ($ROOT)." >&2
+  echo "race: refusing to run in the main checkout ($ROOT)." >&2
   echo "  It is shared by concurrent sessions; this would move HEAD under live work." >&2
   echo "  Run from the plan worktree instead." >&2
   exit 2
@@ -80,7 +79,7 @@ fi
 # OLD name, `fetch --prune` included, and a clone built by `init` + `fetch`
 # -- what CI checkouts do -- never sets it at all.
 #
-# The stale case is the dangerous one, because `cleanup` gates branch DELETION
+# The stale case is the dangerous one, because `pack-down` gates branch DELETION
 # on `--is-ancestor HEAD origin/$BASE`. A stale name that is still a live
 # branch, and that happens to contain HEAD, deletes task branches whose work
 # never reached the real default -- and every task branch is the only copy of
@@ -91,8 +90,8 @@ fi
 # SKILL.md already tells the planner to take the base from it and "never a name
 # assumed here". This is the same answer from the same place.
 #
-# Every subcommand reads it. `cleanup` gates deletion on it, `ship` pushes
-# against it and `merge` lands into it; and `check`, `ship` and `merge` all
+# Every subcommand reads it. `pack-down` gates deletion on it, `grid` pushes
+# against it and `finish` lands into it; and `check`, `grid` and `finish` all
 # check the verdict chain, whose rule 5 asks whether review #1 started on
 # `origin/<default_branch>` -- a question with no answer without the key.
 require_base_branch() {
@@ -101,7 +100,7 @@ require_base_branch() {
   # diagnosis to stderr; this adds only what it cannot know -- why the caller
   # will not proceed without an answer.
   if ! BASE="$("$HERE/project-config" --scalar default_branch)"; then
-    echo "wdd: cannot read default_branch from the project config." >&2
+    echo "race: cannot read default_branch from the project config." >&2
     echo "  Refusing rather than guessing: the wrong base either fails on push," >&2
     echo "  or names a real branch nobody meant and then gates the deletion of" >&2
     echo "  task branches -- the only copy of their work -- on it." >&2
@@ -117,7 +116,7 @@ require_base_branch() {
 # then reports slow CI.
 require_check_name() {
   if ! CHECK="$("$HERE/project-config" --scalar required_check)"; then
-    echo "wdd: cannot read required_check from the project config." >&2
+    echo "race: cannot read required_check from the project config." >&2
     echo "  Refusing rather than guessing: a name nobody configured names a" >&2
     echo "  check that never appears, and an absent check is indistinguishable" >&2
     echo "  from a slow one -- so the guess would end in a timeout that reads" >&2
@@ -127,8 +126,8 @@ require_check_name() {
 }
 
 # The task-worktree directory, READ FROM THE PROJECT CONFIG for the same
-# reason as the base branch and the check name: `wave-worktree` resolves
-# `worktree_dir` from config rather than assuming `.worktrees`, and `cleanup`
+# reason as the base branch and the check name: `lap-worktree` resolves
+# `worktree_dir` from config rather than assuming `.worktrees`, and `pack-down`
 # removes what that create left behind -- so both sides resolving the SAME
 # key from the SAME place is what makes them unable to disagree. A stale
 # literal here would not fail loudly: `[ -d "$d" ]` is simply false for a
@@ -137,7 +136,7 @@ require_check_name() {
 # nothing to show for it.
 require_worktree_dir() {
   if ! WT_DIR="$("$HERE/project-config" --scalar worktree_dir)"; then
-    echo "wdd: cannot read worktree_dir from the project config." >&2
+    echo "race: cannot read worktree_dir from the project config." >&2
     echo "  Refusing rather than guessing: the wrong directory silently skips" >&2
     echo "  every worktree removal below while the branch is deleted anyway," >&2
     echo "  leaking the worktree with nothing left to point at it." >&2
@@ -146,28 +145,37 @@ require_worktree_dir() {
   WT_DIR="${WT_DIR%/}"          # tolerate a trailing slash in config
 }
 
-# Where `lane run` files what it validated.
+# Where `pit lane` files what it validated.
 #
-# `lane.receipts_dir()` ITSELF, not a re-derivation of it. An earlier version
-# imported `shared_root()` and re-appended `.pitcall/receipts` by hand, with a
+# `pit.pit_passes_dir()` ITSELF, not a re-derivation of it. An earlier version
+# imported `shared_root()` and re-appended the directory name by hand, with a
 # comment saying to keep the two in step -- but nothing enforced that comment,
 # and the drift it invited fails in the silent-safe direction: a reader looking
-# in a directory nothing writes to finds no receipt and reports every commit as
+# in a directory nothing writes to finds no pit pass and reports every commit as
 # unvalidated. Nobody debugs a tool that is merely refusing too much.
 #
-# The same reasoning one level down is why the lane's own resolution is used at
-# all rather than `dirname <git-common-dir>`: in a worktree of a submodule that
-# local answer lands INSIDE the superproject's git directory, while the lane
-# climbs out and files beside the superproject itself.
+# The same reasoning one level down is why the pit lane's own resolution is used
+# at all rather than `dirname <git-common-dir>`: in a worktree of a submodule
+# that local answer lands INSIDE the superproject's git directory, while the pit
+# lane climbs out and files beside the superproject itself.
 #
-# Calling it CREATES the directory when absent, which `lane_dir()` has always
-# done. Harmless on this path -- the lane creates it on first run anyway, and
-# `.pitcall/` is machine-local -- but it is a write, so it is named here rather
-# than discovered.
+# Calling it CREATES the directory when absent, as `pit lane` does. Harmless on
+# this path -- `.pitcall/` is machine-local -- but it is a write, so it is named
+# here rather than discovered.
 #
 # The path arithmetic is the SECOND copy of this plugin's layout in this
 # directory; `project-config` holds the first, one level deeper because it
 # starts from a file rather than from this directory. Move one, move both.
+pit_passes_dir() {
+  python3 - "$HERE" <<'PY'
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).resolve().parents[2] / "scripts"))
+import pit
+print(pit.pit_passes_dir())
+PY
+}
+
+# deprecated(0.16.0): where 0.15.0's lane filed receipts; still evidence until 0.17.0.
 receipts_dir() {
   python3 - "$HERE" <<'PY'
 import pathlib, sys
@@ -207,11 +215,11 @@ CLOSES_ISSUE=""
 # GitHub's rule, not a substring: any of its nine keywords, in any case, with an
 # optional colon -- and the number ends where the digits end, because `Closes
 # #20` contains `Closes #2` and closes nothing of #2's. Read as a substring,
-# `ship` reported #2 already closed and left the PR not closing it.
+# `grid` reported #2 already closed and left the PR not closing it.
 #
 # A here-string, never `printf | grep -q`: `grep -q` exits at its first match
 # and SIGPIPEs a writer whose body outgrew the pipe buffer, and under
-# `pipefail` that reads as no match (see the probe in `merge`).
+# `pipefail` that reads as no match (see the probe in `finish`).
 body_closes() {
   grep -qiE "(^|[^[:alnum:]_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#$2([^[:alnum:]_]|\$)" <<< "$1"
 }
@@ -268,7 +276,7 @@ attach_closing_keyword() {
 # a human noticing ever cleared one (#46). Opening the PR changes the issue's
 # state from claimed to in review, and `gh issue list` does not show linked
 # PRs, so the label is the only place that change is visible in the list.
-# `ship` swaps `ongoing` for `in_review`; `merge` takes both off once the PR
+# `grid` swaps `ongoing` for `in_review`; `finish` takes both off once the PR
 # that closes the issue has landed.
 #
 # WHICH ISSUE: only the one the branch names, and only once the PR body closes
@@ -324,7 +332,7 @@ mark_in_review() {
 # After the merge, and before the sync that can exit 4: that exit is about the
 # main checkout, and the merge it follows still landed.
 #
-# The issue is read off the branch again rather than carried from `ship`, which
+# The issue is read off the branch again rather than carried from `grid`, which
 # ran in another invocation -- and the gate is the MERGED PR's body, not the
 # number alone. A PR that does not close the issue leaves it open, and an open
 # issue's claim is still the truth about it.
@@ -367,7 +375,7 @@ clear_claim_labels() {
 
 # --- the PR says what the run's sweep did to the backlog ----------------------
 # Built from the ledger's `Fixed:` / `Seen:` / `Filed:` / `Note:` lines by
-# `wdd-ledger`, which owns those formats. Appended after the closing keyword,
+# `race-ledger`, which owns those formats. Appended after the closing keyword,
 # with the same read-back idempotence and the same rule: every failure is soft
 # and spoken, because a summary must never be able to block a release.
 #
@@ -388,7 +396,7 @@ attach_sweep_section() {
   rc=0
   listed="$("$HERE/race-ledger" closes "$LEDGER")" || rc=$?
   if [ "$rc" != 0 ]; then
-    note "the sweep section was not added: 'wdd-ledger closes' exited $rc, so no closing keyword could be confirmed."
+    note "the sweep section was not added: 'race-ledger closes' exited $rc, so no closing keyword could be confirmed."
     return 0
   fi
   for n in $listed; do
@@ -401,7 +409,7 @@ attach_sweep_section() {
   rc=0
   section="$("$HERE/race-ledger" sweep-section "$LEDGER" --unresolved "$unresolved")" || rc=$?
   if [ "$rc" != 0 ]; then
-    note "the sweep section was not added: 'wdd-ledger sweep-section' exited $rc."
+    note "the sweep section was not added: 'race-ledger sweep-section' exited $rc."
     return 0
   fi
   [ -n "$section" ] || return 0
@@ -429,10 +437,10 @@ bad()  { printf '  FAIL: %s\n' "$*" >&2; fail=1; }
 # ---------------------------------------------------------------------------
 WORKSPACE="$("$HERE/race-workspace" "$PLAN")"
 LEDGER="$WORKSPACE/progress.md"
-echo "wdd $CMD: plan '$SLUG' on branch '$BRANCH'"
+echo "race $CMD: plan '$SLUG' on branch '$BRANCH'"
 
 if [ ! -f "$LEDGER" ]; then
-  bad "no ledger at $LEDGER — this run never dispatched a wave"
+  bad "no ledger at $LEDGER — this run never dispatched a lap"
 else
   head -1 "$LEDGER" | grep -qF "$PLAN" || bad "ledger's first line names a different plan — that is another run's, never yours to finish"
 
@@ -440,9 +448,9 @@ else
   dispatched="$(grep -oE '^(Lap|Wave) ([0-9]+): dispatched' "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
   integrated="$(grep -oE '^(Lap|Wave) ([0-9]+): integrated'  "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
 
-  [ -n "$dispatched" ] || bad "ledger records no dispatched wave"
+  [ -n "$dispatched" ] || bad "ledger records no dispatched lap"
   for w in $dispatched; do
-    printf '%s\n' "$integrated" | grep -qx "$w" || bad "wave $w was dispatched but never integrated — finish the wave first"
+    printf '%s\n' "$integrated" | grep -qx "$w" || bad "lap $w was dispatched but never integrated — finish the lap first"
   done
   # Stop markers are exact lines (`Task <N>: BLOCKED`, `Final review #<k>:
   # BLOCKED`), and a later line for the same subject resolves one. The word
@@ -456,14 +464,14 @@ else
     1) bad "ledger has an unresolved stop marker: $(printf '%s' "$stops" | paste -sd ';' -) -- a later line for the same subject resolves it; editing the ledger does not" ;;
     *) bad "could not read the ledger's stop markers: $stops" ;;
   esac
-  # One sweep pass per run: no second `Sweep plan:`, no wave after its range.
+  # One sweep pass per run: no second `Sweep plan:`, no lap after its range.
   guard_rc=0
   guard="$("$HERE/race-ledger" sweep-guard "$LEDGER" 2>&1)" || guard_rc=$?
   [ "$guard_rc" = 0 ] || bad "${guard#race: }"
-  note "waves: $(printf '%s' "$dispatched" | tr '\n' ' ')— all integrated"
+  note "laps: $(printf '%s' "$dispatched" | tr '\n' ' ')— all integrated"
 fi
 
-# Every task branch must already be an ancestor of the plan branch. A wave whose
+# Every task branch must already be an ancestor of the plan branch. A lap whose
 # integrator died after writing its ledger line leaves the line and not the
 # merge; nothing else in the workflow would notice.
 task_branches="$(git for-each-ref --format='%(refname:short)' "refs/heads/${SLUG}-t*" || true)"
@@ -482,8 +490,8 @@ fi
 
 # The last thing to see the code before it ships is a full-branch review of
 # THIS commit, and every commit on the branch sits inside some review's range
-# (SKILL.md, Final Review). `merge` asks the same question about the PR's head
-# rather than local HEAD, below; `cleanup` runs after the merge and does not
+# (SKILL.md, Final Review). `finish` asks the same question about the PR's head
+# rather than local HEAD, below; `pack-down` runs after the merge and does not
 # ask it at all.
 check_verdict_chain() {
   local sha="$1" chain_rc=0 chain
@@ -493,7 +501,7 @@ check_verdict_chain() {
 }
 case "$CMD" in check|grid) check_verdict_chain "$(git rev-parse HEAD)" ;; esac
 
-[ "$fail" = 0 ] || { echo "wdd: verification failed." >&2; exit 1; }
+[ "$fail" = 0 ] || { echo "race: verification failed." >&2; exit 1; }
 note "verification OK"
 
 # ---------------------------------------------------------------------------
@@ -519,16 +527,16 @@ grid)
   note "check green on a branch that is UP TO DATE with the base, plus whatever"
   note "pre-merge gate the project provides -- branch protection is upstream of"
   note "this script and is never routed around."
-  note "Then: run the lane on this exact commit, and 'wdd merge $PLAN'."
-  note "The merge refuses without a receipt for the sha it is about to land, so"
-  note "any push after the lane run means running the lane again."
+  note "Then: run the pit lane on this exact commit, and 'race finish $PLAN'."
+  note "The merge refuses without a pit pass for the sha it is about to land, so"
+  note "any push after the pit lane means running the pit lane again."
   ;;
 
 finish)
   require_base_branch
   require_check_name
   command -v gh >/dev/null 2>&1 || {
-    echo "wdd: gh is not on PATH." >&2
+    echo "race: gh is not on PATH." >&2
     echo "  This step merges SERVER-SIDE and has no local fallback: a local" >&2
     echo "  'git merge' runs zero checks and moves HEAD in a checkout other" >&2
     echo "  sessions are reading." >&2
@@ -558,24 +566,24 @@ finish)
   case "$gh_help" in
     *--match-head-commit*) ;;
     *)
-      echo "wdd: this gh cannot pin a merge to a commit." >&2
+      echo "race: this gh cannot pin a merge to a commit." >&2
       echo "  'gh pr merge --match-head-commit' is required here and arrived in" >&2
       echo "  gh 2.96. Refusing rather than merging without it: the flag is what" >&2
-      echo "  makes the receipt's guarantee survive the wait for checks, and a" >&2
+      echo "  makes the pit pass's guarantee survive the wait for checks, and a" >&2
       echo "  merge that silently lost it is indistinguishable from a safe one." >&2
-      echo "  Upgrade gh, or merge on GitHub after re-running the lane." >&2
+      echo "  Upgrade gh, or merge on GitHub after re-running the pit lane." >&2
       exit 1 ;;
   esac
 
   # -- 1. Which commit is actually going to land ---------------------------
   # The PR's head as GitHub reports it NOW: not this checkout's HEAD, and not a
   # sha resolved earlier in the run. They differ in exactly the case the gate
-  # below exists for -- a review fix pushed after the lane ran.
+  # below exists for -- a review fix pushed after the pit lane ran.
   # gh's stderr is left to flow through rather than folded into the capture:
   # its diagnosis is the useful part of a failure, and merging it into stdout
   # would put a warning line inside the text about to be parsed as JSON.
   if ! pr_json="$(gh pr view "$BRANCH" --json number,state,headRefOid,mergeStateStatus,baseRefName)"; then
-    echo "wdd: no PR found for $BRANCH -- run 'ship' first." >&2
+    echo "race: no PR found for $BRANCH -- run 'grid' first." >&2
     exit 1
   fi
   if ! pr_fields="$(python3 - "$pr_json" <<'PY'
@@ -591,19 +599,19 @@ import json, re, sys
 try:
     pr = json.loads(sys.argv[1])
 except ValueError:
-    sys.exit("wdd: gh did not answer with JSON")
+    sys.exit("race: gh did not answer with JSON")
 if not isinstance(pr, dict):
-    sys.exit("wdd: gh did not answer with a PR object")
+    sys.exit("race: gh did not answer with a PR object")
 
 number = str(pr.get("number") or "")
 if not number.isdigit():
-    sys.exit(f"wdd: gh reported no usable PR number ({number!r})")
+    sys.exit(f"race: gh reported no usable PR number ({number!r})")
 
 # 40 hex, checked rather than assumed: this value is interpolated into the
-# receipt's PATH, and it is also what gets pinned into the merge.
+# pit pass's PATH, and it is also what gets pinned into the merge.
 sha = pr.get("headRefOid")
 if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
-    sys.exit(f"wdd: gh reported no usable head sha ({sha!r})")
+    sys.exit(f"race: gh reported no usable head sha ({sha!r})")
 
 
 def enum(value):
@@ -638,7 +646,7 @@ PY
   { read -r PR_NUM; read -r PR_SHA; read -r PR_STATE
     read -r PR_MERGE_STATE; read -r PR_BASE; } <<< "$pr_fields"
   [ "$PR_STATE" = "OPEN" ] || {
-    echo "wdd: PR #$PR_NUM is $PR_STATE, not OPEN -- nothing to merge." >&2
+    echo "race: PR #$PR_NUM is $PR_STATE, not OPEN -- nothing to merge." >&2
     exit 1; }
   note "PR #$PR_NUM, head $PR_SHA, base $PR_BASE"
 
@@ -648,8 +656,8 @@ PY
   # to another and prints "merged into $BASE", which is simply false about the
   # branch a human is most likely to trust the sentence on.
   if [ "$PR_BASE" != "$BASE" ]; then
-    echo "wdd: PR #$PR_NUM targets '$PR_BASE', but this project's base is '$BASE'." >&2
-    echo "  Refusing: every other step here -- the fast-forward, the cleanup" >&2
+    echo "race: PR #$PR_NUM targets '$PR_BASE', but this project's base is '$BASE'." >&2
+    echo "  Refusing: every other step here -- the fast-forward, the pack-down" >&2
     echo "  ancestry test, the freshness argument -- is about '$BASE', and none" >&2
     echo "  of them would be true of a merge into '$PR_BASE'." >&2
     echo "  Retarget the PR, or fix default_branch in the project config." >&2
@@ -661,57 +669,63 @@ PY
   # coverage and nothing else; that guard then catches the different failure
   # of a checkout that is not on the PR's head.
   check_verdict_chain "$PR_SHA"
-  [ "$fail" = 0 ] || { echo "wdd: refusing to merge a commit no clean full-branch review covers." >&2; exit 1; }
+  [ "$fail" = 0 ] || { echo "race: refusing to merge a commit no clean full-branch review covers." >&2; exit 1; }
 
   # Local HEAD against the commit that will actually land.
   #
-  # Everything ABOVE this point -- every wave integrated, every task branch an
+  # Everything ABOVE this point -- every lap integrated, every task branch an
   # ancestor of the plan branch -- was asserted against local HEAD. The merge
   # lands $PR_SHA. A fix committed here and never pushed makes those different
   # commits, and then the verification was about one commit while the report
   # ("MERGED", exit 0) is about another. Nothing unvalidated lands, because the
-  # receipt still covers what GitHub merged -- but the operator is told the
-  # wrong thing, and `cleanup` refuses later for reasons that do not obviously
+  # pit pass still covers what GitHub merged -- but the operator is told the
+  # wrong thing, and `pack-down` refuses later for reasons that do not obviously
   # lead back here.
   LOCAL_HEAD="$(git rev-parse HEAD)"
   if [ "$LOCAL_HEAD" != "$PR_SHA" ]; then
-    echo "wdd: this checkout is not on the commit the PR would merge." >&2
+    echo "race: this checkout is not on the commit the PR would merge." >&2
     echo "  here (verified above): $LOCAL_HEAD" >&2
     echo "  the PR would merge:    $PR_SHA" >&2
     echo "  Refusing: the checks above ran against the first and the merge" >&2
     echo "  lands the second, so reporting MERGED would describe work this run" >&2
     echo "  never examined." >&2
-    echo "  Push (or fetch) so the two agree, re-run the lane on that commit," >&2
+    echo "  Push (or fetch) so the two agree, re-run the pit lane on that commit," >&2
     echo "  then re-run this step." >&2
     exit 1
   fi
 
-  # -- 2. The receipt, BEFORE waiting on anything --------------------------
+  # -- 2. The pit pass, BEFORE waiting on anything --------------------------
   # Refusing here costs nothing. Refusing after the wait means having spent ten
   # minutes on checks for a branch that could never have merged, so the order
   # is part of the behaviour and not an implementation detail.
   #
   # EXISTENCE AT THE EXACT PATH IS THE VERDICT. The body is read below only to
   # say something useful to a human; nothing about the decision depends on it.
-  if ! RECEIPTS="$(receipts_dir)"; then
-    echo "wdd: cannot resolve the lane's receipts directory." >&2
+  if ! PASSES="$(pit_passes_dir)"; then
+    echo "race: cannot resolve the pit lane's pit passes directory." >&2
     exit 1
   fi
-  RECEIPT="$RECEIPTS/$PR_SHA.json"
-  if [ ! -f "$RECEIPT" ]; then
-    echo "wdd: no lane receipt for $PR_SHA -- refusing to merge." >&2
-    echo "  expected: $RECEIPT" >&2
-    others="$(ls -1 "$RECEIPTS" 2>/dev/null | grep -c '\.json$' || true)"
+  PASS="$PASSES/$PR_SHA.json"
+
+  # deprecated(0.16.0): a receipt filed by 0.15.0's lane is evidence too, until 0.17.0.
+  if [ ! -f "$PASS" ] && LEGACY="$(receipts_dir)" && [ -f "$LEGACY/$PR_SHA.json" ]; then
+    PASS="$LEGACY/$PR_SHA.json"
+  fi
+
+  if [ ! -f "$PASS" ]; then
+    echo "race: no pit pass for $PR_SHA -- refusing to merge." >&2
+    echo "  expected: $PASS" >&2
+    others="$(ls -1 "$PASSES" 2>/dev/null | grep -c '\.json$' || true)"
     if [ "${others:-0}" != 0 ]; then
-      echo "  The lane has receipts for $others other commit(s) here, and none" >&2
+      echo "  The pit lane has pit passes for $others other commit(s) here, and none" >&2
       echo "  of them is this one. That is the ordinary shape of it: validation" >&2
       echo "  ran, and then another commit landed. A commit pushed after a lane" >&2
       echo "  run does not inherit that run's approval -- which is the entire" >&2
-      echo "  reason a receipt is filed under a sha rather than under a branch." >&2
+      echo "  reason a pit pass is filed under a sha rather than under a branch." >&2
     fi
-    echo "  A receipt is written only by a lane run whose validate PASSED" >&2
+    echo "  A pit pass is written only by a pit lane whose validate PASSED" >&2
     echo "  against this exact commit, in a clean tree, with HEAD unmoved. Run" >&2
-    echo "  the lane on the commit the PR will merge, then re-run this step." >&2
+    echo "  the pit lane on the commit the PR will merge, then re-run this step." >&2
     exit 1
   fi
   # The body, read for the message -- and checked for ONE thing beyond it: that
@@ -722,67 +736,67 @@ PY
   # into a refusal; it can never turn a refusal into a pass. Existence at the
   # path remains the only thing that permits anything.
   #
-  # What it costs is a `cp` of one receipt onto another's name, or a symlink
+  # What it costs is a `cp` of one pit pass onto another's name, or a symlink
   # (`-f` follows one, so the path test alone reads that as present) -- and the
   # realistic author of either is a session that has been refused twice and is
   # looking for a way through, not an attacker.
   #
   # NOTHING FROM THE BODY CROSSES BACK INTO THIS SHELL. The only thing returned
   # is an exit status, which is an integer and therefore cannot carry a
-  # newline; every message about the receipt is written by the reader that
+  # newline; every message about the pit pass is written by the reader that
   # already holds the value. An earlier version returned a two-line
   # status/detail protocol and guaranteed both lines non-empty *by value* --
   # which `{"sha": "\n"}` disproved: the detail printed as a bare newline, `$( )`
   # stripped it, the second `read` hit EOF, and `set -e` ended the run with an
   # empty stderr. The refusal survived, but a refusal nobody can diagnose is
   # the wrong shape for a gate whose entire subject is an untrusted file.
-  receipt_rc=0
-  python3 - "$RECEIPT" "$PR_SHA" <<'PY' || receipt_rc=$?
+  pass_rc=0
+  python3 - "$PASS" "$PR_SHA" <<'PY' || pass_rc=$?
 import datetime, json, sys
 
-RECEIPT, WANTED = sys.argv[1], sys.argv[2]
+PASS, WANTED = sys.argv[1], sys.argv[2]
 
 try:
-    receipt = json.loads(open(RECEIPT).read())
-    if not isinstance(receipt, dict):
-        raise ValueError("a receipt is a JSON object")
+    body = json.loads(open(PASS).read())
+    if not isinstance(body, dict):
+        raise ValueError("a pit pass is a JSON object")
 except Exception as exc:
     sys.stderr.write(
-        f"wdd: the receipt at {RECEIPT} will not parse -- refusing to merge.\n"
+        f"race: the pit pass at {PASS} will not parse -- refusing to merge.\n"
         f"  {type(exc).__name__}: {exc}\n"
-        "  A corrupt receipt is treated as an ABSENT one. It attests to\n"
+        "  A corrupt pit pass is treated as an ABSENT one. It attests to\n"
         "  nothing, and a file nobody can read must never be the thing that\n"
         "  permits a merge.\n")
     raise SystemExit(4)
 
-claimed = receipt.get("sha")
+claimed = body.get("sha")
 if claimed != WANTED:
     # !r, so a value made of whitespace is visible as one rather than
     # silently rearranging the message it appears in.
     sys.stderr.write(
-        f"wdd: the receipt at {RECEIPT} names a different commit -- refusing to merge.\n"
+        f"race: the pit pass at {PASS} names a different commit -- refusing to merge.\n"
         f"  filed under: {WANTED}\n"
         f"  body claims: {claimed!r}\n"
-        "  A receipt copied or symlinked onto another commit's name attests\n"
+        "  A pit pass copied or symlinked onto another commit's name attests\n"
         "  to the commit it was WRITTEN for, never to the one it was filed\n"
-        "  under. Run the lane on the commit the PR will merge.\n")
+        "  under. Run the pit lane on the commit the PR will merge.\n")
     raise SystemExit(3)
 
-when = receipt.get("validated_at")
+when = body.get("validated_at")
 try:
     when = datetime.datetime.fromtimestamp(float(when)).isoformat(timespec="seconds")
 except (TypeError, ValueError):
     when = "an unrecorded time"
-print("  receipt: validated at {} by session {!r} -- {!r}".format(
-    when, receipt.get("session"), receipt.get("validate_command")))
+print("  pit pass: validated at {} by session {!r} -- {!r}".format(
+    when, body.get("session"), body.get("validate_command")))
 PY
   # 3 and 4 already explained themselves above; anything else is the reader
-  # failing rather than the receipt, and must not pass for a receipt that is
+  # failing rather than the pit pass, and must not pass for a pit pass that is
   # merely absent.
-  case "$receipt_rc" in
+  case "$pass_rc" in
     0) ;;
     3|4) exit 1 ;;
-    *) echo "wdd: could not read the receipt at $RECEIPT (status $receipt_rc) -- refusing to merge." >&2
+    *) echo "race: could not read the pit pass at $PASS (status $pass_rc) -- refusing to merge." >&2
        exit 1 ;;
   esac
 
@@ -793,7 +807,7 @@ PY
   refuse_if_unmergeable() {
     case "${1:-}" in
       BEHIND)
-        echo "wdd: PR #$PR_NUM is BEHIND $BASE -- refusing to merge." >&2
+        echo "race: PR #$PR_NUM is BEHIND $BASE -- refusing to merge." >&2
         echo "  Merging now produces a merge commit combining two states that" >&2
         echo "  were never validated together: the branch passed against the" >&2
         echo "  base AS OF WHEN IT RAN, and two branches can each add a" >&2
@@ -805,8 +819,8 @@ PY
         echo "  Update the branch by merging $BASE into it -- never rebase: a" >&2
         echo "  rebase rewrites every sha a full-branch review covered. The merge" >&2
         echo "  changes the head sha, so it needs" >&2
-        echo "  a full-branch review of the new head, then the lane on that commit," >&2
-        echo "  then this step again -- neither the review nor the receipt carries" >&2
+        echo "  a full-branch review of the new head, then the pit lane on that commit," >&2
+        echo "  then this step again -- neither the review nor the pit pass carries" >&2
         echo "  across." >&2
         exit 1 ;;
       DIRTY)
@@ -814,14 +828,14 @@ PY
         # across 20 open PRs. Unguarded, a conflicting PR waited the full bound
         # and then attempted a merge GitHub was always going to refuse -- half
         # an hour spent to arrive at an inaccurate message.
-        echo "wdd: PR #$PR_NUM has conflicts with $BASE -- refusing to merge." >&2
+        echo "race: PR #$PR_NUM has conflicts with $BASE -- refusing to merge." >&2
         echo "  GitHub will not merge it in this state, so waiting for checks" >&2
         echo "  would only spend the bound to arrive at the same answer." >&2
         echo "  Merge $BASE into the branch and resolve the conflict there --" >&2
         echo "  never rebase: a rebase rewrites every sha a full-branch review" >&2
         echo "  covered. That changes the head sha, so it needs" >&2
-        echo "  a full-branch review of the new head, then the lane on that commit," >&2
-        echo "  then this step again -- neither the review nor the receipt carries" >&2
+        echo "  a full-branch review of the new head, then the pit lane on that commit," >&2
+        echo "  then this step again -- neither the review nor the pit pass carries" >&2
         echo "  across." >&2
         exit 1 ;;
     esac
@@ -941,14 +955,14 @@ PY
       dirty)  refuse_if_unmergeable DIRTY ;;
       pass)   note "$CHECK: green"; break ;;
       fail)
-        echo "wdd: '$CHECK' is not green on PR #$PR_NUM -- refusing to merge." >&2
-        echo "  Nothing was merged. Fix the branch, re-run the lane against the" >&2
-        echo "  new commit -- the receipt is pinned to a sha and does not carry" >&2
+        echo "race: '$CHECK' is not green on PR #$PR_NUM -- refusing to merge." >&2
+        echo "  Nothing was merged. Fix the branch, re-run the pit lane against the" >&2
+        echo "  new commit -- the pit pass is pinned to a sha and does not carry" >&2
         echo "  forward -- and then re-run this step." >&2
         exit 1 ;;
     esac
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      echo "wdd: NOT MERGED -- '$CHECK' was still running when the ${TIMEOUT}s bound expired." >&2
+      echo "race: NOT MERGED -- '$CHECK' was still running when the ${TIMEOUT}s bound expired." >&2
       echo "  Nothing was merged and nothing was changed. Re-run this step once" >&2
       echo "  the check finishes." >&2
       exit 3
@@ -959,28 +973,28 @@ PY
   # -- 4. Merge, server-side ------------------------------------------------
   # `--merge`, and the method is not a preference:
   #   * squash and rebase MINT A NEW COMMIT, so what lands on the base is a sha
-  #     nothing ever validated -- the receipt's guarantee would stop at the PR
+  #     nothing ever validated -- the pit pass's guarantee would stop at the PR
   #     boundary, which is the one place it has to hold;
-  #   * `cleanup` gates task-branch DELETION on `--is-ancestor HEAD origin/BASE`,
+  #   * `pack-down` gates task-branch DELETION on `--is-ancestor HEAD origin/BASE`,
   #     and a new sha makes that permanently false, so every task branch would
   #     be kept forever with no indication why.
   #
-  # `--match-head-commit "$PR_SHA"` is the other half of the receipt, and it is
+  # `--match-head-commit "$PR_SHA"` is the other half of the pit pass, and it is
   # not a nicety. The head sha was read before the wait; the wait can run for
   # half an hour; and "checks are running, let me push the fix now" is the
   # ordinary way of working, not an exotic sequence. Worse, the rollup reports
   # checks for the CURRENT head, so a push mid-wait produces a green signal
-  # about a commit no receipt covers -- every signal agrees, and only the sha
+  # about a commit no pit pass covers -- every signal agrees, and only the sha
   # dissents. GitHub refuses the merge server-side if the head has moved.
   #
   # Re-reading `headRefOid` here instead would only NARROW the window, and a
   # narrower race is the kind nobody reproduces afterwards.
   note "merging PR #$PR_NUM server-side (--merge, pinned to $PR_SHA)"
   if ! gh pr merge "$PR_NUM" --merge --match-head-commit "$PR_SHA"; then
-    echo "wdd: gh refused the merge -- nothing landed." >&2
+    echo "race: gh refused the merge -- nothing landed." >&2
     echo "  If it says the head branch was modified, that is this step working:" >&2
-    echo "  something was pushed while the checks ran, and the receipt covers" >&2
-    echo "  $PR_SHA rather than whatever is on the PR now. Re-run the lane on" >&2
+    echo "  something was pushed while the checks ran, and the pit pass covers" >&2
+    echo "  $PR_SHA rather than whatever is on the PR now. Re-run the pit lane on" >&2
     echo "  the new commit, then re-run this step." >&2
     echo "  Otherwise: branch protection sits upstream of this script and is" >&2
     echo "  not routed around; whatever it objected to is settled on GitHub." >&2
@@ -996,12 +1010,12 @@ PY
   # is the interesting half, and it is deliberately not repaired.
   MAIN="$(git worktree list --porcelain | awk 'NR==1 && /^worktree /{print substr($0, 10)}')"
   if [ -z "$MAIN" ] || [ ! -d "$MAIN" ]; then
-    echo "wdd: MERGED, but the main checkout could not be located." >&2
+    echo "race: MERGED, but the main checkout could not be located." >&2
     exit 4
   fi
   main_branch="$(git -C "$MAIN" symbolic-ref --short HEAD 2>/dev/null || true)"
   if [ "$main_branch" != "$BASE" ]; then
-    echo "wdd: MERGED, but the main checkout is on '${main_branch:-a detached HEAD}', not '$BASE'." >&2
+    echo "race: MERGED, but the main checkout is on '${main_branch:-a detached HEAD}', not '$BASE'." >&2
     echo "  Left untouched: fast-forwarding whatever branch happens to be" >&2
     echo "  checked out there would move a branch nobody asked about." >&2
     exit 4
@@ -1009,14 +1023,14 @@ PY
   if ! git -C "$MAIN" fetch --no-tags --quiet origin "$BASE"; then
     # Explicit rather than letting `set -e` end the run silently: the merge has
     # already happened, and a bare non-zero exit here reads like it did not.
-    echo "wdd: MERGED, but 'git fetch origin $BASE' failed in $MAIN." >&2
+    echo "race: MERGED, but 'git fetch origin $BASE' failed in $MAIN." >&2
     echo "  The checkout is behind, not broken. Fetch and fast-forward it by hand." >&2
     exit 4
   fi
   if git -C "$MAIN" merge --ff-only "origin/$BASE" >/dev/null 2>&1; then
     note "main checkout fast-forwarded to origin/$BASE ($(git -C "$MAIN" rev-parse --short HEAD))"
   else
-    echo "wdd: MERGED, but the main checkout would NOT fast-forward." >&2
+    echo "race: MERGED, but the main checkout would NOT fast-forward." >&2
     local_commits="$(git -C "$MAIN" log --oneline "origin/$BASE..$BASE" || true)"
     if [ -n "$local_commits" ]; then
       echo "  Local commits on $BASE that are not on origin/$BASE:" >&2
@@ -1053,7 +1067,7 @@ PY
 
   echo ""
   note "PR #$PR_NUM merged; $MAIN is level with origin/$BASE."
-  note "Then: wdd cleanup $PLAN"
+  note "Then: race pack-down $PLAN"
   ;;
 
 pack-down)
@@ -1063,11 +1077,11 @@ pack-down)
   require_worktree_dir
   git fetch --no-tags --quiet origin "$BASE"
   git merge-base --is-ancestor HEAD "origin/$BASE" 2>/dev/null || {
-    echo "wdd: $BRANCH is not merged into origin/$BASE yet — nothing to clean up." >&2
+    echo "race: $BRANCH is not merged into origin/$BASE yet — nothing to clean up." >&2
     exit 1; }
 
   for b in $task_branches; do
-    # Same expression wave-worktree used to create it: both resolve
+    # Same expression lap-worktree used to create it: both resolve
     # worktree_dir from the project config (`git rev-parse --show-toplevel`
     # for the root, `project-config --scalar worktree_dir` for the
     # directory under it), which is what makes the two unable to disagree.
