@@ -12,28 +12,32 @@ hand back is a clean spec, not a list of complaints.
 
 `$ARGUMENTS`
 
-**The spec is a comment on its work issue, not a file — except on the solution-ready path, where
-the issue BODY is the spec.** An issue carrying the `solution-ready` label has no spec comment by
+**The spec is a comment on its work issue, not a file — except on the green-flag path, where
+the issue BODY is the spec.** An issue carrying the `green-flag` label has no spec comment by
 design: its body is the authority, and it is what you read, fix and PATCH.
 
 Resolve the target:
 - An issue number or issue URL → the spec comment on that issue — unless it carries the
-  `solution-ready` label, in which case see the last bullet.
+  `green-flag` label, in which case see the last bullet.
 - A comment URL or comment id → that comment directly.
 - Empty → the issue this session is working. The branch name encodes it:
   `<branch_prefix><issue>-<slug>` (`branch_prefix` already includes its own
   separator), so `git rev-parse --abbrev-ref HEAD` names the issue.
 - Nothing resolves → list the candidates and ask which. Do not guess.
-- The issue carries the `solution-ready` label → its **body** is the spec. Do not look for a
+- The issue carries the `green-flag` label → its **body** is the spec. Do not look for a
   `# Spec:` comment; there is none, and finding one would mean the issue is on the wrong path.
 
 Read the labels before resolving anything else — every bullet above turns on whether
-`solution-ready` is present, and an agent that cannot tell falls back to the comment path and
+`green-flag` is present, and an agent that cannot tell falls back to the comment path and
 silently bypasses the whole route:
 
 ```bash
 gh issue view <n> --repo <owner>/<repo> --json labels --jq '.labels[].name'
 ```
+
+<!-- deprecated(0.16.0) -->
+An issue still labelled `solution-ready` is treated exactly as `green-flag` until 0.17.0, and
+is never relabelled. On such an issue the label to remove is `solution-ready`.
 
 Find the spec **by its `# Spec:` first line, never by position** — comments accumulate, so the
 newest is not the spec and neither, once anyone has replied, is the first:
@@ -162,12 +166,12 @@ Why a reading pass cannot substitute for this. Each of the following shipped in 
   is dead by the time anyone reads it;
 - one named function resolving "the project", which is two questions — which lock, which checkout —
   whose answers coincide in a main checkout and diverge in a linked worktree;
-- "the run writes a receipt", silent on when the recorded commit id is read back and whether the tree
+- "the run writes a pit pass", silent on when the recorded commit id is read back and whether the tree
   must be clean; both load-bearing.
 
 **Every one of them reads perfectly, because every one is internally consistent and externally
 false.** There is nothing in the document to notice. Three were caught by a later review and two by
-an implementer who tried to build the thing and could not — none by reading the spec. The four checks
+whoever tried to build the thing and could not — none by reading the spec. The four checks
 above are earlier and cheaper than either.
 
 ---
@@ -179,13 +183,13 @@ Ask the user about the DECISION findings **in one batch**, before touching the f
 consequence, not "what should we do?". Cluster related decisions into one question when they share
 an answer. Do not ask about MECHANICAL findings; do not ask permission to fix them.
 
-**On the solution-ready path a DECISION finding is proof the label was wrong.** Do not ask the
+**On the green-flag path a DECISION finding is proof the label was wrong.** Do not ask the
 question and continue: remove the label, say which finding overturned it, and demote the issue to a
 brainstorming session with the human. A label that survived a contradicting finding would be worse
 than no label at all.
 
 ```bash
-gh issue edit <n> --repo <owner>/<repo> --remove-label solution-ready
+gh issue edit <n> --repo <owner>/<repo> --remove-label green-flag
 ```
 
 If the user answers → their answer is what gets written, in their words where they gave words.
@@ -226,7 +230,7 @@ Edit the spec in place. Rules:
   names a version, so an edit after approval has to re-open that gate. Leaving the version alone
   silently transfers an approval onto text nobody approved — the failure state sitting exactly where
   the safe state should be.
-  A solution-ready issue body carries no `**Version:**` header — it was never approved at a version,
+  A green-flag issue body carries no `**Version:**` header — it was never approved at a version,
   because it was never put to a human. Nothing to bump there; leave the body's own headings alone.
 - **Only the spec.** Do not write code, do not change other docs, do not touch any other comment or
   issue, do not commit. The edit lands on the comment itself:
@@ -236,7 +240,7 @@ Edit the spec in place. Rules:
     -f body="$(cat <edited-spec-file>)"
   ```
 
-  **On the solution-ready path the subject is the issue body, so PATCH the issue instead:**
+  **On the green-flag path the subject is the issue body, so PATCH the issue instead:**
 
   ```bash
   gh api --method PATCH "repos/<owner>/<repo>/issues/<n>" \
