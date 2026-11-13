@@ -8,8 +8,9 @@ because callers read `project-config`, `race-workspace` and others by their
 stdout.
 
 Each old file is the same thin shim, calling `old_skill_script` or
-`old_root_script` with its own file name; the two tables below are the whole
-mapping.
+`old_root_script` with its own file name; the two tables below, and mapped()'s
+one special case for plan-tasks --validate, are the whole mapping -- plan-tasks
+itself forwards through old_skill_script, so each rule is spelled once.
 """
 
 from __future__ import annotations

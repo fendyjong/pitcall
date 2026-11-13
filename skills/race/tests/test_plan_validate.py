@@ -1,4 +1,4 @@
-"""Mechanical validation of a wave plan.
+"""Mechanical validation of a plan.
 
 Every rule here reads a declared field. None interprets prose — that is the
 property that makes validation a gate rather than a second opinion.
@@ -18,9 +18,9 @@ def _plan(tmp_path: Path, body: str) -> Path:
 VALID = """\
 # A Plan
 
-## Waves
+## Laps
 
-| Wave | Tasks | Rationale |
+| Lap | Tasks | Rationale |
 |---|---|---|
 | 1 | 1, 2 | disjoint, no deps |
 | 2 | 3 | depends on 1 |
@@ -61,51 +61,51 @@ def test_a_compliant_plan_passes(tmp_path):
     r = run_script("qualifying", str(_plan(tmp_path, VALID)), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "3 tasks" in r.stdout
-    assert "2 waves" in r.stdout
+    assert "2 laps" in r.stdout
 
 
-def test_overlapping_files_in_one_wave_fail(tmp_path):
-    """The whole point: Tasks 1 and 2 would collide at the wave merge."""
+def test_overlapping_files_in_one_lap_fail(tmp_path):
+    """The whole point: Tasks 1 and 2 would collide at the lap merge."""
     body = VALID.replace("- Create: `app/two.py`", "- Modify: `app/one.py`")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
-    assert "wave 1" in r.stderr
+    assert "lap 1" in r.stderr
     assert "app/one.py" in r.stderr
     assert "Task 1" in r.stderr and "Task 2" in r.stderr
 
 
-def test_dependency_inside_the_same_wave_fails(tmp_path):
+def test_dependency_inside_the_same_lap_fails(tmp_path):
     body = VALID.replace("| 1 | 1, 2 |", "| 1 | 1, 2, 3 |").replace("| 2 | 3 | depends on 1 |\n", "")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
     assert "Task 3" in r.stderr
-    assert "same wave" in r.stderr or "earlier wave" in r.stderr
+    assert "same lap" in r.stderr or "earlier lap" in r.stderr
 
 
-def test_dependency_on_a_later_wave_fails(tmp_path):
+def test_dependency_on_a_later_lap_fails(tmp_path):
     body = VALID.replace("- Depends: 1\n- Produces: nothing", "- Depends: 2\n- Produces: nothing")
     body = body.replace("| 1 | 1, 2 |", "| 1 | 1, 3 |").replace("| 2 | 3 |", "| 2 | 2 |")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
-    assert "earlier wave" in r.stderr
+    assert "earlier lap" in r.stderr
 
 
-def test_task_in_no_wave_fails(tmp_path):
+def test_task_in_no_lap_fails(tmp_path):
     body = VALID.replace("| 1 | 1, 2 |", "| 1 | 1 |")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
-    assert "Task 2 is in no wave" in r.stderr
+    assert "Task 2 is in no lap" in r.stderr
 
 
-def test_task_in_two_waves_fails(tmp_path):
+def test_task_in_two_laps_fails(tmp_path):
     body = VALID.replace("| 2 | 3 | depends on 1 |", "| 2 | 1, 3 | depends on 1 |")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
     assert "Task 1" in r.stderr
-    assert "wave 1 and wave 2" in r.stderr
+    assert "lap 1 and lap 2" in r.stderr
 
 
-def test_wave_naming_a_nonexistent_task_fails(tmp_path):
+def test_lap_naming_a_nonexistent_task_fails(tmp_path):
     body = VALID.replace("| 2 | 3 | depends on 1 |", "| 2 | 3, 9 | depends on 1 |")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
@@ -143,7 +143,7 @@ def test_dependency_cycle_fails(tmp_path):
 def test_missing_model_line_fails(tmp_path):
     """Tier is assigned at planning time, so its absence must stop the plan.
 
-    A wave is dispatched in one message, and the Agent tool's `model` is
+    A lap is dispatched in one message, and the Agent tool's `model` is
     optional — omitting it silently inherits the session's own, usually most
     expensive, tier and leaves no trace anywhere. Undeclared is the failure
     this rule exists to make loud.
@@ -191,7 +191,7 @@ def test_task_declaring_no_files_fails(tmp_path):
 
 
 def test_duplicate_migration_number_in_one_home_fails(tmp_path):
-    """Different paths, same number, different waves — rule 4 cannot see this."""
+    """Different paths, same number, different laps — rule 4 cannot see this."""
     body = VALID.replace(
         "- Create: `app/one.py`", "- Create: `db/migrations/0042_a.sql`"
     ).replace("- Modify: `app/one.py`", "- Create: `db/migrations/0042_b.sql`")
@@ -235,14 +235,14 @@ def test_trailing_slash_alias_is_caught_as_a_collision(tmp_path):
     """`libs/shared` and `libs/shared/` name the same tree.
 
     Raw string comparison lets both spellings validate as disjoint and then
-    collide for real at the wave merge.
+    collide for real at the lap merge.
     """
     body = VALID.replace("- Create: `app/one.py`", "- Bump: `libs/shared`").replace(
         "- Create: `app/two.py`", "- Bump: `libs/shared/`"
     )
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
-    assert "wave 1" in r.stderr
+    assert "lap 1" in r.stderr
     assert "libs/shared" in r.stderr
     assert "Task 1" in r.stderr and "Task 2" in r.stderr
 
@@ -254,7 +254,7 @@ def test_leading_dot_slash_alias_is_caught_as_a_collision(tmp_path):
     ).replace("- Create: `app/two.py`", "- Modify: `./services/billing/app/checkout.py`")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
-    assert "wave 1" in r.stderr
+    assert "lap 1" in r.stderr
     assert "services/billing/app/checkout.py" in r.stderr
 
 
@@ -293,11 +293,11 @@ def test_bare_filename_with_no_extension_produces_a_warning(tmp_path):
     assert "Makefile" in r.stderr
 
 
-def test_plan_without_a_waves_table_fails(tmp_path):
+def test_plan_without_a_laps_table_fails(tmp_path):
     body = VALID.split("### Task 1")[1]
     r = run_script("qualifying", str(_plan(tmp_path, "### Task 1" + body)), cwd=tmp_path)
     assert r.returncode == 1
-    assert "no ## Waves table" in r.stderr
+    assert "no ## Laps table" in r.stderr
 
 
 def test_every_breach_is_reported_not_just_the_first(tmp_path):
@@ -312,7 +312,7 @@ def test_every_breach_is_reported_not_just_the_first(tmp_path):
 
 
 def test_summary_mode_still_works(tmp_path):
-    """--validate is an addition; the existing summary mode is unchanged."""
+    """qualifying is a separate command; the plan-tasks summary is unchanged."""
     r = run_script("plan-tasks", str(_plan(tmp_path, VALID)), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "## Task 1: First" in r.stdout
@@ -324,12 +324,12 @@ def test_validate_on_a_missing_file_exits_2(tmp_path):
     assert r.returncode == 2
 
 
-def test_a_nested_fence_inside_the_waves_section_is_not_parsed(tmp_path):
-    """The wave table must be read with the same fence tracking as tasks are.
+def test_a_nested_fence_inside_the_laps_section_is_not_parsed(tmp_path):
+    """The lap table must be read with the same fence tracking as tasks are.
 
     A naive toggle desynchronises on a fenced example containing a fence and
-    then reads illustrative table rows as real wave membership — inventing a
-    wave entry for a task that does not exist and rejecting a valid plan.
+    then reads illustrative table rows as real lap membership — inventing a
+    lap entry for a task that does not exist and rejecting a valid plan.
     """
     body = VALID.replace(
         "| 2 | 3 | depends on 1 |",
@@ -340,22 +340,22 @@ def test_a_nested_fence_inside_the_waves_section_is_not_parsed(tmp_path):
     assert r.returncode == 0, r.stderr
 
 
-def test_a_wave_row_with_no_tasks_fails(tmp_path):
+def test_a_lap_row_with_no_tasks_fails(tmp_path):
     body = VALID.replace("| 2 | 3 | depends on 1 |", "| 2 | 3 | depends on 1 |\n| 3 |  | vestigial |")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
-    assert "wave 3 declares no tasks" in r.stderr
+    assert "lap 3 declares no tasks" in r.stderr
 
 
-def test_a_duplicate_wave_row_fails(tmp_path):
-    """Two rows labelled the same wave silently merge, which hides a typo."""
-    body = VALID.replace("| 2 | 3 | depends on 1 |", "| 1 | 3 | typo, meant wave 2 |")
+def test_a_duplicate_lap_row_fails(tmp_path):
+    """Two rows labelled the same lap silently merge, which hides a typo."""
+    body = VALID.replace("| 2 | 3 | depends on 1 |", "| 1 | 3 | typo, meant lap 2 |")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
     assert "more than one row" in r.stderr
 
 
-# --- Rule 8: the sweep is one pass, after every spec wave ----------------------
+# --- Rule 8: the sweep is one pass, after every spec lap ----------------------
 
 SWEEP = """
 ## Sweep
@@ -373,18 +373,18 @@ SWEEP = """
 
 
 def _with_sweep(row_for_task_4: str) -> str:
-    """VALID plus one sweep task, placed by the given wave-table row edit."""
+    """VALID plus one sweep task, placed by the given lap-table row edit."""
     return VALID.replace("| 2 | 3 | depends on 1 |", row_for_task_4) + SWEEP
 
 
-def test_a_sweep_task_after_every_spec_wave_passes(tmp_path):
+def test_a_sweep_task_after_every_spec_lap_passes(tmp_path):
     body = _with_sweep("| 2 | 3 | depends on 1 |\n| 3 | 4 | sweep |")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
 
 
-def test_a_sweep_task_in_a_spec_wave_fails(tmp_path):
-    """Wave 2 is already dispatched and integrated by the time the sweep is planned."""
+def test_a_sweep_task_in_a_spec_lap_fails(tmp_path):
+    """Lap 2 is already dispatched and integrated by the time the sweep is planned."""
     body = _with_sweep("| 2 | 3, 4 | depends on 1 |")
     r = run_script("qualifying", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 1
@@ -416,3 +416,30 @@ def test_the_sweep_heading_ends_the_previous_tasks_metadata(tmp_path):
     r = run_script("plan-tasks", str(_plan(tmp_path, body)), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "app/stray.py" not in r.stdout
+
+
+# deprecated(0.16.0): a 0.15.0 plan's `## Waves` table is judged the same until 0.17.0.
+def test_a_waves_table_still_qualifies_with_one_notice(tmp_path):
+    old = VALID.replace("## Laps", "## Waves").replace("| Lap |", "| Wave |")
+    r = run_script("qualifying", str(_plan(tmp_path, old)), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert r.stderr == "pitcall: a '## Waves' table is deprecated and goes in 0.17.0; use '## Laps'\n"
+    assert r.stdout.endswith("tasks in 2 laps — valid\n")
+
+
+# deprecated(0.16.0): a plan stating its laps under both headings is refused.
+def test_a_plan_with_both_tables_is_refused(tmp_path):
+    both = VALID + "\n## Waves\n\n| Wave | Tasks | Rationale |\n|---|---|---|\n| 1 | 1, 2, 3 | all |\n"
+    r = run_script("qualifying", str(_plan(tmp_path, both)), cwd=tmp_path)
+    assert r.returncode == 1
+    assert "2 lap tables" in r.stderr
+
+
+def test_a_laps_table_prints_no_notice(tmp_path):
+    r = run_script("qualifying", str(_plan(tmp_path, VALID)), cwd=tmp_path)
+    assert (r.returncode, r.stderr) == (0, "")
+
+
+def test_qualifying_without_a_plan_prints_its_usage(tmp_path):
+    r = run_script("qualifying", cwd=tmp_path)
+    assert (r.returncode, r.stderr) == (2, "usage: qualifying PLAN_FILE\n")
