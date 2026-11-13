@@ -176,6 +176,7 @@ PY
 }
 
 # deprecated(0.16.0): where 0.15.0's lane filed receipts; still evidence until 0.17.0.
+# `pit.receipts_dir()` creates an empty `.pitcall/receipts/` when absent: harmless, machine-local.
 receipts_dir() {
   python3 - "$HERE" <<'PY'
 import pathlib, sys
@@ -702,7 +703,7 @@ PY
   # EXISTENCE AT THE EXACT PATH IS THE VERDICT. The body is read below only to
   # say something useful to a human; nothing about the decision depends on it.
   if ! PASSES="$(pit_passes_dir)"; then
-    echo "race: cannot resolve the pit lane's pit passes directory." >&2
+    echo "race: cannot resolve the pit lane's pit-passes directory." >&2
     exit 1
   fi
   PASS="$PASSES/$PR_SHA.json"
@@ -719,8 +720,8 @@ PY
     if [ "${others:-0}" != 0 ]; then
       echo "  The pit lane has pit passes for $others other commit(s) here, and none" >&2
       echo "  of them is this one. That is the ordinary shape of it: validation" >&2
-      echo "  ran, and then another commit landed. A commit pushed after a lane" >&2
-      echo "  run does not inherit that run's approval -- which is the entire" >&2
+      echo "  ran, and then another commit landed. A commit pushed after the pit lane ran" >&2
+      echo "  does not inherit that run's approval -- which is the entire" >&2
       echo "  reason a pit pass is filed under a sha rather than under a branch." >&2
     fi
     echo "  A pit pass is written only by a pit lane whose validate PASSED" >&2

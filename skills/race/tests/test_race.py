@@ -69,7 +69,7 @@ def race(cwd, *args, env=None):
     while the shipped arrangement failed — the one difference a test of a
     script's own path resolution must not introduce.
 
-    `env` is how the `merge` tests put a stubbed `gh` on PATH. Passing None
+    `env` is how the `finish` tests put a stubbed `gh` on PATH. Passing None
     inherits this process's environment, which is what every other test wants.
     """
     return subprocess.run(
@@ -82,13 +82,13 @@ def write_config(checkout, **overrides):
     (checkout / "pitcall.config.json").write_text(json.dumps({**CONFIG, **overrides}))
 
 
-def write_ledger(plan_wt, waves_dispatched, waves_integrated, plan=PLAN, extra=""):
+def write_ledger(plan_wt, laps_dispatched, laps_integrated, plan=PLAN, extra=""):
     ws = plan_wt / ".pitcall" / "race" / SLUG
     ws.mkdir(parents=True, exist_ok=True)
-    lines = [f"# RACE ledger — plan: {plan}"]
-    for w in waves_dispatched:
+    lines = [f"# Race ledger — plan: {plan}"]
+    for w in laps_dispatched:
         lines.append(f"Lap {w}: dispatched (BASE abc1234, T1 @ {SLUG}-t1 [cheapest/haiku])")
-    for w in waves_integrated:
+    for w in laps_integrated:
         lines.append(f"Lap {w}: integrated (merge def5678, pytest 1 passed, worktrees removed)")
     if extra:
         lines.append(extra)
@@ -161,13 +161,13 @@ def test_refuses_to_run_in_the_main_checkout(run):
     assert "refusing to run in the main checkout" in r.stderr
 
 
-def test_check_passes_when_every_wave_integrated_and_every_branch_merged(run):
+def test_check_passes_when_every_lap_integrated_and_every_branch_merged(run):
     r = race(run["plan_wt"], "check", PLAN)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "verification OK" in r.stdout
 
 
-def test_a_dispatched_wave_with_no_integrated_line_blocks_the_finish(run):
+def test_a_dispatched_lap_with_no_integrated_line_blocks_the_finish(run):
     write_ledger(run["plan_wt"], [1, 2], [1])
     r = race(run["plan_wt"], "check", PLAN)
     assert r.returncode == 1, r.stdout + r.stderr
@@ -204,7 +204,7 @@ def test_a_blocked_entry_blocks_the_finish(run):
     assert "BLOCKED" in r.stderr
 
 
-def test_cleanup_refuses_before_the_branch_reaches_origin_master(run):
+def test_pack_down_refuses_before_the_branch_reaches_origin_master(run):
     """Deleting a task branch whose work has not landed destroys the only copy."""
     r = race(run["plan_wt"], "pack-down", PLAN)
     assert r.returncode == 1, r.stdout + r.stderr
@@ -212,7 +212,7 @@ def test_cleanup_refuses_before_the_branch_reaches_origin_master(run):
     assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) != ""
 
 
-def test_cleanup_deletes_task_branches_and_workspace_once_merged(run):
+def test_pack_down_deletes_task_branches_and_workspace_once_merged(run):
     git("push", "-q", "origin", "planbranch:master", cwd=run["plan_wt"])
     ws = run["plan_wt"] / ".pitcall" / "race" / SLUG
     assert ws.exists()
@@ -226,7 +226,7 @@ def test_cleanup_deletes_task_branches_and_workspace_once_merged(run):
     assert "Plan worktree not removed" in r.stdout
 
 
-def test_cleanup_uses_the_config_default_branch_not_a_stale_origin_head(run):
+def test_pack_down_uses_the_config_default_branch_not_a_stale_origin_head(run):
     """`origin/HEAD` is a clone-time cache, and this is what trusting it costs.
 
     The shape reproduced here is a remote that renamed its default branch:
@@ -234,7 +234,7 @@ def test_cleanup_uses_the_config_default_branch_not_a_stale_origin_head(run):
     — while the project's real default has moved. So `origin/master` exists,
     is live, and is NOT where this work landed.
 
-    `cleanup` gates branch DELETION on `--is-ancestor HEAD origin/$BASE`.
+    `pack-down` gates branch DELETION on `--is-ancestor HEAD origin/$BASE`.
     Deriving BASE from `origin/HEAD` here would check against `origin/master`,
     find HEAD is not an ancestor, and refuse — the benign direction of that
     bug. The malign direction, deleting task branches whose work never reached
@@ -258,7 +258,7 @@ def test_cleanup_uses_the_config_default_branch_not_a_stale_origin_head(run):
     assert git("branch", "--list", f"{SLUG}-t2", cwd=run["main"]) == ""
 
 
-def test_cleanup_refuses_when_the_config_cannot_answer(run):
+def test_pack_down_refuses_when_the_config_cannot_answer(run):
     """No answer is a refusal, never a default.
 
     A guessed base either fails loudly on the fetch or — the case that matters
@@ -276,25 +276,25 @@ def test_cleanup_refuses_when_the_config_cannot_answer(run):
     assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) != ""
 
 
-def test_cleanup_removes_a_worktree_under_a_configured_worktree_dir_other_than_the_default(run):
-    """`cleanup` must resolve `worktree_dir` from the SAME config `lap-worktree`
+def test_pack_down_removes_a_worktree_under_a_configured_worktree_dir_other_than_the_default(run):
+    """`pack-down` must resolve `worktree_dir` from the SAME config `lap-worktree`
     used to create it -- not assume `.worktrees`.
 
     Every other fixture in this file, including `run` itself, builds its task
     worktrees directly under the literal `.worktrees`, which also happens to be
     `worktree_dir`'s value in `CONFIG`. A suite that never configures anything
-    else cannot tell a `cleanup` that correctly reads `worktree_dir` from a
-    `cleanup` that still has `.worktrees` hardcoded: both give the same answer
+    else cannot tell a `pack-down` that correctly reads `worktree_dir` from a
+    `pack-down` that still has `.worktrees` hardcoded: both give the same answer
     for the same fixture. This test is the one that can, by configuring a
     DIFFERENT directory and creating the worktree through the real
-    `lap-worktree` script -- the same script `cleanup` has to agree with.
+    `lap-worktree` script -- the same script `pack-down` has to agree with.
 
-    Without the fix, `cleanup` looks for the worktree under the old literal,
+    Without the fix, `pack-down` looks for the worktree under the old literal,
     finds nothing there (`[ -d "$d" ]` is false), skips the removal silently,
     and deletes the branch anyway -- the worktree leaks with nothing left
     pointing at it.
     """
-    WAVE_WORKTREE = SKILL / "scripts" / "lap-worktree"
+    LAP_WORKTREE = SKILL / "scripts" / "lap-worktree"
 
     write_config(run["plan_wt"], worktree_dir="wt")
     (run["plan_wt"] / ".gitignore").write_text("wt/\n")
@@ -303,7 +303,7 @@ def test_cleanup_removes_a_worktree_under_a_configured_worktree_dir_other_than_t
     b = f"{SLUG}-t3"
     head = git("rev-parse", "HEAD", cwd=run["plan_wt"])
     created = subprocess.run(
-        [str(WAVE_WORKTREE), "create", SLUG, "3", head],
+        [str(LAP_WORKTREE), "create", SLUG, "3", head],
         cwd=run["plan_wt"], capture_output=True, text=True,
     )
     assert created.returncode == 0, created.stderr
@@ -315,7 +315,7 @@ def test_cleanup_removes_a_worktree_under_a_configured_worktree_dir_other_than_t
     git("merge", "-q", "--no-edit", b, cwd=run["plan_wt"])
     git("push", "-q", "origin", "planbranch:master", cwd=run["plan_wt"])
 
-    assert wt.exists(), "sanity: the worktree exists before cleanup runs"
+    assert wt.exists(), "sanity: the worktree exists before pack-down runs"
 
     r = race(run["plan_wt"], "pack-down", PLAN)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -371,18 +371,18 @@ def test_a_dropped_attempts_branch_does_not_block_the_finish(run):
     assert "task branches: 2" in r.stdout, r.stdout
 
 
-def test_cleanup_keeps_a_dropped_attempts_branch(run):
+def test_pack_down_keeps_a_dropped_attempts_branch(run):
     """It is the only copy of the attempt, and the re-routed issue names it."""
     b = dropped_branch(run)
     git("push", "-q", "origin", "planbranch:master", cwd=run["plan_wt"])
     r = race(run["plan_wt"], "pack-down", PLAN)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) == "", "sanity: cleanup ran"
+    assert git("branch", "--list", f"{SLUG}-t1", cwd=run["main"]) == "", "sanity: pack-down ran"
     assert git("branch", "--list", b, cwd=run["main"]) != ""
 
 
 # ---------------------------------------------------------------------------
-# `merge` — landing the PR on evidence rather than on attention.
+# `finish` — landing the PR on evidence rather than on attention.
 #
 # Every test below stubs `gh` on PATH and asserts on the STUB'S CALL LOG, not
 # on the exit status alone. "It refused" and "it refused for the right reason"
@@ -568,7 +568,7 @@ def write_pit_pass(run, sha, raw=None):
 
 @pytest.fixture
 def gh(tmp_path, run):
-    """A stubbed `gh` on PATH plus the environment `merge` reads."""
+    """A stubbed `gh` on PATH plus the environment `finish` reads."""
     d = tmp_path / "gh"
     d.mkdir()
     bindir = tmp_path / "bin"
@@ -634,7 +634,7 @@ def merges(gh):
     return [c for c in calls(gh, "pr merge") if "--help" not in c]
 
 
-def test_merge_lands_the_pr_and_then_fast_forwards_the_main_checkout(run, gh):
+def test_finish_lands_the_pr_and_then_fast_forwards_the_main_checkout(run, gh):
     write_pit_pass(run, gh["head"])
     before = git("rev-parse", "HEAD", cwd=run["main"])
 
@@ -674,7 +674,7 @@ def test_finish_refuses_without_a_pit_pass_and_never_calls_gh_pr_merge(run, gh):
     ], "the pit pass must be checked BEFORE waiting on checks"
 
 
-def test_merge_refuses_a_pit_pass_that_names_a_different_commit(run, gh):
+def test_finish_refuses_a_pit_pass_that_names_a_different_commit(run, gh):
     """The review-fix case: validation ran, and then another commit landed.
 
     A branch-scoped pit pass would permit exactly this, which is why the pit pass
@@ -707,7 +707,7 @@ def test_a_corrupt_pit_pass_is_treated_as_absent(run, gh):
     assert merges(gh) == []
 
 
-def test_merge_reports_not_merged_when_the_check_is_still_running(run, gh):
+def test_finish_reports_not_merged_when_the_check_is_still_running(run, gh):
     write_pit_pass(run, gh["head"])
     (gh["dir"] / "checks.json").write_text(rollup(("ci", "IN_PROGRESS", None)))
 
@@ -720,7 +720,7 @@ def test_merge_reports_not_merged_when_the_check_is_still_running(run, gh):
         "rev-parse", "master", cwd=run["main"])
 
 
-def test_merge_refuses_when_the_required_check_is_red(run, gh):
+def test_finish_refuses_when_the_required_check_is_red(run, gh):
     write_pit_pass(run, gh["head"])
     (gh["dir"] / "checks.json").write_text(rollup(("ci", "COMPLETED", "FAILURE")))
 
@@ -730,7 +730,7 @@ def test_merge_refuses_when_the_required_check_is_red(run, gh):
     assert merges(gh) == []
 
 
-def test_merge_waits_for_a_check_that_finishes_mid_wait(run, gh):
+def test_finish_waits_for_a_check_that_finishes_mid_wait(run, gh):
     """The bound is a bound, not a single glance.
 
     A step that polled once and gave up would exit 3 here, and a step that
@@ -749,7 +749,7 @@ def test_merge_waits_for_a_check_that_finishes_mid_wait(run, gh):
     assert merges(gh)
 
 
-def test_merge_gates_on_the_check_named_by_the_config_not_a_hardcoded_one(run, gh):
+def test_finish_gates_on_the_check_named_by_the_config_not_a_hardcoded_one(run, gh):
     """A hardcoded check name is a gate on someone else's project.
 
     The rollup here is green on `ci` — the name a plugin would most plausibly
@@ -1098,7 +1098,7 @@ def test_a_local_head_ahead_of_the_pr_is_refused_naming_both(run, gh):
     review fix committed locally and not pushed makes those different commits,
     and the run would report MERGED, exit 0, and not contain the fix. Nothing
     unvalidated lands, because the pit pass still covers what GitHub merged —
-    but the operator is told the wrong thing, and `cleanup` refuses later for
+    but the operator is told the wrong thing, and `pack-down` refuses later for
     reasons that do not obviously connect back to here.
     """
     write_pit_pass(run, gh["head"])
@@ -1158,7 +1158,7 @@ def test_a_resolved_stop_marker_does_not_block_the_finish(run):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_a_wave_after_the_sweep_range_blocks_the_finish(run):
+def test_a_lap_after_the_sweep_range_blocks_the_finish(run):
     write_ledger(run["plan_wt"], [1, 2], [1, 2], extra="Sweep plan: laps 1-1")
     r = race(run["plan_wt"], "check", PLAN)
     assert r.returncode == 1, r.stdout + r.stderr
@@ -1187,14 +1187,14 @@ def test_check_refuses_a_must_fix_verdict(run):
     assert "rule 2" in r.stderr
 
 
-def test_cleanup_does_not_ask_for_a_verdict(run):
-    """`cleanup` runs after the merge; review coverage was settled before it."""
+def test_pack_down_does_not_ask_for_a_verdict(run):
+    """`pack-down` runs after the merge; review coverage was settled before it."""
     (run["plan_wt"] / ".pitcall" / "race" / SLUG / "final-review-1.md").unlink()
     r = race(run["plan_wt"], "pack-down", PLAN)
     assert "rule 1" not in r.stderr, r.stdout + r.stderr
 
 
-def test_merge_refuses_a_pr_head_the_last_review_did_not_see(run, gh):
+def test_finish_refuses_a_pr_head_the_last_review_did_not_see(run, gh):
     """The pit pass covers the PR head, the review does not: still refused."""
     write_verdict(run["plan_wt"], reviewed=git("rev-parse", "HEAD~1", cwd=run["plan_wt"]),
                   since=git("merge-base", "origin/master", "HEAD", cwd=run["plan_wt"]))
@@ -1213,7 +1213,7 @@ SWEEP_LEDGER = "\n".join([
 ])
 
 
-def test_ship_appends_the_sweep_section(run, gh):
+def test_grid_appends_the_sweep_section(run, gh):
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
     (gh["dir"] / "issue-10").write_text("")
     r = race(run["plan_wt"], "grid", PLAN, env=gh["env"])
@@ -1224,7 +1224,7 @@ def test_ship_appends_the_sweep_section(run, gh):
     assert body.count("Closes #10") == 1
 
 
-def test_ship_leaves_out_a_close_that_does_not_resolve(run, gh):
+def test_grid_leaves_out_a_close_that_does_not_resolve(run, gh):
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
     r = race(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
@@ -1232,7 +1232,7 @@ def test_ship_leaves_out_a_close_that_does_not_resolve(run, gh):
     assert "Closes #10" not in (gh["dir"] / "body.txt").read_text()
 
 
-def test_a_second_ship_does_not_repeat_the_sweep_section(run, gh):
+def test_a_second_grid_does_not_repeat_the_sweep_section(run, gh):
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
     (gh["dir"] / "issue-10").write_text("")
     race(run["plan_wt"], "grid", PLAN, env=gh["env"])
@@ -1241,7 +1241,7 @@ def test_a_second_ship_does_not_repeat_the_sweep_section(run, gh):
     assert (gh["dir"] / "body.txt").read_text().count("## Sweep") == 1
 
 
-def test_ship_without_sweep_lines_adds_no_section(run, gh):
+def test_grid_without_sweep_lines_adds_no_section(run, gh):
     r = race(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (gh["dir"] / "body.txt").exists()
@@ -1252,7 +1252,7 @@ def fail_ledger_step(gh, step, status=7):
 
     No ledger content can do this: `race` reads the same ledger with `stops`
     and `sweep-guard` while verifying, so input that breaks the sweep-section
-    reader breaks verification first and `ship` never reaches the PR.
+    reader breaks verification first and `grid` never reaches the PR.
     `race-ledger` runs under `#!/usr/bin/env python3`, so a `python3` first on
     PATH intercepts exactly the call named and hands every other one on.
     """
@@ -1268,7 +1268,7 @@ def fail_ledger_step(gh, step, status=7):
     shim.chmod(0o755)
 
 
-def test_ship_says_so_when_the_sweep_section_cannot_be_built(run, gh):
+def test_grid_says_so_when_the_sweep_section_cannot_be_built(run, gh):
     """Soft, but spoken: a reader that failed must not look like one with nothing to say."""
     write_ledger(run["plan_wt"], [1], [1], extra=SWEEP_LEDGER)
     (gh["dir"] / "issue-10").write_text("")
@@ -1279,7 +1279,7 @@ def test_ship_says_so_when_the_sweep_section_cannot_be_built(run, gh):
     assert not (gh["dir"] / "body.txt").exists()
 
 
-def test_ship_writes_no_unconfirmed_close_when_the_closes_cannot_be_listed(run, gh):
+def test_grid_writes_no_unconfirmed_close_when_the_closes_cannot_be_listed(run, gh):
     """Every `Closes #N` is confirmed to resolve before it is written. With the
     list unreadable none can be, so no section is written -- not one that closes
     #10 unchecked."""
@@ -1291,7 +1291,7 @@ def test_ship_writes_no_unconfirmed_close_when_the_closes_cannot_be_listed(run, 
     assert not (gh["dir"] / "body.txt").exists()
 
 
-def test_ship_refuses_a_commit_no_review_covered(run, gh):
+def test_grid_refuses_a_commit_no_review_covered(run, gh):
     (run["plan_wt"] / "late.txt").write_text("changed after the review\n")
     commit_path(run["plan_wt"], "late.txt", "a change after the last review")
     r = race(run["plan_wt"], "grid", PLAN, env=gh["env"])
@@ -1301,8 +1301,8 @@ def test_ship_refuses_a_commit_no_review_covered(run, gh):
 
 
 # ---------------------------------------------------------------------------
-# The claim label follows the PR (#20, #46). `claim` puts `ongoing` on; `ship`
-# swaps it for `in_review` once the PR closes the issue; `merge` takes both off
+# The claim label follows the PR (#20, #46). `claim` puts `ongoing` on; `grid`
+# swaps it for `in_review` once the PR closes the issue; `finish` takes both off
 # once that PR has landed. Only ever the issue the BRANCH names, and only the
 # two labels this workflow applies -- `blocked` belongs to whoever set it.
 # ---------------------------------------------------------------------------
@@ -1317,7 +1317,7 @@ def name_the_claim_labels(run, gh, branch=None, **overrides):
     The fixture's config has neither `branch_prefix` nor `status_labels`, so
     every earlier test exercises the fail-soft path by accident. These tests
     choose it on purpose or not at all. The config is committed, so the head
-    is reviewed again -- `ship` refuses a commit no review covered -- and the
+    is reviewed again -- `grid` refuses a commit no review covered -- and the
     PR is pointed at the new head.
     """
     cfg = {"branch_prefix": "feat/", "status_labels": LABELS, **overrides}
@@ -1342,7 +1342,7 @@ def label_edits(gh):
     return calls(gh, "issue edit")
 
 
-def test_ship_swaps_the_claim_label_for_in_review(run, gh):
+def test_grid_swaps_the_claim_label_for_in_review(run, gh):
     cut_for_issue(run, gh)
     r = race(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
@@ -1356,7 +1356,7 @@ def test_ship_swaps_the_claim_label_for_in_review(run, gh):
     assert "status:blocked" not in "\n".join(log)
 
 
-def test_ship_does_not_relabel_when_the_pr_could_not_be_linked(run, gh):
+def test_grid_does_not_relabel_when_the_pr_could_not_be_linked(run, gh):
     """A body edit that failed leaves the PR closing nothing, and the label with it."""
     cut_for_issue(run, gh)
     (gh["dir"] / "pr_edit_fails").write_text("")
@@ -1366,7 +1366,7 @@ def test_ship_does_not_relabel_when_the_pr_could_not_be_linked(run, gh):
     assert "no claim label changed" in r.stdout, r.stdout
 
 
-def test_ship_does_not_relabel_on_a_branch_that_names_no_issue(run, gh):
+def test_grid_does_not_relabel_on_a_branch_that_names_no_issue(run, gh):
     """Labels configured, prefix configured -- only the branch name is missing."""
     name_the_claim_labels(run, gh)
     r = race(run["plan_wt"], "grid", PLAN, env=gh["env"])
@@ -1375,7 +1375,7 @@ def test_ship_does_not_relabel_on_a_branch_that_names_no_issue(run, gh):
     assert "no claim label changed" in r.stdout, r.stdout
 
 
-def test_ship_does_not_relabel_an_issue_that_does_not_resolve_here(run, gh):
+def test_grid_does_not_relabel_an_issue_that_does_not_resolve_here(run, gh):
     cut_for_issue(run, gh)
     (gh["dir"] / "issue-20").unlink()
     r = race(run["plan_wt"], "grid", PLAN, env=gh["env"])
@@ -1384,7 +1384,7 @@ def test_ship_does_not_relabel_an_issue_that_does_not_resolve_here(run, gh):
     assert "does not resolve" in r.stdout, r.stdout
 
 
-def test_ship_leaves_the_label_alone_without_an_in_review_label(run, gh):
+def test_grid_leaves_the_label_alone_without_an_in_review_label(run, gh):
     """Never a guessed name: the project names its labels or nothing is applied."""
     cut_for_issue(run, gh, status_labels={"ongoing": "status:ongoing"})
     r = race(run["plan_wt"], "grid", PLAN, env=gh["env"])
@@ -1393,14 +1393,14 @@ def test_ship_leaves_the_label_alone_without_an_in_review_label(run, gh):
     assert "status_labels.in_review is not configured" in r.stdout, r.stdout
 
 
-def test_ship_adds_in_review_alone_without_an_ongoing_label(run, gh):
+def test_grid_adds_in_review_alone_without_an_ongoing_label(run, gh):
     cut_for_issue(run, gh, status_labels={"in_review": "status:in-review"})
     r = race(run["plan_wt"], "grid", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --add-label status:in-review"]
 
 
-def test_a_relabel_gh_refuses_still_ships_and_keeps_the_claim(run, gh):
+def test_a_relabel_gh_refuses_still_grids_and_keeps_the_claim(run, gh):
     """`in_review` would not go on, so `ongoing` stays: the issue is still claimed."""
     cut_for_issue(run, gh)
     (gh["dir"] / "issue_edit_fails").write_text("")
@@ -1421,7 +1421,7 @@ def test_an_ongoing_label_gh_will_not_remove_is_reported(run, gh):
     assert "status:ongoing could not be removed" in r.stdout, r.stdout
 
 
-def test_ship_says_so_when_no_pr_can_be_found(run, gh):
+def test_grid_says_so_when_no_pr_can_be_found(run, gh):
     """Nothing to link means nothing to relabel -- and the reason is the PR, not the branch."""
     cut_for_issue(run, gh)
     (gh["dir"] / "no_pr").write_text("")
@@ -1432,7 +1432,7 @@ def test_ship_says_so_when_no_pr_can_be_found(run, gh):
     assert calls(gh, "pr edit") == [] and label_edits(gh) == []
 
 
-def test_one_label_named_for_both_states_stays_on_at_ship(run, gh):
+def test_one_label_named_for_both_states_stays_on_at_grid(run, gh):
     """A project with a single 'in progress' label names it twice. Adding it is
     a no-op; removing it afterwards would leave a claimed issue unlabelled."""
     cut_for_issue(run, gh, status_labels={"ongoing": "status:wip", "in_review": "status:wip"})
@@ -1460,7 +1460,7 @@ def test_an_unreadable_pr_body_is_never_overwritten(run, gh):
 def test_closes_20_in_the_body_does_not_close_2(run, gh):
     """`Closes #20` contains `Closes #2` as a substring and closes nothing of #2's.
 
-    Read as a substring, ship would report #2 already closed, leave the PR not
+    Read as a substring, grid would report #2 already closed, leave the PR not
     closing it, and then relabel #2 as if it did.
     """
     cut_for_issue(run, gh, n=2)
@@ -1500,7 +1500,7 @@ def merged_for_issue(run, gh, body="Closes #20", **overrides):
     return head
 
 
-def test_merge_clears_the_claim_labels_from_the_issue_it_closed(run, gh):
+def test_finish_clears_the_claim_labels_from_the_issue_it_closed(run, gh):
     merged_for_issue(run, gh)
     r = race(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
@@ -1512,7 +1512,7 @@ def test_merge_clears_the_claim_labels_from_the_issue_it_closed(run, gh):
     assert "status:blocked" not in "\n".join(log)
 
 
-def test_merge_on_a_branch_that_names_no_issue_merges_and_says_so(run, gh):
+def test_finish_on_a_branch_that_names_no_issue_merges_and_says_so(run, gh):
     head = name_the_claim_labels(run, gh)
     write_pit_pass(run, head)
     r = race(run["plan_wt"], "finish", PLAN, env=gh["env"])
@@ -1522,7 +1522,7 @@ def test_merge_on_a_branch_that_names_no_issue_merges_and_says_so(run, gh):
     assert "no issue number in 'planbranch'" in r.stdout, r.stdout
 
 
-def test_merge_leaves_the_label_on_an_issue_the_pr_does_not_close(run, gh):
+def test_finish_leaves_the_label_on_an_issue_the_pr_does_not_close(run, gh):
     """The issue stays open, so its claim is still the truth about it."""
     merged_for_issue(run, gh, body="Refs #20")
     r = race(run["plan_wt"], "finish", PLAN, env=gh["env"])
@@ -1531,7 +1531,7 @@ def test_merge_leaves_the_label_on_an_issue_the_pr_does_not_close(run, gh):
     assert "does not close #20" in r.stdout, r.stdout
 
 
-def test_merge_says_so_when_the_pr_body_cannot_be_read(run, gh):
+def test_finish_says_so_when_the_pr_body_cannot_be_read(run, gh):
     """Unread is not 'does not close': say which one happened."""
     merged_for_issue(run, gh)
     (gh["dir"] / "pr_body_fails").write_text("")
@@ -1541,7 +1541,7 @@ def test_merge_says_so_when_the_pr_body_cannot_be_read(run, gh):
     assert "could not read PR #7's body" in r.stdout, r.stdout
 
 
-def test_merge_without_claim_labels_configured_clears_nothing(run, gh):
+def test_finish_without_claim_labels_configured_clears_nothing(run, gh):
     merged_for_issue(run, gh, status_labels={"blocked": "status:blocked"})
     r = race(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
@@ -1549,14 +1549,14 @@ def test_merge_without_claim_labels_configured_clears_nothing(run, gh):
     assert "not configured" in r.stdout, r.stdout
 
 
-def test_merge_clears_only_the_claim_label_that_is_configured(run, gh):
+def test_finish_clears_only_the_claim_label_that_is_configured(run, gh):
     merged_for_issue(run, gh, status_labels={"ongoing": "status:ongoing"})
     r = race(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert label_edits(gh) == ["issue edit 20 --remove-label status:ongoing"]
 
 
-def test_one_label_named_for_both_states_is_cleared_once_at_merge(run, gh):
+def test_one_label_named_for_both_states_is_cleared_once_at_finish(run, gh):
     merged_for_issue(run, gh, status_labels={"ongoing": "status:wip", "in_review": "status:wip"})
     r = race(run["plan_wt"], "finish", PLAN, env=gh["env"])
     assert r.returncode == 0, r.stdout + r.stderr
@@ -1617,7 +1617,6 @@ def test_every_script_named_in_the_skill_exists():
     renamed skill script pass. So each is checked where it actually claims to
     be, and a bare `scripts/pit.py` still fails — it names the wrong place.
     """
-    import re
 
     plugin_root = SKILL.parent.parent
 
