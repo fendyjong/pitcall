@@ -292,7 +292,8 @@ failures** — never write them:
 
    <!-- deprecated(0.16.0) -->
    A plan with a `## Waves` table still qualifies, with one notice; a plan
-   with both tables is refused.
+   with both tables is refused. In such a plan the sweep adds its rows to that
+   existing `## Waves` table and never adds a `## Laps` table.
 
 5. **Assign every task's `Model:` tier here, in Phase 1 — not at dispatch.**
    This is the same reasoning as migration numbers in step 3: a decision
@@ -1599,7 +1600,7 @@ push mid-wait produces a green signal about a commit no pit pass covers. Every
 signal agrees that merging is fine; only the sha dissents. `--match-head-commit`
 closes that **server-side**: GitHub refuses if the head has moved. Re-reading
 the head just before merging would only narrow the window, and a narrower race
-is the kind nobody reproduces afterwards. A `gh` too old for the flag (it
+window is the kind nobody reproduces afterwards. A `gh` too old for the flag (it
 arrived in 2.96) makes `finish` refuse rather than merge unguarded — a guard
 that is silently absent looks exactly like a guard that passed.
 
