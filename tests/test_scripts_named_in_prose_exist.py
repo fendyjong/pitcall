@@ -3,8 +3,8 @@
 A rename rots every sentence naming the old script, and those sentences are
 instructions: a reader following one runs a command that does not exist and
 concludes the plugin is broken rather than the sentence. Two references went
-stale exactly that way -- `README.md` and `pytest.ini`, both naming
-`old-tool` after it was renamed -- and both were found by hand.
+stale exactly that way -- `README.md` and `pytest.ini`, both naming the
+finish script's earlier name after it was renamed -- and both were found by hand.
 
 Both sides are derived. Candidate names come from git history rather than a
 list in this file, so a rename is tracked without editing anything here; the
@@ -759,7 +759,7 @@ def test_a_url_into_this_repo_naming_a_missing_script_is_caught():
 
 def test_a_url_into_this_repo_with_a_wrong_intermediate_path_is_caught():
     """Resolving only the `scripts/<name>` tail would let this through:
-    `race` is real, but under `race`, not `brainstorming`."""
+    the `race` script lives in the `race` skill, not in `brainstorming`."""
     found = problems_in(
         f"see `{BLOB}/skills/brainstorming/scripts/race`", "docs/x.md", set(),
         ["skills/race/scripts/race"], repo=REPO,
@@ -1208,7 +1208,7 @@ def test_the_gate_itself_checks_urls(tmp_path):
 
 
 def test_a_wrong_intermediate_path_still_fails_to_resolve():
-    """`race` really does live under `race`; this cites the
+    """The `race` script lives in the `race` skill; this cites the
     wrong skill entirely. Normalization strips known-transparent prefixes,
     never intermediate segments -- a tail-only compare would let this
     resolve too, which is exactly what must not happen.
