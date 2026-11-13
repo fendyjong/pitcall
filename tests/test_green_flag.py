@@ -1,4 +1,4 @@
-"""The solution-ready gate: every case proved offline.
+"""The green-flag gate: every case proved offline.
 
 `decide` is pure by construction so this file never needs a network or a
 repository. That is the whole reason for the seam -- see the module docstring
@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import green_flag  # noqa: E402
 
-LABEL = green_flag.LABEL
+LABEL = "green-flag"
 
 #: The author gate's trusted side. Every pre-existing case is a maintainer's
 #: own issue, which is what the gate is built to let through.
@@ -259,13 +259,13 @@ def test_run_check_keeps_an_operator_inside_a_token():
     assert output.strip() == "a|b"
 
 
-def _fake_tracker_run(calls, body=BODY, association=INSIDER):
+def _fake_tracker_run(calls, body=BODY, association=INSIDER, labels=None):
     def run(*args, **kwargs):
         calls.append(args)
         if args[:3] == ("gh", "repo", "view"):
             return "acme/widgets\n"
         if args[:2] == ("gh", "api"):
-            return json.dumps({"body": body, "labels": [LABEL],
+            return json.dumps({"body": body, "labels": labels or [LABEL],
                                "association": association})
         return ""
     return run
@@ -290,7 +290,7 @@ def test_close_comments_before_closing_and_exits_three(monkeypatch, capsys):
     assert "python3 -m pytest tests/test_widget.py -q" in body
     assert date.today().isoformat() in body
     assert "1 passed" in body
-    assert "solution-ready: closed" in capsys.readouterr().out
+    assert "green-flag: closed" in capsys.readouterr().out
 
 
 def test_proceed_exits_zero_and_writes_nothing(monkeypatch, capsys):
@@ -302,7 +302,7 @@ def test_proceed_exits_zero_and_writes_nothing(monkeypatch, capsys):
     assert green_flag.main(["7"]) == 0
 
     assert [args for args in calls if args[:2] == ("gh", "issue")] == []
-    assert "solution-ready: proceed" in capsys.readouterr().out
+    assert "green-flag: proceed" in capsys.readouterr().out
 
 
 def test_dry_run_reports_the_close_verdict_without_writing(monkeypatch, capsys):
@@ -314,7 +314,7 @@ def test_dry_run_reports_the_close_verdict_without_writing(monkeypatch, capsys):
     assert green_flag.main(["7", "--dry-run"]) == 3
 
     assert [args for args in calls if args[:2] == ("gh", "issue")] == []
-    assert "solution-ready: closed" in capsys.readouterr().out
+    assert "green-flag: closed" in capsys.readouterr().out
 
 
 def test_an_outsiders_labelled_issue_never_runs_the_check(monkeypatch):
@@ -331,3 +331,27 @@ def test_an_outsiders_labelled_issue_never_runs_the_check(monkeypatch):
     with pytest.raises(green_flag.tracker.TrackerError) as exc:
         green_flag.main(["7"])
     assert OUTSIDER in str(exc.value)
+
+
+# deprecated(0.16.0): the old label still authorizes, with one notice, until 0.17.0.
+def test_the_old_label_proceeds_with_one_notice(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(green_flag.tracker, "run", _fake_tracker_run(calls, labels=["solution-ready"]))
+    monkeypatch.setattr(green_flag, "run_check", lambda command: (1, "E   AssertionError: 4 != 5"))
+    assert green_flag.main(["7"]) == 0
+    out, err = capsys.readouterr()
+    assert "green-flag: proceed" in out
+    assert err == "pitcall: label 'solution-ready' is deprecated and goes in 0.17.0; use 'green-flag'\n"
+
+
+def test_the_new_label_proceeds_with_no_notice(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(green_flag.tracker, "run", _fake_tracker_run(calls))
+    monkeypatch.setattr(green_flag, "run_check", lambda command: (1, "E   AssertionError: 4 != 5"))
+    assert green_flag.main(["7"]) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_neither_label_is_refused():
+    action, detail = green_flag.decide(BODY, [], INSIDER, None)
+    assert action == "refuse" and "not labelled green-flag" in detail
