@@ -1,4 +1,4 @@
-"""`wdd-ledger` — the one reader of ledger lines and full-branch review verdicts.
+"""`race-ledger` — the one reader of ledger lines and full-branch review verdicts.
 
 Every rule is tested in both directions: that it fires, and that it stays
 quiet on the input it must not fire on. A gate tested only for firing is how
@@ -13,7 +13,7 @@ import pytest
 
 from conftest import run_script
 
-HEADER = "# WDD ledger — plan: docs/plans/2026-01-01-demo.md\n"
+HEADER = "# Race ledger — plan: docs/plans/2026-01-01-demo.md\n"
 
 
 def ledger(tmp_path: Path, *lines: str, whole: bool = True) -> Path:
@@ -47,7 +47,7 @@ def test_blocked_in_prose_is_not_a_stop_marker(tmp_path):
     p = ledger(
         tmp_path,
         "| T2 x T4 | ... | T4 Step 1 reports BLOCKED rather than proceeding |",
-        "Ruling: the implementer should report BLOCKED — x — y",
+        "Ruling: the driver should report BLOCKED — x — y",
         "Note: a gate that reports BLOCKED in prose — low value",
         "Note: Task 2: BLOCKED is how a stop is recorded — gate",
         "Ruling: Final review #3: BLOCKED means stop — x — y",
@@ -130,60 +130,80 @@ def test_an_unterminated_complete_line_does_not_resolve_a_stop(tmp_path):
 
 
 def test_no_sweep_plan_means_no_guard(tmp_path):
-    p = ledger(tmp_path, "Wave 7: dispatched (BASE a, T1 @ x-t1 [cheapest/haiku])")
+    p = ledger(tmp_path, "Lap 7: dispatched (BASE a, T1 @ x-t1 [cheapest/haiku])")
     assert ledger_cmd(tmp_path, "sweep-guard", str(p)).returncode == 0
 
 
-def test_waves_inside_the_sweep_range_pass(tmp_path):
-    p = ledger(tmp_path, "Wave 1: dispatched (BASE a)", "Sweep plan: waves 2-3",
-               "Wave 2: dispatched (BASE b)", "Wave 3: dispatched (BASE c)")
+def test_laps_inside_the_sweep_range_pass(tmp_path):
+    p = ledger(tmp_path, "Lap 1: dispatched (BASE a)", "Sweep plan: laps 2-3",
+               "Lap 2: dispatched (BASE b)", "Lap 3: dispatched (BASE c)")
     assert ledger_cmd(tmp_path, "sweep-guard", str(p)).returncode == 0
 
 
-def test_a_wave_after_the_sweep_range_refuses(tmp_path):
-    p = ledger(tmp_path, "Sweep plan: waves 3-4", "Wave 5: dispatched (BASE a)")
+def test_a_lap_after_the_sweep_range_refuses(tmp_path):
+    p = ledger(tmp_path, "Sweep plan: laps 3-4", "Lap 5: dispatched (BASE a)")
     r = ledger_cmd(tmp_path, "sweep-guard", str(p))
     assert r.returncode == 1
-    assert "wave 5" in r.stderr
+    assert "lap 5" in r.stderr
 
 
 def test_a_second_sweep_plan_refuses(tmp_path):
-    p = ledger(tmp_path, "Sweep plan: waves 2-2", "Sweep plan: waves 3-3")
+    p = ledger(tmp_path, "Sweep plan: laps 2-2", "Sweep plan: laps 3-3")
     r = ledger_cmd(tmp_path, "sweep-guard", str(p))
     assert r.returncode == 1
     assert "one sweep pass" in r.stderr
 
 
-@pytest.mark.parametrize("plan", ["Sweep plan: waves 2–2", "Sweep plan: waves 3 - 4"])
+@pytest.mark.parametrize("plan", ["Sweep plan: laps 2–2", "Sweep plan: laps 3 - 4"])
 def test_a_sweep_plan_that_does_not_parse_refuses(tmp_path, plan):
     """Fail closed: a plan line the guard cannot read must not switch the guard off."""
-    p = ledger(tmp_path, plan, "Wave 5: dispatched (BASE a)")
+    p = ledger(tmp_path, plan, "Lap 5: dispatched (BASE a)")
     r = ledger_cmd(tmp_path, "sweep-guard", str(p))
     assert r.returncode == 1, r.stdout + r.stderr
     assert f"'{plan}' does not parse" in r.stderr
 
 
 def test_a_malformed_second_sweep_plan_still_counts_as_a_second(tmp_path):
-    p = ledger(tmp_path, "Sweep plan: waves 2-2", "Sweep plan: waves 3–3")
+    p = ledger(tmp_path, "Sweep plan: laps 2-2", "Sweep plan: laps 3–3")
     r = ledger_cmd(tmp_path, "sweep-guard", str(p))
     assert r.returncode == 1, r.stdout + r.stderr
     assert "one sweep pass" in r.stderr
+
+
+# deprecated(0.16.0): a ledger begun on 0.15.0 keeps its `Wave <N>:` lines; read until 0.17.0.
+def test_old_lap_lines_are_read_as_laps(tmp_path):
+    p = ledger(tmp_path, "Wave 1: dispatched (BASE a1b2c3d)", "Wave 1: integrated (merge 9f2c1ab)",
+               "Sweep plan: waves 2-2", "Lap 2: dispatched (BASE 9f2c1ab)")
+    assert ledger_cmd(tmp_path, "sweep-guard", str(p)).returncode == 0
+
+
+# deprecated(0.16.0): a lap dispatched after an old-spelled sweep range is still caught.
+def test_an_old_sweep_range_still_guards(tmp_path):
+    p = ledger(tmp_path, "Sweep plan: waves 2-2", "Wave 3: dispatched (BASE 9f2c1ab)")
+    r = ledger_cmd(tmp_path, "sweep-guard", str(p))
+    assert r.returncode == 1 and "lap 3 was dispatched after the sweep range 2-2" in r.stderr
+
+
+def test_a_lap_after_the_sweep_range_is_caught(tmp_path):
+    p = ledger(tmp_path, "Sweep plan: laps 2-2", "Lap 3: dispatched (BASE 9f2c1ab)")
+    r = ledger_cmd(tmp_path, "sweep-guard", str(p))
+    assert r.returncode == 1 and r.stderr.startswith("race: ")
 
 
 # --- lint ---------------------------------------------------------------------
 
 EVERY_FORMAT = (
     "Sweep: introduced — retry loses the key — from Task 4 review",
-    "Sweep: pre-existing — substring match — from final review #1 — evidence: wdd:199 at cfbe04a",
+    "Sweep: pre-existing — substring match — from final review #1 — evidence: race:199 at cfbe04a",
     "Sorting: review #1 at 9f2c1ab",
     "Route: sweep #10 full — substring match",
     "Owner: rename the flag — keep it (2026-10-14)",
     "Amendment 1: written (v3)",
-    "Sweep plan: waves 2-2",
+    "Sweep plan: laps 2-2",
     "Final review #1: CLEAN at 9f2c1ab",
     "Fixed: anchor the stop markers — closes #10",
-    "Seen: #42 — wdd:285",
-    "Filed: #51 — lane run exits 0",
+    "Seen: #42 — race:285",
+    "Filed: #51 — pit lane exits 0",
     "Note: quoting edge — low value",
 )
 
@@ -228,8 +248,8 @@ SWEEP_LINES = (
     "Fixed: anchor the stop markers — closes #10",
     "Fixed: one residual — part of #25",
     "Fixed: an introduced nit",
-    "Seen: #42 — wdd:285",
-    "Filed: #51 — lane run exits 0",
+    "Seen: #42 — race:285",
+    "Filed: #51 — pit lane exits 0",
     "Note: quoting edge — low value",
 )
 
@@ -254,8 +274,8 @@ def test_the_sweep_section_counts_and_lists(tmp_path):
             "1 seen again (#42) · 1 noted") in out
     assert out.count("Closes #10") == 1
     assert "Refs #25 — fixed: `one residual`" in out
-    assert "Refs #42 — seen again at `wdd:285`" in out
-    assert "Filed: #51 — `lane run exits 0`" in out
+    assert "Refs #42 — seen again at `race:285`" in out
+    assert "Filed: #51 — `pit lane exits 0`" in out
     assert "- `quoting edge` — `low value`" in out
 
 
@@ -280,7 +300,7 @@ def test_an_unresolved_close_is_dropped_but_still_counted_as_fixed(tmp_path):
 
 
 def test_no_sweep_lines_means_no_section(tmp_path):
-    p = ledger(tmp_path, "Wave 1: integrated (merge a, pytest 1 passed)")
+    p = ledger(tmp_path, "Lap 1: integrated (merge a, pytest 1 passed)")
     r = ledger_cmd(tmp_path, "sweep-section", str(p))
     assert r.returncode == 0
     assert r.stdout == ""

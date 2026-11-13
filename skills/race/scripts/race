@@ -436,8 +436,10 @@ if [ ! -f "$LEDGER" ]; then
 else
   head -1 "$LEDGER" | grep -qF "$PLAN" || bad "ledger's first line names a different plan — that is another run's, never yours to finish"
 
-  dispatched="$(grep -oE '^Wave ([0-9]+): dispatched' "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
-  integrated="$(grep -oE '^Wave ([0-9]+): integrated'  "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
+  # deprecated(0.16.0): a run begun on 0.15.0 wrote `Wave <N>:`; read until 0.17.0.
+  dispatched="$(grep -oE '^(Lap|Wave) ([0-9]+): dispatched' "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
+  integrated="$(grep -oE '^(Lap|Wave) ([0-9]+): integrated'  "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
+
   [ -n "$dispatched" ] || bad "ledger records no dispatched wave"
   for w in $dispatched; do
     printf '%s\n' "$integrated" | grep -qx "$w" || bad "wave $w was dispatched but never integrated — finish the wave first"
@@ -457,7 +459,7 @@ else
   # One sweep pass per run: no second `Sweep plan:`, no wave after its range.
   guard_rc=0
   guard="$("$HERE/race-ledger" sweep-guard "$LEDGER" 2>&1)" || guard_rc=$?
-  [ "$guard_rc" = 0 ] || bad "${guard#wdd: }"
+  [ "$guard_rc" = 0 ] || bad "${guard#race: }"
   note "waves: $(printf '%s' "$dispatched" | tr '\n' ' ')— all integrated"
 fi
 
@@ -487,7 +489,7 @@ check_verdict_chain() {
   local sha="$1" chain_rc=0 chain
   require_base_branch
   chain="$("$HERE/race-ledger" chain "$WORKSPACE" "$sha" "origin/$BASE" 2>&1)" || chain_rc=$?
-  if [ "$chain_rc" = 0 ]; then note "$chain"; else bad "${chain#wdd: }"; fi
+  if [ "$chain_rc" = 0 ]; then note "$chain"; else bad "${chain#race: }"; fi
 }
 case "$CMD" in check|grid) check_verdict_chain "$(git rev-parse HEAD)" ;; esac
 

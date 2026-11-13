@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Read a WDD ledger and a run's full-branch review verdicts.
+"""Read a race ledger and a run's full-branch review verdicts.
 
-`wdd` calls this for every decision that reads a ledger LINE rather than a
+`race` calls this for every decision that reads a ledger LINE rather than a
 git ref: which stop markers are still open, whether a second sweep ran, whether
 the verdict chain covers the commit about to ship, and what the PR's sweep
-section says. Each line format is one regex below, and every caller -- `wdd`,
+section says. Each line format is one regex below, and every caller -- `race`,
 the tests, and the drift test that feeds SKILL.md's example ledger through
 `lint` -- reads the same one. A second spelling of a format is how a document
 and the code that parses it drift apart without either noticing.
@@ -19,13 +19,13 @@ a fragment never RESOLVES one, since half a `complete` line is not a finished
 task.
 
 Usage:
-  wdd-ledger stops         LEDGER
-  wdd-ledger sweep-guard   LEDGER
-  wdd-ledger lint          LEDGER
-  wdd-ledger closes        LEDGER
-  wdd-ledger sweep-section LEDGER [--unresolved N,N,...]
-  wdd-ledger verdict       FILE
-  wdd-ledger chain         WORKSPACE HEAD_SHA DEFAULT_REF
+  race-ledger stops         LEDGER
+  race-ledger sweep-guard   LEDGER
+  race-ledger lint          LEDGER
+  race-ledger closes        LEDGER
+  race-ledger sweep-section LEDGER [--unresolved N,N,...]
+  race-ledger verdict       FILE
+  race-ledger chain         WORKSPACE HEAD_SHA DEFAULT_REF
 
 Exit: 0 ok | 1 refused (the reason is printed) | 2 usage or unreadable input
 """
@@ -42,7 +42,10 @@ ONE_LINER = r"[^\n]+?"
 STOP_TASK = re.compile(r"^Task (\d+): BLOCKED\b")
 STOP_REVIEW = re.compile(r"^Final review #(\d+): BLOCKED\b")
 TASK_COMPLETE = re.compile(r"^Task (\d+): complete\b")
-WAVE_DISPATCHED = re.compile(r"^Wave (\d+): dispatched\b")
+
+# deprecated(0.16.0): `Wave <N>:` is how a run begun on 0.15.0 wrote it; read until 0.17.0.
+LAP_DISPATCHED = re.compile(r"^(?:Lap|Wave) (\d+): dispatched\b")
+
 
 # Every format SKILL.md's Ledger section documents for the sweep, keyed by
 # the prefix that identifies it. `lint` checks a line against the format its
@@ -61,7 +64,6 @@ FORMATS: dict[str, re.Pattern] = {
     ),
     "Owner: ": re.compile(r"^Owner: .+ — .+ \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$"),
     "Amendment ": re.compile(r"^Amendment \d+: written( \(v\d+\))?$"),
-    "Sweep plan: ": re.compile(r"^Sweep plan: waves (\d+)-(\d+)$"),
     "Final review #": re.compile(
         r"^Final review #(\d+): (CLEAN|MUST-FIX|BLOCKED) at [0-9a-f]{7,40}$"
     ),
@@ -70,6 +72,9 @@ FORMATS: dict[str, re.Pattern] = {
     "Filed: ": re.compile(r"^Filed: #(\d+) — (.+)$"),
     "Note: ": re.compile(rf"^Note: ({ONE_LINER}) — (.+)$"),
 }
+
+# deprecated(0.16.0): `Sweep plan: waves` is how a run begun on 0.15.0 wrote it; read until 0.17.0.
+FORMATS["Sweep plan: "] = re.compile(r"^Sweep plan: (?:laps|waves) (\d+)-(\d+)$")
 
 COMMANDS = ("stops", "sweep-guard", "lint", "closes", "sweep-section", "verdict", "chain")
 
@@ -152,7 +157,7 @@ def unresolved_stops(lines: list[str], fragment: str = "") -> list[str]:
 
 def sweep_guard(lines: list[str]) -> None:
     # Every line that CLAIMS to be a plan line is one, whether or not it parses.
-    # Counting only the lines that parse let `waves 2–2` (an en dash) switch the
+    # Counting only the lines that parse let `laps 2–2` (an en dash) switch the
     # guard off entirely -- a guard that fails open on a typo.
     plans = [line for line in lines if line.startswith("Sweep plan:")]
     if len(plans) > 1:
@@ -165,20 +170,20 @@ def sweep_guard(lines: list[str]) -> None:
     plan = FORMATS["Sweep plan: "].match(plans[0])
     if not plan:
         raise Refusal(
-            f"'{plans[0]}' does not parse as 'Sweep plan: waves <A>-<B>' -- the "
+            f"'{plans[0]}' does not parse as 'Sweep plan: laps <A>-<B>' -- the "
             "one-sweep guard cannot read it"
         )
     first, last = int(plan.group(1)), int(plan.group(2))
     if first > last:
-        raise Refusal(f"'Sweep plan: waves {first}-{last}' names an empty range")
+        raise Refusal(f"'Sweep plan: laps {first}-{last}' names an empty range")
     late = sorted(
-        {int(m.group(1)) for m in (WAVE_DISPATCHED.match(l) for l in lines) if m}
+        {int(m.group(1)) for m in (LAP_DISPATCHED.match(l) for l in lines) if m}
         - set(range(1, last + 1))
     )
     if late:
         raise Refusal(
-            "wave " + ", ".join(map(str, late))
-            + f" was dispatched after the sweep range {first}-{last} -- no wave runs "
+            "lap " + ", ".join(map(str, late))
+            + f" was dispatched after the sweep range {first}-{last} -- no lap runs "
             "after the sweep; a sweep task that cannot finish is never merged"
         )
 
@@ -261,7 +266,7 @@ def read_verdict(path: Path) -> tuple[str, str, str]:
     """(reviewed, since, verdict) from a verdict file's first three lines.
 
     A header that does not parse is an ABSENT verdict, never a permitted one --
-    the same rule `wdd merge` applies to a lane receipt that will not parse.
+    the same rule `race finish` applies to a pit pass that will not parse.
     """
     try:
         head = path.read_text(encoding="utf-8").split("\n")[:3]
@@ -359,10 +364,10 @@ def main(argv: list[str]) -> int:
         return 2
     cmd, args = argv[0], argv[1:]
     if cmd not in COMMANDS:
-        print(f"wdd-ledger: unknown command {cmd!r}", file=sys.stderr)
+        print(f"race-ledger: unknown command {cmd!r}", file=sys.stderr)
         return 2
     if not well_formed(cmd, args):
-        print(f"wdd-ledger: bad usage: {' '.join(argv)}", file=sys.stderr)
+        print(f"race-ledger: bad usage: {' '.join(argv)}", file=sys.stderr)
         return 2
     try:
         if cmd == "chain":
@@ -402,14 +407,14 @@ def main(argv: list[str]) -> int:
             print(section)
         return 0
     except Refusal as exc:
-        print(f"wdd: {exc}", file=sys.stderr)
+        print(f"race: {exc}", file=sys.stderr)
         return 1
     except UnicodeDecodeError as exc:
-        print(f"wdd-ledger: unreadable input: {args[0]} is not UTF-8 text "
+        print(f"race-ledger: unreadable input: {args[0]} is not UTF-8 text "
               f"({exc.reason} at byte {exc.start})", file=sys.stderr)
         return 2
     except OSError as exc:
-        print(f"wdd-ledger: unreadable input: {exc}", file=sys.stderr)
+        print(f"race-ledger: unreadable input: {exc}", file=sys.stderr)
         return 2
 
 
