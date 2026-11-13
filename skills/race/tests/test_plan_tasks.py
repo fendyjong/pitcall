@@ -4,7 +4,7 @@ The synthetic plans below are deliberately awkward — a heading inside a fence,
 a fence inside a fence, a line-range suffix on a declared path, prose the
 controller reads edges out of. Each shape is one a real plan produced and this
 parser got wrong: a naive fence toggle once truncated a 507-line brief to 129,
-handing an implementer half its requirements with no error anywhere.
+handing a driver half its requirements with no error anywhere.
 """
 
 from pathlib import Path
@@ -76,7 +76,7 @@ def test_strips_line_range_suffix_from_paths(tmp_path):
     assert "app/main.py:10-40" not in r.stdout
 
 
-def test_reports_overlapping_paths_as_a_wave_conflict(tmp_path):
+def test_reports_overlapping_paths_as_a_lap_conflict(tmp_path):
     r = run_script("plan-tasks", str(_plan(tmp_path)), cwd=tmp_path)
     assert "Task 1 & Task 2: app/main.py" in r.stdout
 
@@ -85,7 +85,7 @@ def test_two_tasks_declaring_independence_still_have_their_overlap_reported(tmp_
     """The collision `Interfaces` cannot express — and the reason this script exists.
 
     Both tasks below say they consume nothing from the other. A reader of the
-    Interfaces blocks, however careful, concludes they can share a wave; the
+    Interfaces blocks, however careful, concludes they can share a lap; the
     declared paths say otherwise, and only this tool compares them. The pair
     that DOES declare a dependency (Tasks 1 & 2 in SYNTHETIC) is the easy
     direction and is covered above.
@@ -182,7 +182,7 @@ def test_four_backtick_fence_survives_a_nested_three_backtick_fence(tmp_path):
     """A fenced example that itself contains a fence must not leak task headings.
 
     A naive open/close toggle desynchronises here and invents Task 42, putting
-    a phantom node in the wave graph.
+    a phantom node in the lap graph.
 
     The ghost heading must sit INSIDE the inner ```python fence, not directly
     inside the outer ````markdown one. At the outer level both trackers agree

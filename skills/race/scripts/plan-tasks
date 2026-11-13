@@ -6,12 +6,12 @@ then every pairwise file-path overlap. The controller reads this instead of the
 plan file: edge inference needs only the Interfaces prose, and path overlap --
 which Interfaces cannot express -- is computed here rather than judged.
 
-Two tasks that share a declared path must not run in the same wave even when
+Two tasks that share a declared path must not run in the same lap even when
 their Interfaces blocks are independent: they would collide textually at the
-wave merge, and no amount of careful reading of Interfaces would predict it.
+lap merge, and no amount of careful reading of Interfaces would predict it.
 
-Usage: plan-tasks [--validate] PLAN_FILE
-Exit:  0 ok | 1 validation failed (--validate only) | 2 usage or unreadable plan | 3 no tasks found
+Usage: plan-tasks PLAN_FILE
+Exit:  0 ok | 2 usage or unreadable plan | 3 no tasks found
 """
 
 import re
@@ -25,10 +25,13 @@ FENCE_RE = re.compile(r"^\s*(`{3,})(.*)$")
 BACKTICKED_RE = re.compile(r"`([^`]+)`")
 LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
 EXTENSION_RE = re.compile(r"\.\w+$")
-WAVES_HEADING_RE = re.compile(r"^##\s+Waves\s*$")
+LAPS_HEADING_RE = re.compile(r"^##\s+Laps\s*$")
+# deprecated(0.16.0): a plan written for 0.15.0 heads the table `## Waves`; read until 0.17.0.
+OLD_LAPS_HEADING_RE = re.compile(r"^##\s+Waves\s*$")
+OLD_LAPS_HEADING = "## Waves"
 SWEEP_HEADING_RE = re.compile(r"^##\s+Sweep\s*$")
 HEADING_RE = re.compile(r"^#{1,6}\s")
-WAVE_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|\s*([0-9,\s]*?)\s*\|")
+LAP_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|\s*([0-9,\s]*?)\s*\|")
 DEPENDS_RE = re.compile(r"^\s*-\s*Depends:\s*(.*?)\s*$", re.IGNORECASE)
 MODEL_RE = re.compile(r"^\s*-\s*Model:\s*(.*?)\s*$", re.IGNORECASE)
 # Tiers, not concrete model names: the vocabulary has to outlive whichever
@@ -57,7 +60,7 @@ def normalize_path(token: str) -> str:
     `libs/shared` and `libs/shared/` name the same tree; `./x/y`
     and `x/y` name the same file. Comparing raw strings lets both aliases
     validate as disjoint under Rules 4/5 and then collide for real at the
-    wave merge -- exactly the failure the validator exists to prevent.
+    lap merge -- exactly the failure the validator exists to prevent.
     """
     if token.startswith("./"):
         token = token[2:]
@@ -72,7 +75,7 @@ def unchecked_path_warning(line: str, task_n: int) -> str | None:
     like `Makefile` that has neither a `/` nor an extension for
     `looks_like_path` to key on. Both are silently dropped from the task's
     file list today, which lets a real shared path go unchecked while
-    `--validate` still prints "valid".
+    `qualifying` still prints "valid".
 
     Restricted to the token immediately after the bullet's `Create:` /
     `Modify:` / etc. label -- the position a real declared path occupies.
@@ -196,7 +199,7 @@ def render(plan: Path, tasks: list[dict]) -> str:
             out.append("  (none declared)")
         out.append("")
 
-    out.append("# File overlaps - these pairs MUST NOT share a wave")
+    out.append("# File overlaps - these pairs MUST NOT share a lap")
     overlaps = []
     for i, left in enumerate(tasks):
         for right in tasks[i + 1 :]:
@@ -216,7 +219,7 @@ def unfenced_lines(text: str):
     Fence runs are length-aware: a block opened with N backticks closes only on
     a run of at least N with nothing after it. Both parsers in this file need
     that, and a second, naive implementation of it is exactly how phantom
-    entries get into the wave graph — so there is one implementation and both
+    entries get into the lap graph — so there is one implementation and both
     callers use it.
     """
     fence: int | None = None
@@ -234,33 +237,40 @@ def unfenced_lines(text: str):
             yield line
 
 
-def parse_waves(text: str) -> list[tuple[int, list[int]]] | None:
-    """Read the `## Waves` table as ordered rows. None when there is no table.
+def parse_laps(text: str) -> tuple[list[tuple[int, list[int]]] | None, list[str]]:
+    """The lap table as ordered rows (None when there is none), and each table heading seen.
 
-    Rows rather than a dict: two rows labelled with the same wave number is
+    Rows rather than a dict: two rows labelled with the same lap number is
     author error worth reporting, and a dict would silently merge them.
 
-    Only rows inside that section count. A table elsewhere in the plan is
+    Only rows inside a lap-table section count. A table elsewhere in the plan is
     ordinary content, and a validator that scooped up every numeric table row
-    would fail on documents that merely contain tables.
+    would fail on documents that merely contain tables. Every section is read,
+    not just the first, so a plan that states its laps twice is seen doing so.
     """
     rows: list[tuple[int, list[int]]] = []
+    headings: list[str] = []
     in_section = False
-    found = False
 
     for line in unfenced_lines(text):
-        if WAVES_HEADING_RE.match(line):
-            in_section, found = True, True
+        if LAPS_HEADING_RE.match(line):
+            headings.append("## Laps")
+            in_section = True
             continue
-        if in_section and HEADING_RE.match(line):
-            break
+        if OLD_LAPS_HEADING_RE.match(line):
+            headings.append(OLD_LAPS_HEADING)
+            in_section = True
+            continue
+        if HEADING_RE.match(line):
+            in_section = False
+            continue
         if not in_section:
             continue
-        row = WAVE_ROW_RE.match(line)
+        row = LAP_ROW_RE.match(line)
         if row:
             rows.append((int(row.group(1)), [int(n) for n in re.findall(r"\d+", row.group(2))]))
 
-    return rows if found else None
+    return (rows if headings else None), headings
 
 
 def declared_depends(task: dict) -> set[int] | None:
@@ -331,34 +341,34 @@ def validate(
     problems: list[str] = []
 
     if rows is None:
-        return ["no ## Waves table — a wave plan must declare its waves"]
+        return ["no ## Laps table — a plan must declare its laps"]
 
     numbers = {task["n"] for task in tasks}
     by_number = {task["n"]: task for task in tasks}
 
-    # Rule 0 — the wave table itself is well formed. A duplicate row label
-    # silently merges two waves, and an empty row silently inflates the wave
+    # Rule 0 — the lap table itself is well formed. A duplicate row label
+    # silently merges two laps, and an empty row silently inflates the lap
     # count; both are author error, and both look like success without this.
-    waves: dict[int, list[int]] = {}
-    for wave, task_ns in rows:
-        if wave in waves:
-            problems.append(f"wave {wave} is declared by more than one row in the wave table")
+    laps: dict[int, list[int]] = {}
+    for lap, task_ns in rows:
+        if lap in laps:
+            problems.append(f"lap {lap} is declared by more than one row in the lap table")
         if not task_ns:
-            problems.append(f"wave {wave} declares no tasks")
-        waves.setdefault(wave, []).extend(task_ns)
+            problems.append(f"lap {lap} declares no tasks")
+        laps.setdefault(lap, []).extend(task_ns)
 
-    # Rule 1 — every task in exactly one wave, every wave entry a real task.
+    # Rule 1 — every task in exactly one lap, every lap entry a real task.
     placed: dict[int, int] = {}
-    for wave in sorted(waves):
-        for n in waves[wave]:
+    for lap in sorted(laps):
+        for n in laps[lap]:
             if n not in numbers:
-                problems.append(f"wave {wave} names Task {n}, which does not exist")
+                problems.append(f"lap {lap} names Task {n}, which does not exist")
             elif n in placed:
-                problems.append(f"Task {n} appears in wave {placed[n]} and wave {wave}")
+                problems.append(f"Task {n} appears in lap {placed[n]} and lap {lap}")
             else:
-                placed[n] = wave
+                placed[n] = lap
     for n in sorted(numbers - set(placed)):
-        problems.append(f"Task {n} is in no wave")
+        problems.append(f"Task {n} is in no lap")
 
     # Rule 2 — Depends is declared, its targets exist, and the graph is acyclic.
     edges: dict[int, set[int]] = {}
@@ -379,7 +389,7 @@ def validate(
     if cycle:
         problems.append("dependency cycle: " + " -> ".join(f"Task {n}" for n in cycle))
 
-    # Rule 3 — every dependency sits in a strictly earlier wave.
+    # Rule 3 — every dependency sits in a strictly earlier lap.
     if not cycle:
         for n in sorted(edges):
             if n not in placed:
@@ -389,24 +399,24 @@ def validate(
                     continue
                 if placed[target] == placed[n]:
                     problems.append(
-                        f"Task {n} depends on Task {target} in the same wave "
-                        f"({placed[n]}) — a dependency must be in an earlier wave"
+                        f"Task {n} depends on Task {target} in the same lap "
+                        f"({placed[n]}) — a dependency must be in an earlier lap"
                     )
                 elif placed[target] > placed[n]:
                     problems.append(
-                        f"Task {n} (wave {placed[n]}) depends on Task {target} "
-                        f"(wave {placed[target]}) — a dependency must be in an earlier wave"
+                        f"Task {n} (lap {placed[n]}) depends on Task {target} "
+                        f"(lap {placed[target]}) — a dependency must be in an earlier lap"
                     )
 
-    # Rule 4 — declared paths are pairwise disjoint within a wave.
-    for wave in sorted(waves):
-        members = [n for n in waves[wave] if n in by_number]
+    # Rule 4 — declared paths are pairwise disjoint within a lap.
+    for lap in sorted(laps):
+        members = [n for n in laps[lap] if n in by_number]
         for i, left in enumerate(members):
             for right in members[i + 1 :]:
                 shared = sorted(set(by_number[left]["files"]) & set(by_number[right]["files"]))
                 if shared:
                     problems.append(
-                        f"wave {wave}: Task {left} and Task {right} both declare "
+                        f"lap {lap}: Task {left} and Task {right} both declare "
                         + ", ".join(shared)
                     )
 
@@ -434,8 +444,8 @@ def validate(
     # Rule 7 — every task declares a model tier.
     #
     # This is a planning-time assignment for the same reason migration numbers
-    # are (Rule 5): a decision deferred to dispatch is a decision skipped. WDD
-    # dispatches a whole wave in ONE message, so the controller would be judging
+    # are (Rule 5): a decision deferred to dispatch is a decision skipped. the race
+    # dispatches a whole lap in ONE message, so the controller would be judging
     # N tasks' complexity simultaneously while composing N calls — and `model`
     # is an OPTIONAL parameter that silently inherits the session's own, usually
     # most expensive, tier when omitted. Nothing downstream records which model
@@ -455,24 +465,24 @@ def validate(
                 f"Task {n} declares Model: {tier!r} — must be one of {', '.join(MODEL_TIERS)}"
             )
 
-    # Rule 8 — the sweep is ONE pass, appended after the spec's waves
+    # Rule 8 — the sweep is ONE pass, appended after the spec's laps
     # (SKILL.md, Final Review). A second `## Sweep` section is a second pass,
-    # and a sweep task placed in a spec wave would be dispatched into a wave
-    # `wdd check` already counts as finished. Both are refused here rather
+    # and a sweep task placed in a spec lap would be dispatched into a lap
+    # `the race's check` already counts as finished. Both are refused here rather
     # than left to an instruction a controller can skip.
     if sweep_headings > 1:
         problems.append(
             f"Rule 8: the plan has {sweep_headings} '## Sweep' sections — "
             "a run gets one sweep pass"
         )
-    spec_waves = [placed[n] for n in numbers if n in placed and not by_number[n]["sweep"]]
-    if spec_waves:
-        last_spec_wave = max(spec_waves)
+    spec_laps = [placed[n] for n in numbers if n in placed and not by_number[n]["sweep"]]
+    if spec_laps:
+        last_spec_lap = max(spec_laps)
         for n in sorted(numbers):
-            if by_number[n]["sweep"] and n in placed and placed[n] <= last_spec_wave:
+            if by_number[n]["sweep"] and n in placed and placed[n] <= last_spec_lap:
                 problems.append(
-                    f"Rule 8: sweep Task {n} is in wave {placed[n]}, but the last spec "
-                    f"wave is {last_spec_wave} — every sweep task runs after every spec wave"
+                    f"Rule 8: sweep Task {n} is in lap {placed[n]}, but the last spec "
+                    f"lap is {last_spec_lap} — every sweep task runs after every spec lap"
                 )
 
     return problems
@@ -509,15 +519,26 @@ def qualify(plan: Path) -> int:
     if code:
         return code
 
-    rows = parse_waves(text)
-    problems = validate(tasks, rows, sweep_heading_count(text))
+    rows, headings = parse_laps(text)
+
+    if OLD_LAPS_HEADING in headings:
+        # deprecated(0.16.0): a 0.15.0 plan is judged the same, with one line saying so.
+        print("pitcall: a '## Waves' table is deprecated and goes in 0.17.0; use '## Laps'",
+              file=sys.stderr)
+
+    problems = []
+    if len(headings) > 1:
+        problems.append(
+            f"the plan has {len(headings)} lap tables ({', '.join(headings)}) — it states "
+            "its laps twice, and the two can disagree; keep one ## Laps table")
+    problems += validate(tasks, rows, sweep_heading_count(text))
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)
         return 1
 
-    wave_count = len({wave for wave, _ in rows}) if rows else 0
-    print(f"{plan}: {len(tasks)} tasks in {wave_count} waves — valid")
+    lap_count = len({lap for lap, _ in rows}) if rows else 0
+    print(f"{plan}: {len(tasks)} tasks in {lap_count} laps — valid")
     return 0
 
 
@@ -525,16 +546,14 @@ def main() -> int:
     args = sys.argv[1:]
 
     if args and args[0] == "--validate":
-        # deprecated(0.16.0): `plan-tasks --validate` is `qualifying` now; this
-        # forward goes in 0.17.0.
-        here = Path(__file__).resolve().parent
-        sys.path.insert(0, str(here.parents[2] / "scripts"))
+        # deprecated(0.16.0): `plan-tasks --validate` is `qualifying` now; the
+        # mapping lives in the plugin's alias.py, and this forward goes in 0.17.0.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
         import alias
-        alias.forward("plan-tasks --validate", "qualifying",
-                      [str(here / "qualifying"), *args[1:]])
+        alias.old_skill_script("plan-tasks", args)
 
     if len(args) != 1:
-        print("usage: plan-tasks [--validate] PLAN_FILE", file=sys.stderr)
+        print("usage: plan-tasks PLAN_FILE", file=sys.stderr)
         return 2
 
     plan = Path(args[0])
@@ -543,6 +562,7 @@ def main() -> int:
         return code
     print(render(plan, tasks))
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
