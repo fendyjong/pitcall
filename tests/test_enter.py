@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
-import enter as claim_mod  # noqa: E402
+import enter as enter_mod  # noqa: E402
 import tracker  # noqa: E402
 
 NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
@@ -73,7 +73,7 @@ def _claim(hours_ago, body=None):
 
 def test_a_stale_claim_on_an_inactive_branch_reads_stale(tmp_path):
     repo = _repo(tmp_path)
-    verdict, lines = claim_mod.describe_claim(
+    verdict, lines = enter_mod.describe_claim(
         CFG, _claim(25), 19, "main", NOW, cwd=str(repo))
     assert verdict == "stale"
     assert "EXPIRED" in lines[0] and "INACTIVE" in lines[1]
@@ -81,7 +81,7 @@ def test_a_stale_claim_on_an_inactive_branch_reads_stale(tmp_path):
 
 def test_a_stale_claim_on_an_ACTIVE_branch_reads_live(tmp_path):
     repo = _repo(tmp_path, commits_on_work=2)
-    verdict, lines = claim_mod.describe_claim(
+    verdict, lines = enter_mod.describe_claim(
         CFG, _claim(25), 19, "main", NOW, cwd=str(repo))
     assert verdict == "live"
     assert "EXPIRED" in lines[0], "the age half held independently"
@@ -90,7 +90,7 @@ def test_a_stale_claim_on_an_ACTIVE_branch_reads_live(tmp_path):
 
 def test_a_fresh_claim_on_an_inactive_branch_reads_live(tmp_path):
     repo = _repo(tmp_path)
-    verdict, lines = claim_mod.describe_claim(
+    verdict, lines = enter_mod.describe_claim(
         CFG, _claim(1), 19, "main", NOW, cwd=str(repo))
     assert verdict == "live"
     assert "LIVE" in lines[0] and "INACTIVE" in lines[1]
@@ -99,7 +99,7 @@ def test_a_fresh_claim_on_an_inactive_branch_reads_live(tmp_path):
 def test_a_missing_branch_counts_as_no_activity(tmp_path):
     """A claim comment with no branch expires cleanly -- the safe failure."""
     repo = _repo(tmp_path)
-    verdict, lines = claim_mod.describe_claim(
+    verdict, lines = enter_mod.describe_claim(
         CFG, _claim(25), 999, "main", NOW, cwd=str(repo))
     assert verdict == "stale"
     assert "no branch found locally or on origin" in lines[1]
@@ -112,7 +112,7 @@ def test_activity_is_measured_against_a_remote_tracking_ref_too(tmp_path):
     claim on a genuinely active branch reads INACTIVE and lets --take steal
     live work."""
     repo = _repo_remote_only(tmp_path, commits_on_work=2)
-    verdict, lines = claim_mod.describe_claim(
+    verdict, lines = enter_mod.describe_claim(
         CFG, _claim(25), 19, "main", NOW, cwd=str(repo))
     assert verdict == "live"
     assert "ACTIVE" in lines[1]
@@ -124,7 +124,7 @@ def test_a_missing_expiry_key_refuses_instead_of_crashing(tmp_path):
     repo = _repo(tmp_path)
     cfg = {k: v for k, v in CFG.items() if k != "claim_expiry_hours"}
     with pytest.raises(tracker.TrackerError, match="claim_expiry_hours"):
-        claim_mod.describe_claim(cfg, _claim(25), 19, "main", NOW,
+        enter_mod.describe_claim(cfg, _claim(25), 19, "main", NOW,
                                  cwd=str(repo))
 
 
@@ -135,7 +135,7 @@ def test_there_is_no_flag_for_adopting_an_unclaimed_branch():
     that parsing happens before the config load.
     """
     with pytest.raises(SystemExit):
-        claim_mod.main(["19", "--adopt"])
+        enter_mod.main(["19", "--adopt"])
 
 
 # --- I3: a re-run of the SAME session resumes instead of refusing -----------
@@ -143,12 +143,12 @@ def test_there_is_no_flag_for_adopting_an_unclaimed_branch():
 
 def test_resumes_own_claim_matches_the_sessions_own_marker():
     claim = _claim(1, body=tracker.CLAIM_MARKER + "https://example/session-42")
-    assert claim_mod.resumes_own_claim("https://example/session-42", claim)
+    assert enter_mod.resumes_own_claim("https://example/session-42", claim)
 
 
 def test_resumes_own_claim_is_false_for_someone_elses_session():
     claim = _claim(1, body=tracker.CLAIM_MARKER + "https://example/session-42")
-    assert not claim_mod.resumes_own_claim("https://example/some-other-session", claim)
+    assert not enter_mod.resumes_own_claim("https://example/some-other-session", claim)
 
 
 def test_resumes_own_claim_never_matches_an_empty_session():
@@ -156,11 +156,11 @@ def test_resumes_own_claim_never_matches_an_empty_session():
     every unattributed re-run (no --session at all) would look like a resume
     of a claim that is not its own."""
     claim = _claim(1, body=tracker.CLAIM_MARKER + "https://example/session-42")
-    assert not claim_mod.resumes_own_claim("", claim)
+    assert not enter_mod.resumes_own_claim("", claim)
 
 
 def test_resumes_own_claim_is_false_with_no_claim_at_all():
-    assert not claim_mod.resumes_own_claim("https://example/session-42", None)
+    assert not enter_mod.resumes_own_claim("https://example/session-42", None)
 
 
 MINE = "https://example.invalid/session_MINE"
@@ -172,32 +172,32 @@ def _body(session, extra=""):
 
 
 def test_an_exact_session_resumes_its_own_claim():
-    assert claim_mod.resumes_own_claim(MINE, {"body": _body(MINE)}) is True
+    assert enter_mod.resumes_own_claim(MINE, {"body": _body(MINE)}) is True
 
 
 def test_a_prefix_of_another_session_does_not_resume_it():
     """The reproduction from #24: containment matched a shared URL prefix."""
     prefix = "https://example.invalid/session_"
-    assert claim_mod.resumes_own_claim(prefix, {"body": _body(THEIRS)}) is False
+    assert enter_mod.resumes_own_claim(prefix, {"body": _body(THEIRS)}) is False
 
 
 def test_a_longer_value_containing_the_claim_does_not_resume_it():
-    assert claim_mod.resumes_own_claim(MINE + "-extra", {"body": _body(MINE)}) is False
+    assert enter_mod.resumes_own_claim(MINE + "-extra", {"body": _body(MINE)}) is False
 
 
 def test_an_empty_session_never_resumes():
-    assert claim_mod.resumes_own_claim("", {"body": _body(MINE)}) is False
+    assert enter_mod.resumes_own_claim("", {"body": _body(MINE)}) is False
 
 
 def test_a_body_without_the_marker_never_resumes():
-    assert claim_mod.resumes_own_claim(MINE, {"body": f"discussion of {MINE}"}) is False
+    assert enter_mod.resumes_own_claim(MINE, {"body": f"discussion of {MINE}"}) is False
 
 
 def test_a_takeover_note_below_the_marker_line_is_ignored():
     """--take appends prose that can legitimately quote another session."""
     body = _body(MINE, extra=f"Takes over the claim posted by {THEIRS}, which expired.")
-    assert claim_mod.resumes_own_claim(MINE, {"body": body}) is True
-    assert claim_mod.resumes_own_claim(THEIRS, {"body": body}) is False
+    assert enter_mod.resumes_own_claim(MINE, {"body": body}) is True
+    assert enter_mod.resumes_own_claim(THEIRS, {"body": body}) is False
 
 
 # --- select_next: which issue gets claimed, without a network ----------------
@@ -218,14 +218,14 @@ def _judge(verdicts):
 
 def test_the_lowest_numbered_free_issue_wins():
     judge, _ = _judge({})
-    picked, skipped = claim_mod.select_next(CANDIDATES, judge)
+    picked, skipped = enter_mod.select_next(CANDIDATES, judge)
     assert picked == (8, "eight")
     assert skipped == []
 
 
 def test_a_live_claim_is_passed_over():
     judge, _ = _judge({8: "live"})
-    picked, skipped = claim_mod.select_next(CANDIDATES, judge)
+    picked, skipped = enter_mod.select_next(CANDIDATES, judge)
     assert picked == (15, "fifteen")
     assert skipped == [(8, "live")]
 
@@ -234,26 +234,26 @@ def test_a_stale_claim_is_passed_over_without_take():
     """--next must not choose WHICH claim to steal. `claim <n> --take` is a
     human naming an issue they looked at; this is not that act."""
     judge, _ = _judge({8: "stale"})
-    picked, skipped = claim_mod.select_next(CANDIDATES, judge, take=False)
+    picked, skipped = enter_mod.select_next(CANDIDATES, judge, take=False)
     assert picked == (15, "fifteen")
     assert skipped == [(8, "stale")]
 
 
 def test_a_stale_claim_IS_taken_with_take():
     judge, _ = _judge({8: "stale"})
-    picked, _ = claim_mod.select_next(CANDIDATES, judge, take=True)
+    picked, _ = enter_mod.select_next(CANDIDATES, judge, take=True)
     assert picked == (8, "eight")
 
 
 def test_take_still_does_not_touch_a_live_claim():
     judge, _ = _judge({8: "live"})
-    picked, _ = claim_mod.select_next(CANDIDATES, judge, take=True)
+    picked, _ = enter_mod.select_next(CANDIDATES, judge, take=True)
     assert picked == (15, "fifteen")
 
 
 def test_nothing_claimable_reports_every_reason_rather_than_a_bare_none():
     judge, _ = _judge({8: "live", 15: "stale", 31: "live"})
-    picked, skipped = claim_mod.select_next(CANDIDATES, judge)
+    picked, skipped = enter_mod.select_next(CANDIDATES, judge)
     assert picked is None
     assert skipped == [(8, "live"), (15, "stale"), (31, "live")]
 
@@ -262,13 +262,13 @@ def test_judging_stops_at_the_first_hit():
     """Each judgement is an API call, so the walk must be lazy -- the common
     case is one call, not one per open issue."""
     judge, asked = _judge({})
-    claim_mod.select_next(CANDIDATES, judge)
+    enter_mod.select_next(CANDIDATES, judge)
     assert asked == [8]
 
 
 def test_no_candidates_is_none_not_an_error():
     judge, _ = _judge({})
-    assert claim_mod.select_next([], judge) == (None, [])
+    assert enter_mod.select_next([], judge) == (None, [])
 
 
 def test_a_verdict_that_is_neither_free_nor_stale_is_skipped_even_with_take():
@@ -276,25 +276,25 @@ def test_a_verdict_that_is_neither_free_nor_stale_is_skipped_even_with_take():
     `claim <n>` refuses outright there, deliberately; under `--next` that would
     abort the whole walk on the first such issue instead of moving past it."""
     judge, _ = _judge({8: "branch"})
-    picked, skipped = claim_mod.select_next(CANDIDATES, judge, take=True)
+    picked, skipped = enter_mod.select_next(CANDIDATES, judge, take=True)
     assert picked == (15, "fifteen")
     assert skipped == [(8, "branch")]
 
 
 def test_neither_an_issue_nor_next_is_refused():
     with pytest.raises(tracker.TrackerError, match="never both and never neither"):
-        claim_mod.main([])
+        enter_mod.main([])
 
 
 def test_both_an_issue_and_next_is_refused():
     """Silently preferring one would make the other argument a lie."""
     with pytest.raises(tracker.TrackerError, match="never both and never neither"):
-        claim_mod.main(["19", "--next"])
+        enter_mod.main(["19", "--next"])
 
 
 def test_milestone_without_next_is_refused_rather_than_ignored():
     with pytest.raises(tracker.TrackerError, match="--milestone narrows"):
-        claim_mod.main(["19", "--milestone", "Backlog"])
+        enter_mod.main(["19", "--milestone", "Backlog"])
 
 
 # --- blocked: passed over by --next, refused by claim <n> ---------------------
@@ -308,17 +308,17 @@ REASON = {"body": tracker.BLOCK_MARKER + "an upstream release",
 @pytest.mark.parametrize("take", [False, True])
 def test_select_next_never_picks_a_blocked_issue(take):
     judge, _ = _judge({8: "blocked"})
-    picked, skipped = claim_mod.select_next(CANDIDATES, judge, take=take)
+    picked, skipped = enter_mod.select_next(CANDIDATES, judge, take=take)
     assert picked == (15, "fifteen")
     assert skipped == [(8, "blocked")]
 
 
 def test_the_take_hint_appears_only_when_a_stale_claim_was_passed_over():
-    with_stale = claim_mod.spoken_for([(8, "blocked"), (15, "stale")])
+    with_stale = enter_mod.spoken_for([(8, "blocked"), (15, "stale")])
     assert "#8 (blocked), #15 (stale)" in with_stale
     assert "--take would reclaim a stale one" in with_stale
     for skipped in ([(8, "blocked")], [(8, "live"), (15, "branch")]):
-        assert "--take" not in claim_mod.spoken_for(skipped)
+        assert "--take" not in enter_mod.spoken_for(skipped)
 
 
 def test_next_judges_a_blocked_issue_from_its_label_without_a_lookup(monkeypatch, capsys):
@@ -327,9 +327,9 @@ def test_next_judges_a_blocked_issue_from_its_label_without_a_lookup(monkeypatch
         (58, "held", [BLOCKED]), (60, "free one", [])])
     monkeypatch.setattr(tracker, "latest_claim",
                         lambda issue, repo: looked_up.append(issue))  # -> None
-    monkeypatch.setattr(claim_mod, "branch_exists", lambda branch, cwd=None: False)
+    monkeypatch.setattr(enter_mod, "branch_exists", lambda branch, cwd=None: False)
     args = argparse.Namespace(milestone=None, take=False)
-    assert claim_mod.resolve_next(BCFG, "o/r", "origin/main", NOW, args) == 60
+    assert enter_mod.resolve_next(BCFG, "o/r", "origin/main", NOW, args) == 60
     assert looked_up == [60]
     assert "--next: passed over #58 (blocked)" in capsys.readouterr().out
 
@@ -342,7 +342,7 @@ def _stub_claim(monkeypatch, *, claim=None, block=None, labels=(BLOCKED,)):
         "state": "open", "title": "held", "labels": list(labels)})
     monkeypatch.setattr(tracker, "latest_claim", lambda issue, repo: claim)
     monkeypatch.setattr(tracker, "latest_block", lambda issue, repo: block)
-    monkeypatch.setattr(claim_mod, "branch_exists", lambda branch, cwd=None: False)
+    monkeypatch.setattr(enter_mod, "branch_exists", lambda branch, cwd=None: False)
     monkeypatch.setattr(tracker, "run",
                         lambda *args, cwd=None: ran.append(list(args)) or "")
     return ran
@@ -352,16 +352,16 @@ def _stub_claim(monkeypatch, *, claim=None, block=None, labels=(BLOCKED,)):
 def test_claiming_a_blocked_issue_refuses_before_anything_happens(monkeypatch, extra):
     ran = _stub_claim(monkeypatch, block=REASON)
     with pytest.raises(tracker.TrackerError) as exc:
-        claim_mod.main(["58", *extra])
+        enter_mod.main(["58", *extra])
     assert "#58 is blocked on: an upstream release (2026-08-30T09:00:00Z)." in str(exc.value)
-    assert "Clear it first: block.py 58 --clear." in str(exc.value)
+    assert "Clear it first: red_flag.py 58 --clear." in str(exc.value)
     assert ran == []
 
 
 def test_the_refusal_says_when_no_reason_was_found(monkeypatch):
     ran = _stub_claim(monkeypatch, block=None)
     with pytest.raises(tracker.TrackerError, match='no "blocked on:" comment found'):
-        claim_mod.main(["58"])
+        enter_mod.main(["58"])
     assert ran == []
 
 
@@ -371,13 +371,13 @@ def test_the_refusal_comes_first_and_names_the_claim(monkeypatch):
     ran = _stub_claim(monkeypatch, block=REASON,
                       claim=_claim(30, body=_body(THEIRS)))
     with pytest.raises(tracker.TrackerError, match="It is claimed, since"):
-        claim_mod.main(["58", "--session", MINE, "--take"])
+        enter_mod.main(["58", "--session", MINE, "--take"])
     assert ran == []
 
 
 def test_a_session_resuming_its_own_claim_on_a_blocked_issue_goes_through(monkeypatch, capsys):
     ran = _stub_claim(monkeypatch, block=REASON, claim=_claim(1, body=_body(MINE)))
-    claim_mod.main(["58", "--session", MINE])
+    enter_mod.main(["58", "--session", MINE])
     assert "resuming this session's own claim anyway" in capsys.readouterr().out
     assert ran == [["git", "branch", "feat/58-held", "origin/main"]]
 
@@ -389,7 +389,7 @@ def test_an_unblocked_issue_never_looks_up_a_block_reason(monkeypatch):
         raise AssertionError("latest_block called without the blocked label")
 
     monkeypatch.setattr(tracker, "latest_block", no_lookup)
-    claim_mod.main(["58", "--session", MINE])
+    enter_mod.main(["58", "--session", MINE])
     assert [c[:3] for c in ran] == [["gh", "issue", "edit"],
                                     ["gh", "issue", "comment"],
                                     ["git", "branch", "feat/58-held"]]
@@ -410,7 +410,7 @@ def test_with_blocked_unset_a_labelled_issue_is_claimed_as_today(monkeypatch):
         raise AssertionError("latest_block called with blocked unset")
 
     monkeypatch.setattr(tracker, "latest_block", no_lookup)
-    claim_mod.main(["58", "--session", MINE])
+    enter_mod.main(["58", "--session", MINE])
     assert [c[:3] for c in ran] == [["gh", "issue", "edit"],
                                     ["gh", "issue", "comment"],
                                     ["git", "branch", "feat/58-held"]]
@@ -420,6 +420,12 @@ def test_with_blocked_unset_next_does_not_pass_a_labelled_issue_over(monkeypatch
     monkeypatch.setattr(tracker, "open_issues", lambda repo, milestone=None: [
         (58, "held", [BLOCKED])])
     monkeypatch.setattr(tracker, "latest_claim", lambda issue, repo: None)
-    monkeypatch.setattr(claim_mod, "branch_exists", lambda branch, cwd=None: False)
+    monkeypatch.setattr(enter_mod, "branch_exists", lambda branch, cwd=None: False)
     args = argparse.Namespace(milestone=None, take=False)
-    assert claim_mod.resolve_next(UNSET, "o/r", "origin/main", NOW, args) == 58
+    assert enter_mod.resolve_next(UNSET, "o/r", "origin/main", NOW, args) == 58
+
+
+def test_errors_name_the_enter_command():
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "enter.py"), "--help"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout.startswith("usage: enter ")

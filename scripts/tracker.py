@@ -1,12 +1,13 @@
 """Shared mechanism for the issue verbs: config, slug, staleness, fetchers.
 
-`claim` and `file` are thin CLIs over this module. The split is a testability
-constraint rather than tidiness: the staleness decision has to be provable in
-both directions, and a decision tangled with its own fetching can only be
-exercised against a live GitHub repository.
+`enter`, `red_flag`, `green_flag` and `file` are thin CLIs over this
+module. The split is a testability constraint rather than tidiness: the
+staleness decision has to be provable in both directions, and a decision
+tangled with its own fetching can only be exercised against a live GitHub
+repository.
 
 Named `.py` and importable because that is what root `scripts/` already is --
-`lane.py` and `lane_config.py` are imported directly by `tests/`. The skill's
+`pit.py` and `lane_config.py` are imported directly by `tests/`. The skill's
 own `scripts/` are extensionless CLIs run as subprocesses; this is the other
 convention, and the one the pure-function requirement needs.
 """
@@ -117,7 +118,7 @@ def slug(title, limit=40):
 def branch_name(cfg, issue, title):
     """`<branch_prefix><issue>-<slug>`.
 
-    `branch_prefix` carries its own separator (`feat/`, `wdd/`), so this
+    `branch_prefix` carries its own separator (`feat/`, `race/`), so this
     concatenates. Joining with "/" yields `feat//19-...`, which git accepts and
     nobody means.
     """
@@ -128,7 +129,7 @@ def issue_from_branch(cfg, branch):
     """`<branch_prefix><issue>-<slug>` -> `"<issue>"`, or `None`. `branch_name`'s inverse.
 
     FAILS SOFT, ALWAYS, and that is the whole contract. `branch_prefix` is required
-    only by `claim` (docs/configuration.md), so a plan branch cut by hand legitimately
+    only by `enter` (docs/configuration.md), so a plan branch cut by hand legitimately
     carries no number and `ship` must still ship. Every miss returns `None` for the
     caller to state; raising would refuse to open a PR over a naming convention the
     project never promised to follow.
@@ -175,7 +176,7 @@ def resolve_branch(cfg, issue, cwd=None):
              cwd=cwd)
     # `*` marks the branch checked out in the CURRENT worktree; `+` marks one
     # checked out in a DIFFERENT linked worktree of the same repo -- which is
-    # the normal state here, since every WDD task gets its own worktree.
+    # the normal state here, since every race task gets its own worktree.
     # Leaving `+` unstripped turns a real branch into a garbage candidate
     # name (`+ feat/24-x`), which either reads as a second, ambiguous branch
     # next to its own remote-tracking counterpart, or -- unambiguous -- gets
@@ -345,7 +346,7 @@ _USAGE = "usage: tracker.py issue-from-branch BRANCH | status-label NAME\n"
 def _main(argv):
     """The two entry points a shell needs, `issue-from-branch` and `status-label`.
 
-    `wdd` is a shell script, and the branch->issue convention is defined by
+    `race` is a shell script, and the branch->issue convention is defined by
     `branch_name`/`issue_from_branch` above. Restating the parse in shell would put
     one convention in two languages with the edge cases in the untested half, so the
     shell asks this instead -- and asks `status_label` for the same reason, rather

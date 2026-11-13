@@ -7,7 +7,7 @@ real, and dropping the claim is how a second session ends up duplicating them.
 So nothing here reads, adds or removes any label but `blocked`.
 
 The label is the state; the `blocked on: ` comment only holds the reason. The
-label goes on first, for the reason `claim` puts its label on first: a label
+label goes on first, for the reason `enter` puts its label on first: a label
 `gh` refuses -- one the project never created -- then aborts before anything
 else has happened.
 """
@@ -67,7 +67,7 @@ def clear_command(label, repo, issue, labels):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="block")
+    ap = argparse.ArgumentParser(prog="red-flag")
     ap.add_argument("issue", type=int)
     ap.add_argument("reason", nargs="?", default=None,
                     help="what the issue is blocked on")
@@ -115,4 +115,4 @@ if __name__ == "__main__":
     try:
         main()
     except tracker.TrackerError as exc:
-        sys.exit(f"block: {exc}")
+        sys.exit(f"red-flag: {exc}")
