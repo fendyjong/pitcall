@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The solution-ready gate: is this issue its own spec, and is it still live?
+"""The green-flag gate: is this issue its own spec, and is it still live?
 
 Two gates doing two different jobs. AUTHORIZATION is the label plus the issue
 author's association with the repository -- GitHub only lets a user with triage
@@ -13,7 +13,7 @@ a check that FAILS means the issue is live, and one that PASSES means it is
 already resolved.
 
 That second reading is why this closes issues as a side effect of picking them
-up -- a solution-ready backlog is staleness-tested by being used, rather than by
+up -- a green-flag backlog is staleness-tested by being used, rather than by
 somebody auditing it.
 
 The exit status is three-way, because the caller of this script routes on it and
@@ -21,7 +21,7 @@ The exit status is three-way, because the caller of this script routes on it and
 
     0  proceed -- the check fails as recorded; hand the issue to the next stage
     3  close   -- the check passes; the issue was already resolved and is now
-                 closed. The next stage must NOT run. Prints `solution-ready:
+                 closed. The next stage must NOT run. Prints `green-flag:
                  closed`. `--dry-run` reports the same verdict and the same 3;
                  the status reports the verdict, not whether anything was written.
     1  refuse  -- anything else, with the reason on stderr
@@ -47,7 +47,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tracker  # noqa: E402
 
 #: Applied by a maintainer. Authorizes; never asserts correctness.
-LABEL = "solution-ready"
+LABEL = "green-flag"
+
+# deprecated(0.16.0): the label's 0.15.0 name still authorizes until 0.17.0.
+OLD_LABEL = "solution-ready"
+
+
+def authorized_by_label(labels) -> bool:
+    # deprecated(0.16.0): `solution-ready` authorizes as `green-flag` does until 0.17.0.
+    return LABEL in labels or OLD_LABEL in labels
+
 
 #: `author_association` values that put the issue's author on the maintainer
 #: side of the trust boundary. The label authorizes the body as it stood when
@@ -217,7 +226,7 @@ def decide(body, labels, association, result):
 
     Actions: `run`, `proceed`, `close`, `refuse`.
     """
-    if LABEL not in labels:
+    if not authorized_by_label(labels):
         return ("refuse", f"not labelled {LABEL} -- this takes the ordinary path.")
     if association not in TRUSTED_ASSOCIATIONS:
         return ("refuse",
@@ -309,7 +318,7 @@ def run_check(command, cwd=None):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="solution-ready")
+    ap = argparse.ArgumentParser(prog="green-flag")
     ap.add_argument("issue", type=int)
     ap.add_argument("--dry-run", action="store_true",
                     help="run the check and print the verdict, but never close "
@@ -320,6 +329,12 @@ def main(argv=None):
     state = issue_state(args.issue, repo)
     body, labels = state["body"] or "", state["labels"]
     association = state.get("association")
+
+    if LABEL not in labels and OLD_LABEL in labels:
+        # deprecated(0.16.0): the label is renamed; the issue is never relabelled.
+        print(f"pitcall: label '{OLD_LABEL}' is deprecated and goes in 0.17.0; use '{LABEL}'",
+              file=sys.stderr)
+
 
     action, detail = decide(body, labels, association, None)
     if action == "refuse":
@@ -335,7 +350,7 @@ def main(argv=None):
 
     if action == "proceed":
         print(f"#{args.issue}: {detail}")
-        print("solution-ready: proceed")
+        print("green-flag: proceed")
         return 0
 
     comment = close_comment(command, result[1].strip(), date.today().isoformat())
@@ -343,7 +358,7 @@ def main(argv=None):
         print(f"#{args.issue}: {detail}")
         print("--dry-run, so nothing was written. The comment would be:\n")
         print(comment)
-        print("solution-ready: closed")
+        print("green-flag: closed")
         return 3
     # Comment BEFORE close: a failed comment must leave the issue open rather
     # than closed with no evidence of why.
@@ -353,7 +368,7 @@ def main(argv=None):
                 "--reason", "completed")
     print(f"#{args.issue}: {detail}")
     print(f"closed #{args.issue} as completed, with the check's output as evidence.")
-    print("solution-ready: closed")
+    print("green-flag: closed")
     return 3
 
 
@@ -361,4 +376,4 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except tracker.TrackerError as exc:
-        sys.exit(f"solution-ready: {exc}")
+        sys.exit(f"green-flag: {exc}")
