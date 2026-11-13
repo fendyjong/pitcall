@@ -1,5 +1,5 @@
 .worktrees/
-# Lane receipts are machine-local and pinned to a commit; the config is not.
+# Pit passes are machine-local and pinned to a commit; the config is not.
 .pitcall/*
 !.pitcall/config.json
 __pycache__/

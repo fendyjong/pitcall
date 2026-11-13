@@ -1,4 +1,4 @@
-"""Task worktree creation and teardown."""
+"""Task worktree creation and removal."""
 
 import json
 import subprocess
@@ -9,10 +9,10 @@ import pytest
 from conftest import run_script
 
 #: The four keys `load_config` requires of every project, plus the one
-#: `wave-worktree` itself reads. `default_branch` matches the fixture repo's
+#: `lap-worktree` itself reads. `default_branch` matches the fixture repo's
 #: branch, though this script never consults it.
 CONFIG = {
-    "bringup": None,
+    "out_lap": None,
     "validate": "true",
     "default_branch": "main",
     "required_check": "ci",
@@ -22,7 +22,7 @@ CONFIG = {
 
 @pytest.fixture
 def repo(repo):
-    """Override the shared `repo` fixture: `wave-worktree` now refuses to run
+    """Override the shared `repo` fixture: `lap-worktree` now refuses to run
     without a `pitcall.config.json` naming `worktree_dir` — a missing key is a
     loud failure, not a fallback to some default directory (see
     `scripts/project-config`). `worktree_dir` is set to `.worktrees` here
@@ -49,14 +49,14 @@ def test_create_works_when_the_worktrees_dir_does_not_exist_yet(repo):
     """
     assert not (repo.path / ".worktrees").exists()
     head = repo.git("rev-parse", "HEAD").stdout.strip()
-    r = run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
     assert (repo.path / ".worktrees/myplan-t1").is_dir()
 
 
 def test_create_makes_worktree_and_branch_and_prints_path(repo):
     head = repo.git("rev-parse", "HEAD").stdout.strip()
-    r = run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
 
     path = Path(r.stdout.strip())
@@ -73,17 +73,17 @@ def test_create_branches_from_the_given_ref_not_from_head(repo):
     repo.git("add", "-A")
     repo.git("commit", "-qm", "later")
 
-    r = run_script("wave-worktree", "create", "myplan", "1", first, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", first, cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
     assert not (Path(r.stdout.strip()) / "later.txt").exists()
 
 
 def test_create_refuses_when_the_branch_already_exists(repo):
     head = repo.git("rev-parse", "HEAD").stdout.strip()
-    run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
-    run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
 
-    r = run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
     assert r.returncode == 3
     assert "already exists" in r.stderr
     assert "git branch -D myplan-t1" in r.stderr
@@ -95,7 +95,7 @@ def test_create_refuses_when_the_worktree_dir_is_not_ignored(repo):
     repo.git("commit", "-qm", "unignore worktrees")
 
     head = repo.git("rev-parse", "HEAD").stdout.strip()
-    r = run_script("wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env)
     assert r.returncode == 4
     assert "not git-ignored" in r.stderr
     assert not (repo.path / ".worktrees/myplan-t1").exists()
@@ -104,12 +104,12 @@ def test_create_refuses_when_the_worktree_dir_is_not_ignored(repo):
 def test_remove_deletes_the_worktree_but_keeps_the_branch(repo):
     head = repo.git("rev-parse", "HEAD").stdout.strip()
     created = run_script(
-        "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
+        "lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
     assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
 
-    r = run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
     assert not path.exists()
     assert "myplan-t1" in _branches(repo)
@@ -118,13 +118,13 @@ def test_remove_deletes_the_worktree_but_keeps_the_branch(repo):
 def test_remove_refuses_to_discard_uncommitted_work(repo):
     head = repo.git("rev-parse", "HEAD").stdout.strip()
     created = run_script(
-        "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
+        "lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
     assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
-    (path / "unsaved.txt").write_text("an implementer's work\n")
+    (path / "unsaved.txt").write_text("a driver's work\n")
 
-    r = run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert r.returncode == 4
     assert "uncommitted changes" in r.stderr
     assert path.exists()
@@ -150,7 +150,7 @@ def _add_submodule(repo, tmp_path: Path) -> None:
     # here would be accepted and then silently ignored. The repo fixture
     # already points GIT_CONFIG_GLOBAL at a throwaway file, so writing it there
     # makes it global scope for every git call in this test, including the ones
-    # wave-worktree itself makes inside the new worktree.
+    # lap-worktree itself makes inside the new worktree.
     Path(repo.env["GIT_CONFIG_GLOBAL"]).write_text(
         '[protocol "file"]\n\tallow = always\n'
     )
@@ -170,13 +170,13 @@ def test_create_and_remove_round_trip_with_a_submodule(repo, tmp_path):
 
     head = repo.git("rev-parse", "HEAD").stdout.strip()
     created = run_script(
-        "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
+        "lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
     assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
     assert (path / "libs/sub/s.txt").exists(), "submodule was not initialised"
 
-    removed = run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    removed = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert removed.returncode == 0, removed.stderr
     assert not path.exists()
     assert "myplan-t1" in _branches(repo)
@@ -187,7 +187,7 @@ def test_remove_refuses_dirty_work_a_submodule_ignore_rule_would_hide(repo, tmp_
 
     It lives in a committed `.gitmodules`, so any repo can introduce it, and a
     user's global `diff.ignoreSubmodules` does the same. Because the removal is
-    forced, a blinded check would silently destroy an implementer's work — the
+    forced, a blinded check would silently destroy a driver's work — the
     one thing this script must never do.
     """
     _add_submodule(repo, tmp_path)
@@ -197,26 +197,32 @@ def test_remove_refuses_dirty_work_a_submodule_ignore_rule_would_hide(repo, tmp_
 
     head = repo.git("rev-parse", "HEAD").stdout.strip()
     created = run_script(
-        "wave-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
+        "lap-worktree", "create", "myplan", "1", head, cwd=repo.path, env=repo.env
     )
     assert created.returncode == 0, created.stderr
     path = Path(created.stdout.strip())
 
     work = path / "libs/sub/unsaved.txt"
-    work.write_text("an implementer's work\n")
+    work.write_text("a driver's work\n")
 
-    removed = run_script("wave-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
+    removed = run_script("lap-worktree", "remove", "myplan", "1", cwd=repo.path, env=repo.env)
     assert removed.returncode == 4, removed.stderr
     assert "uncommitted changes" in removed.stderr
-    assert work.exists(), "the forced removal discarded an implementer's work"
+    assert work.exists(), "the forced removal discarded a driver's work"
 
 
 def test_remove_on_a_missing_worktree_exits_2(repo):
-    r = run_script("wave-worktree", "remove", "myplan", "7", cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "remove", "myplan", "7", cwd=repo.path, env=repo.env)
     assert r.returncode == 2
 
 
 def test_usage_error_exits_2(repo):
-    r = run_script("wave-worktree", "create", cwd=repo.path, env=repo.env)
+    r = run_script("lap-worktree", "create", cwd=repo.path, env=repo.env)
     assert r.returncode == 2
     assert "usage:" in r.stderr
+
+
+def test_usage_names_the_lap_worktree(repo):
+    r = run_script("lap-worktree", cwd=repo.path, env=repo.env)
+    assert r.returncode == 2
+    assert "usage: lap-worktree create SLUG N BASE_REF | lap-worktree remove SLUG N" in r.stderr

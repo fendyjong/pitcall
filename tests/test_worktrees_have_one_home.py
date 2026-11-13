@@ -12,7 +12,7 @@ cleanup step "only cleans worktrees under `.worktrees/` or `worktrees/`, which
 never matches" the home it had chosen — a defect visible in prose for as long
 as the prose survived, and enforced by nothing.
 
-The home is configurable — `pitcall:brainstorming` and WDD both read the project's
+The home is configurable — `pitcall:brainstorming` and `race` both read the project's
 own `worktree_dir` (`scripts/project-config --scalar worktree_dir`) rather than
 assuming a fixed directory — but the legacy spelling below is rejected regardless
 of what a project configures. This test only rejects that one spelling; it does

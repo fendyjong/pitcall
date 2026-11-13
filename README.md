@@ -1,6 +1,6 @@
 # pitcall
 
-A Claude Code plugin: a set of skills, commands, and a validation-lane script for a
+A Claude Code plugin: a set of skills, commands, and a pit-lane script for a
 disciplined, review-gated development workflow. It packages practices for turning a
 spec into a shipped change — planning, parallel execution, code review, and
 verification-before-completion — as reusable Claude Code skills.
@@ -10,6 +10,34 @@ verification-before-completion — as reusable Claude Code skills.
 Add this repository as a plugin source in Claude Code and enable it, or clone it and
 point Claude Code's plugin loader at the checkout. See the skills under `skills/` and
 the commands under `commands/` for what each piece does once installed.
+
+### Upgrading to 0.16.0
+
+0.16.0 renames pitcall's commands toward F1 words. Every old name keeps working
+until 0.17.0, printing one line that names its replacement.
+
+| Old | New |
+|---|---|
+| skill `pitcall:wave-driven-development` | skill `pitcall:race` |
+| `wdd check` / `ship` / `merge` / `cleanup` | `race check` / `grid` / `finish` / `pack-down` |
+| `plan-tasks --validate` | `qualifying` |
+| `wave-worktree`, `wdd-ledger`, `wdd-workspace` | `lap-worktree`, `race-ledger`, `race-workspace` |
+| `/pitcall:init` | `/pitcall:setup` |
+| `scripts/claim.py`, `scripts/block.py` | `scripts/enter.py`, `scripts/red_flag.py` |
+| `scripts/lane.py run` / `status` / `drop` | `scripts/pit.py lane` / `status` / `drop` |
+| `scripts/solution_ready.py`, label `solution-ready` | `scripts/green_flag.py`, label `green-flag` |
+| lane receipt, `.pitcall/receipts/` | pit pass, `.pitcall/pit-passes/` |
+| config `bringup` / `teardown` | config `out_lap` / `in_lap` |
+| plan table `## Waves` | plan table `## Laps` |
+
+What you change yourself — pitcall edits nobody's settings:
+
+- **CLAUDE.md, AGENTS.md and memories** that name old commands, paths or the skill: update them by the table. They keep working until 0.17.0.
+- **Allow rules.** A rule matching an old path or command needs a twin for the new one, or auto mode prompts for (or blocks) the new spelling: a rule for `${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd merge *` needs a `${CLAUDE_PLUGIN_ROOT}/skills/race/scripts/race finish *` twin, a rule for `${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run *` a `${CLAUDE_PLUGIN_ROOT}/scripts/pit.py lane *` twin, `claim.py` an `enter.py` twin, `block.py` a `red_flag.py` twin. Keep the old rules until 0.17.0, since old instructions still call the old paths.
+- **Config:** rename `bringup` to `out_lap` and `teardown` to `in_lap`, or run `/pitcall:setup --force`.
+- **Repos that use the `solution-ready` label:** create `green-flag` and move the labelled issues across. The old label works until 0.17.0.
+- **Plans** with a `## Waves` table and **runs in flight** keep working. One case does not: a session still on 0.15.0 cannot see a pit pass written by 0.16.0, so its `wdd merge` refuses, which is safe. Finish a run on the version it started on, or re-run the pit lane on the new one.
+- **0.17.0 removes** every alias, the old config keys, `## Waves`, the old ledger lines, the `.pitcall/receipts/` and `.pitcall/wdd/` fallbacks and the old label.
 
 ### Upgrading to 0.10.0
 
@@ -43,13 +71,13 @@ It is read from the checkout you are standing in, so a linked worktree reads the
 copy on its own branch: a branch that changes its validate command is tested with
 that command, and the change is visible in its own diff.
 
-Copy `pitcall.config.example.json` into place and edit it, or run `/pitcall:init` to have
+Copy `pitcall.config.example.json` into place and edit it, or run `/pitcall:setup` to have
 the plugin propose it for you — the command reads
 [`docs/configuration.md`](docs/configuration.md) itself and executes it, key by key,
 rather than restating it. If you ever see
 
 ```
-lane: no .pitcall/config.json or pitcall.config.json in <checkout> — that is the
+pit lane: no .pitcall/config.json or pitcall.config.json in <checkout> — that is the
 checkout resolved from the current directory
 ```
 
@@ -61,29 +89,29 @@ to recognise the right value in a project that has never seen this tool.
 
 ## Claiming and filing issues
 
-`scripts/claim.py`, `scripts/block.py` and `scripts/file.py` are CLIs. A person runs them by
+`scripts/enter.py`, `scripts/red_flag.py` and `scripts/file.py` are CLIs. A person runs them by
 hand from this repository's checkout, as below; the skills also run them inside the projects
-they drive, spelled `${CLAUDE_PLUGIN_ROOT}/scripts/claim.py`,
-`${CLAUDE_PLUGIN_ROOT}/scripts/block.py` and `${CLAUDE_PLUGIN_ROOT}/scripts/file.py` —
-brainstorming's through-WDD bounded ending claims its work issue with `claim`, and
-wave-driven-development files what its sweep did not take with `file`, and clears a block its
-sweep fixed with `block`:
+they drive, spelled `${CLAUDE_PLUGIN_ROOT}/scripts/enter.py`,
+`${CLAUDE_PLUGIN_ROOT}/scripts/red_flag.py` and `${CLAUDE_PLUGIN_ROOT}/scripts/file.py` —
+brainstorming's through-race bounded ending claims its work issue with `enter`, and
+the race files what its sweep did not take with `file`, and clears a block its
+sweep fixed with `red_flag`:
 
 ```
-python3 scripts/claim.py <issue-number> [--session <url>] [--take]
-python3 scripts/claim.py --next [--milestone <name>] [--session <url>] [--take]
-python3 scripts/block.py <issue-number> "<on what>"
-python3 scripts/block.py <issue-number> --clear
+python3 scripts/enter.py <issue-number> [--session <url>] [--take]
+python3 scripts/enter.py --next [--milestone <name>] [--session <url>] [--take]
+python3 scripts/red_flag.py <issue-number> "<on what>"
+python3 scripts/red_flag.py <issue-number> --clear
 python3 scripts/file.py "<title>" [--body-file <path>]
 ```
 
-`claim` posts a claim comment (and applies `status_labels.ongoing`, if configured) and
+`enter` posts a claim comment (and applies `status_labels.ongoing`, if configured) and
 cuts `<branch_prefix><issue>-<slug>` from `default_branch` — refusing if the issue
 already carries a live claim, or if more than one branch matches the issue and there
 is no way to tell which holds the work. `--session` records the caller's session URL
 in the comment, so a later run can recognise its own claim; `--take` reclaims a claim
-that reads stale. The label then follows the work: `wdd ship` swaps it for
-`status_labels.in_review` once the PR closes the issue, and `wdd merge` removes both
+that reads stale. The label then follows the work: `race grid` swaps it for
+`status_labels.in_review` once the PR closes the issue, and `race finish` removes both
 once that PR lands.
 
 `--next` picks the issue instead of taking one: the lowest-numbered open issue nothing
@@ -95,15 +123,15 @@ naming an issue yourself and letting a selector choose which abandoned claim to 
 over are different acts. `--milestone` narrows what it considers, as a filter rather
 than a gate; without it an issue carrying no milestone is still a candidate.
 
-`block` marks an issue blocked: it applies `status_labels.blocked` and posts a comment starting
+`red_flag` marks an issue blocked: it applies `status_labels.blocked` and posts a comment starting
 `blocked on: ` that says on what. The label is the state and the comment only the reason; a later
 mark supersedes an earlier one. `--clear` removes the label and posts nothing, and works on a
 closed issue too. **Blocking is not unclaiming:** `blocked` sits beside `ongoing` or `in_review`
 and neither is touched, because a blocked issue's branch and work are real, and dropping its claim
-is how a second session ends up duplicating them. `claim --next` passes over a blocked issue,
-judged from its label at no extra call, and `claim <issue-number>` refuses one, `--take` included,
+is how a second session ends up duplicating them. `enter --next` passes over a blocked issue,
+judged from its label at no extra call, and `enter <issue-number>` refuses one, `--take` included,
 naming what it is blocked on until the block is cleared; a session resuming its own claim goes
-through. With `status_labels.blocked` unset, `block` refuses and nothing counts as blocked.
+through. With `status_labels.blocked` unset, `red_flag` refuses and nothing counts as blocked.
 
 `file` opens a new issue straight into `backlog_milestone` — never
 the milestone in flight. `--notes` files into `notes_milestone` instead, for a decision
@@ -114,13 +142,13 @@ the two indistinguishable and the backlog's open count stops meaning "work outst
 refuse loudly, rather than guess, when a key they need is missing from the config; see
 [`docs/configuration.md`](docs/configuration.md).
 
-## Filing a solution-ready issue
+## Filing a green-flag issue
 
-An issue whose body already carries its own fix can be labelled `solution-ready`, and
+An issue whose body already carries its own fix can be labelled `green-flag`, and
 `brainstorming` will route it without a human approval gate. Two things are required, and the
 second is not optional:
 
-**The `solution-ready` label.** Only a user with triage or write permission can apply one, so the
+**The `green-flag` label.** Only a user with triage or write permission can apply one, so the
 label is what authorizes an unattended run. It never asserts that the fix is correct.
 
 **A `## Failing check` section**, whose first fenced block is a command that **fails today and
@@ -148,14 +176,14 @@ which the fenced block can name instead — a script in the project the check ru
 `./tools/check-widget.sh`, not one from this plugin. The check is also bounded to **300 seconds**;
 a check that outruns that is a refusal, because an unmeasured check is never a passed one.
 
-`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/solution_ready.py <issue>` runs that command and reads
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/green_flag.py <issue>` runs that command and reads
 the result both ways. It **fails as recorded** → the classification is verified and the work
 proceeds. It **passes** → the issue is already resolved, and it is closed as completed with the
 command's output as evidence. It **fails differently**, or the backticked fragment is missing →
 the run refuses, and the issue takes the ordinary path with a human.
 
 The three outcomes are told apart by exit status, not by reading the prose: **0** proceed, **3**
-closed (printing `solution-ready: closed`), **1** refused with the reason on stderr. Close is a
+closed (printing `green-flag: closed`), **1** refused with the reason on stderr. Close is a
 do-NOT-proceed outcome, which is why it is not 0.
 
 The backticked fragment is what makes the comparison mechanical rather than a judgement, and an

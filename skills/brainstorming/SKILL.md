@@ -16,9 +16,9 @@ Do NOT invoke any implementation skill, write any code, scaffold any
 project, or take any implementation action until you have told your
 human partner what you intend and they have approved it. This applies
 to EVERY task on EVERY path below — the ceremony scales with the task;
-the approval gate never does. The one exception is the solution-ready
+the approval gate never does. The one exception is the green-flag
 path, where the approval is not waived but already given: a maintainer
-applied the `solution-ready` label to a body that names a check, and
+applied the `green-flag` label to a body that names a check, and
 that label IS the authorization. No other path may borrow it.
 </HARD-GATE>
 
@@ -29,21 +29,26 @@ classification out loud — "this looks bounded, so I'll present a short
 design here, and this project's setting ends it directly" — so your human partner can
 override it:
 
-- **Solution-ready** — an issue whose body already carries its own fix, and
+- **Green-flag** — an issue whose body already carries its own fix, and
   says so with a `## Failing check` section naming a check that fails today
   and passes when the issue is done. The check runs without a shell — one
   program plus arguments, no pipes, redirects, `&&` or `cd`, and bounded to
   300 seconds; a check needing more than that needs a script the body names.
-  Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/solution_ready.py <issue>` and do
+  Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/green_flag.py <issue>` and do
   what its EXIT STATUS says: **0** it proceeds, **3** it closed the issue as
-  already resolved (it also prints `solution-ready: closed`), **1** it refused
+  already resolved (it also prints `green-flag: closed`), **1** it refused
   and you take the ordinary path below. There is no human approval gate on
   this path — not because the work is small, but because the decision was
-  made and written down at filing time, and a `solution-ready` label can only
+  made and written down at filing time, and a `green-flag` label can only
   be applied by someone with triage or write permission. On `proceed`, run
   `/spec-review` against the issue and hand off to
-  pitcall:wave-driven-development. The issue body is the spec; no spec comment
+  pitcall:race. The issue body is the spec; no spec comment
   is written.
+
+  <!-- deprecated(0.16.0) -->
+  An issue still labelled `solution-ready` is honoured as `green-flag` until 0.17.0,
+  with a one-line notice on stderr; nothing relabels it.
+
 - **Spike** — a feasibility question ("can we...", "is it possible...",
   "quick and dirty is fine") whose output is an answer, not code you
   keep. Present the question and what you'll try in 2-3 sentences, get
@@ -62,13 +67,13 @@ override it:
   one. Its ending comes from the project's config, and your
   classification sentence names it (Bounded Endings, below):
   **directly** writes no spec comment and no plan document; **through
-  WDD** posts the approved design as the spec comment
-  pitcall:wave-driven-development plans from.
+  the race** posts the approved design as the spec comment
+  pitcall:race plans from.
 - **Architectural** — new projects, new subsystems, changes that
   restructure how components fit together or alter interfaces others
   depend on. Follow the full process: questions, approaches, sectioned
   design, isolated workspace, written spec, then hand off to
-  pitcall:wave-driven-development.
+  pitcall:race.
 
 When in doubt between two paths, take the heavier one. The ratchet is
 one-way: hidden complexity discovered mid-task upgrades the path —
@@ -78,16 +83,16 @@ stop, say so, and step up. Nothing downgrades mid-task.
 path from scratch,** clarifying questions first; the bounded design is
 not an approved input to it. Code already committed when the upgrade
 happens stays on the branch: the architectural spec decides whether it
-is kept, reworked or reverted, and wave-driven-development's plan
-treats it as existing code. A bounded task already going through WDD
+is kept, reworked or reverted, and the race's plan
+treats it as existing code. A bounded task already going through the race
 has a v1 spec comment; the architectural spec replaces it in that same
 comment as `**Version:** 2` with `**Status:** draft`. Any edit after
-approval re-opens the gate, so the WDD run stops until your human
-partner approves the new version, and wave-driven-development then
+approval re-opens the gate, so the race stops until your human
+partner approves the new version, and the race then
 plans again from it — the plan argues from the spec, and the v1 plan
 argued from a spec that no longer stands.
 
-Solution-ready sits outside that ordering rather than at the bottom of it:
+Green-flag sits outside that ordering rather than at the bottom of it:
 it is decided by the script, on evidence, not by your judgement of how big
 the work looks. A `spec-review` DECISION finding on such an issue is proof
 the label was wrong, and demotes it to a brainstorming session with your
@@ -99,18 +104,18 @@ When you classify a task as bounded, read the project's setting and name
 the ending in the same sentence as the classification:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/project-config --flag bounded_via_wdd
+${CLAUDE_PLUGIN_ROOT}/skills/race/scripts/project-config --flag bounded_via_wdd
 ```
 
 | It prints | Ending |
 |---|---|
-| `true` | **through WDD** |
+| `true` | **through race** |
 | `false` | **directly** — the project decided |
-| `unset` | **directly** — and if the project's own instructions in context (`CLAUDE.md`, `AGENTS.md`) require wave-driven-development, or a reviewed plan, for a change like this one, your short design message carries one line: *"This project's rules require WDD, but `bounded_via_wdd` is unset — set it, or run `/pitcall:init --force`."* |
+| `unset` | **directly** — and if the project's own instructions in context (`CLAUDE.md`, `AGENTS.md`) require the race, or a reviewed plan, for a change like this one, your short design message carries one line: *"This project's rules require the race, but `bounded_via_wdd` is unset — set it, or run `/pitcall:setup --force`."* |
 | an error (exit 2: a malformed value, or a config that cannot be read) | say so and ask which ending to use; do not guess |
 
 **Per-task override, heavier only.** Whatever the key says, your human
-partner may answer "through WDD" for a task — the heavier ending, as with
+partner may answer "through race" for a task — the heavier ending, as with
 paths. Nobody takes "directly" when the key says `true`: that is a
 downgrade, and nothing downgrades.
 
@@ -118,21 +123,21 @@ After your human partner approves the short design:
 
 - **Directly** — implement through the normal development workflow (TDD
   applies). No spec comment, no plan document.
-- **Through WDD:**
+- **Through race:**
   1. Make sure the work issue exists, is claimed, and is checked out. If
      the task has no work issue, create one — `gh issue create` with no
      milestone, a title naming the change, and a body of one or two
      sentences stating the request. Then claim it, whether you just
      created it or it already existed:
-     `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/claim.py <n> --session <session-url>`.
-     `claim` resumes this session's own live claim, refuses another
+     `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/enter.py <n> --session <session-url>`.
+     `enter` resumes this session's own live claim, refuses another
      session's, and cuts `<branch_prefix><n>-<slug>` from the default
      branch. If it refuses (another session's live claim, or no
      `branch_prefix` configured), say so and ask how to proceed; do not
      guess a branch name. Then adopt the claimed branch in a worktree —
      Create the Workspace, below: "The work issue already claimed?" — and
-     run steps 2 and 3 from it. The WDD run then works on that branch, so
-     `wdd ship` derives the issue from the branch name and the PR closes
+     run steps 2 and 3 from it. The race then works on that branch, so
+     `race grid` derives the issue from the branch name and the PR closes
      it.
   2. Post the approved design, verbatim, as a comment on that issue:
 
@@ -146,14 +151,14 @@ After your human partner approves the short design:
      <the design as approved>
      ```
 
-  3. Invoke pitcall:wave-driven-development. No `spec-review` pass is
+  3. Invoke pitcall:race. No `spec-review` pass is
      required — the design is short and already approved — though your
      human partner may still ask for one.
 
 ## Anti-Pattern: "Too Simple To Need Approval"
 
-Every path but solution-ready ends with your human partner approving your
-intent before implementation — and solution-ready is not an exemption from
+Every path but green-flag ends with your human partner approving your
+intent before implementation — and green-flag is not an exemption from
 approval but a different moment for it: the maintainer's label is the
 approval, given at filing time to a body that names a check. A todo list,
 a single-function utility, a config change — the design may be two
@@ -172,8 +177,8 @@ artifact, never the approval.
 | "The spike works, so I'll keep the code" | A spike's output is an answer. Keeping the code is a new request — classify it. |
 | "It grew, but I'm almost done — no need to re-classify" | Hidden complexity upgrades the path mid-task. Stop and say so. |
 | "They approved the spike, so the follow-up change is approved too" | Each task gets its own classification and its own approval. |
-| "This issue looks small, I'll label it solution-ready" | Size is a self-assessment, and the cheap answer and the self-serving answer are the same answer. The label requires a named check that fails today — a property of the issue, not a judgement about effort. |
-| "It's bounded, so I'll skip the spec comment even though this project requires WDD." | `bounded_via_wdd` decides. When it says WDD, the approved design is posted as the spec comment WDD plans from. |
+| "This issue looks small, I'll label it green-flag" | Size is a self-assessment, and the cheap answer and the self-serving answer are the same answer. The label requires a named check that fails today — a property of the issue, not a judgement about effort. |
+| "It's bounded, so I'll skip the spec comment even though this project requires the race." | `bounded_via_wdd` decides. When it says through race, the approved design is posted as the spec comment the race plans from. |
 | "It grew mid-task, so I'll keep the bounded design as the spec." | An upgrade starts the architectural path from scratch. Committed code stays, and the new spec decides what happens to it. |
 
 ## Checklist
@@ -181,13 +186,13 @@ artifact, never the approval.
 Classify first, announce the path, then create a task for each item on
 your path and complete them in order.
 
-**Solution-ready:**
-1. **Run the gate** — `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/solution_ready.py <issue>`; read its exit status: 0 proceed, 3 closed, 1 refused
+**Green-flag:**
+1. **Run the gate** — `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/green_flag.py <issue>`; read its exit status: 0 proceed, 3 closed, 1 refused
 2. **Refused** — take the ordinary path: classify spike / bounded / architectural and continue below
 3. **Closed** — the issue was already resolved; report that and STOP
 4. **Proceed** — run `/spec-review` against the issue, whose spec is its BODY
 5. **DECISION finding** — the label was wrong; it is removed and this becomes a brainstorming session
-6. **MECHANICAL only** — hand off to pitcall:wave-driven-development; no spec comment is written
+6. **MECHANICAL only** — hand off to pitcall:race; no spec comment is written
 
 **Spike:**
 1. **Explore project context** — enough to frame the probe
@@ -201,7 +206,7 @@ your path and complete them in order.
 2. **Ask clarifying questions** — one at a time, the ones that matter
 3. **Present short design in chat** — approach, files touched, testing, and the ending (Bounded Endings, above)
 4. **Get approval** — STOP and wait for an explicit yes; presenting the design and starting in the same breath is skipping the gate
-5. **Take the ending** — **directly**: implement through the normal development workflow (TDD applies), with no spec comment and no plan document; **through WDD**: make sure the work issue exists and is claimed (created if there is none), adopt its branch in a worktree, post the approved design as the spec comment, and invoke pitcall:wave-driven-development
+5. **Take the ending** — **directly**: implement through the normal development workflow (TDD applies), with no spec comment and no plan document; **through race**: make sure the work issue exists and is claimed (created if there is none), adopt its branch in a worktree, post the approved design as the spec comment, and invoke pitcall:race
 
 **Architectural:**
 1. **Explore project context** — check files, docs, recent commits
@@ -213,14 +218,14 @@ your path and complete them in order.
 7. **Write the spec** — post it as a comment on the work issue, marked `# Spec:` and carrying a `**Version:**` header
 8. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
 9. **User reviews the spec** — ask user to review the spec comment before proceeding
-10. **Transition to implementation** — invoke pitcall:wave-driven-development, which writes the implementation plan from the approved spec and executes it
+10. **Transition to implementation** — invoke pitcall:race, which writes the implementation plan from the approved spec and executes it
 
 ## Process Flow
 
 ```dot
 digraph brainstorming {
-    "Labelled solution-ready?" [shape=diamond];
-    "Run solution_ready.py" [shape=diamond];
+    "Labelled green-flag?" [shape=diamond];
+    "Run green_flag.py" [shape=diamond];
     "Report already-resolved; STOP" [shape=doublecircle];
     "spec-review on the issue BODY" [shape=box];
     "MECHANICAL only?" [shape=diamond];
@@ -241,7 +246,7 @@ digraph brainstorming {
     "Write design doc" [shape=box];
     "Spec self-review\n(fix inline)" [shape=box];
     "User reviews spec?" [shape=diamond];
-    "Invoke wave-driven-development" [shape=doublecircle];
+    "Invoke race" [shape=doublecircle];
     "Hidden complexity? Upgrade path" [shape=box];
 
     "Classify: spike / bounded / architectural" -> "Present question + probe (2-3 sentences)" [label="spike"];
@@ -252,8 +257,8 @@ digraph brainstorming {
     "Present short design in chat" -> "Human approves?";
     "Human approves?" -> "Investigate; report recommendation" [label="spike: yes"];
     "Human approves?" -> "Implement via normal workflow (no plan doc)" [label="bounded: yes, directly"];
-    "Human approves?" -> "Post the design as the spec comment" [label="bounded: yes, through WDD"];
-    "Post the design as the spec comment" -> "Invoke wave-driven-development";
+    "Human approves?" -> "Post the design as the spec comment" [label="bounded: yes, through race"];
+    "Post the design as the spec comment" -> "Invoke race";
     "Hidden complexity? Upgrade path" -> "Classify: spike / bounded / architectural";
     "Explore project context" -> "Ask clarifying questions";
     "Ask clarifying questions" -> "Propose 2-3 approaches";
@@ -265,26 +270,26 @@ digraph brainstorming {
     "Write design doc" -> "Spec self-review\n(fix inline)";
     "Spec self-review\n(fix inline)" -> "User reviews spec?";
     "User reviews spec?" -> "Write design doc" [label="changes requested"];
-    "User reviews spec?" -> "Invoke wave-driven-development" [label="approved"];
-    "Labelled solution-ready?" -> "Run solution_ready.py" [label="yes"];
-    "Labelled solution-ready?" -> "Classify: spike / bounded / architectural" [label="no"];
-    "Run solution_ready.py" -> "Report already-resolved; STOP" [label="close (exit 3)"];
-    "Run solution_ready.py" -> "Classify: spike / bounded / architectural" [label="refuse (exit 1)"];
-    "Run solution_ready.py" -> "spec-review on the issue BODY" [label="proceed (exit 0)"];
+    "User reviews spec?" -> "Invoke race" [label="approved"];
+    "Labelled green-flag?" -> "Run green_flag.py" [label="yes"];
+    "Labelled green-flag?" -> "Classify: spike / bounded / architectural" [label="no"];
+    "Run green_flag.py" -> "Report already-resolved; STOP" [label="close (exit 3)"];
+    "Run green_flag.py" -> "Classify: spike / bounded / architectural" [label="refuse (exit 1)"];
+    "Run green_flag.py" -> "spec-review on the issue BODY" [label="proceed (exit 0)"];
     "spec-review on the issue BODY" -> "MECHANICAL only?";
-    "MECHANICAL only?" -> "Invoke wave-driven-development" [label="yes"];
+    "MECHANICAL only?" -> "Invoke race" [label="yes"];
     "MECHANICAL only?" -> "Classify: spike / bounded / architectural" [label="no: DECISION, label removed"];
 }
 ```
 
 **Terminal states are path-bound.** Architectural: the ONLY skill you
-invoke after brainstorming is pitcall:wave-driven-development — never
+invoke after brainstorming is pitcall:race — never
 frontend-design, mcp-builder, or any other implementation skill.
 Bounded: after approval, either implementation proceeds directly
 through the normal development workflow, with no spec comment and no
-plan document, or — through WDD — the approved design is posted as the
+plan document, or — through race — the approved design is posted as the
 spec comment and the only skill you invoke is
-pitcall:wave-driven-development. Spike: the terminal state is a
+pitcall:race. Spike: the terminal state is a
 reported recommendation.
 
 ## The Process
@@ -358,9 +363,9 @@ implementation starts.
   `WorktreeCreate`, or a `--worktree` flag — over hand-rolled git. It owns
   placement, branching, and cleanup; a hand-rolled `git worktree add` used
   alongside one creates phantom state the harness can't see or manage.
-- **The work issue already claimed? Adopt its branch.** `claim` cuts
+- **The work issue already claimed? Adopt its branch.** `enter` cuts
   `<branch_prefix><n>-<slug>` from the default branch, so when the issue
-  was claimed — before brainstorming, or by the bounded path's through-WDD
+  was claimed — before brainstorming, or by the bounded path's through-race
   ending — that branch already exists, and the `-b` form below fails on it
   (`fatal: a branch named '…' already exists`). Check the existing branch
   out instead, with no `-b` and no base ref, inside `worktree_dir` (confirm
@@ -371,9 +376,9 @@ implementation starts.
   ```
   A native worktree tool that can only create branches cannot adopt one:
   add the worktree this way, then enter it with the tool's path option
-  where it has one. wave-driven-development's Phase 2 setup then finds
+  where it has one. The race's Phase 2 setup then finds
   itself already in a linked worktree and uses it, so the run stays on the
-  claimed branch and `wdd ship` closes the issue.
+  claimed branch and the PR `race grid` opens closes the issue.
 - **No native tool? Fall back to git — and always name the base ref
   explicitly:**
   ```bash
@@ -393,7 +398,7 @@ implementation starts.
   checkout; `git pull` and `git checkout` there are not — they move HEAD out
   from under whatever else is running against it.
   - Pick `<path>` inside the project's configured `worktree_dir`
-    (`${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/project-config --scalar worktree_dir`) at the project root —
+    (`${CLAUDE_PLUGIN_ROOT}/skills/race/scripts/project-config --scalar worktree_dir`) at the project root —
     its established worktree home. Before creating anything there, confirm
     it's git-ignored (`git check-ignore -q "<worktree_dir>"`); if it isn't,
     add it to `.gitignore` and commit that first, or the whole worktree's
@@ -412,9 +417,9 @@ implementation starts.
 - **Carry a `**Version:** N` header, starting at 1.** A file spec had version identity for free —
   the commit sha. A comment edited in place has none, so a reader who quotes it may be quoting a
   state that has already moved. Approval names a version; any edit after approval bumps it and
-  re-opens the gate — **except a WDD sweep amendment** (`## Amendment <K>`, written by the
+  re-opens the gate — **except a race sweep amendment** (`## Amendment <K>`, written by the
   controller during a run), which bumps it without re-opening the gate. Your human partner reviews
-  an amendment after the run, in the rulings list wave-driven-development hands over.
+  an amendment after the run, in the rulings list the race hands over.
 - Use elements-of-style:writing-clearly-and-concisely skill if available
 - **A spec too large for one comment is a decomposition finding, not a splitting problem.** The
   limit is roughly 150,000 characters. Do not split a spec across comments: comment order is
@@ -442,9 +447,9 @@ Wait for the user's response. If they request changes, make them and re-run the 
 
 **Implementation:**
 
-- Invoke pitcall:wave-driven-development — it writes the detailed
+- Invoke pitcall:race — it writes the detailed
   implementation plan from the approved spec, then executes it
-- Do NOT invoke any other skill. wave-driven-development is the next step.
+- Do NOT invoke any other skill. The race is the next step.
 
 ## Visual Companion
 

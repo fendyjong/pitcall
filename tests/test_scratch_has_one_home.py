@@ -7,7 +7,7 @@ and sixteen mentions of prose. Nothing caught it, because the closure gate next
 door tests for skill references (the upstream plugin's name immediately followed
 by a colon) and a bare path segment does not match that.
 
-Two homes for scratch is not cosmetic. `wdd-workspace` computes one path, while
+Two homes for scratch is not cosmetic. `race-workspace` computes one path, while
 `SKILL.md`'s ledger scan globs another literally; when the two drift, a controller
 resuming a run finds no ledger and reports "nothing to resume", which invites a
 fresh start over a run that was in fact resumable.

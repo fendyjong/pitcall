@@ -1,4 +1,4 @@
-"""Shared fixtures for the wave-driven-development script tests.
+"""Shared fixtures for the race script tests.
 
 The scripts operate on real git repositories and real plan files, so the tests
 drive them as subprocesses against throwaway repos rather than importing them.

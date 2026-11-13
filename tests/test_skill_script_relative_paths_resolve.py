@@ -9,7 +9,7 @@ The three existing reference gates are all scoped to prose, and each says so:
 - `tests/test_scripts_named_in_prose_exist.py` asks whether a cited script exists
   anywhere, from prose.
 
-None of them reads an executable. That gap had no occupant until `wdd` began naming
+None of them reads an executable. That gap had no occupant until `race` began naming
 `$HERE/../../../scripts/tracker.py`: the branch->issue parse is the inverse of
 `branch_name`, so it belongs beside it in the plugin's own `scripts/`, and reaching it
 is the first time a skill script names a file outside its own skill. A `../` hop in a
