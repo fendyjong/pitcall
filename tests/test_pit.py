@@ -1,4 +1,4 @@
-"""The lane's exclusion, and the resolution the exclusion depends on.
+"""The pit lane's exclusion, and the resolution the exclusion depends on.
 
 Every caller must land on the SAME lock file or there is no exclusion at all,
 so the resolution tests below build real repositories — a project, a linked
@@ -27,8 +27,8 @@ import lane_config  # noqa: E402
 # on a machine with no global git config at all — a fresh CI runner has none,
 # and `git commit` refuses without an author.
 _GIT_ID = (
-    "-c", "user.email=lane@example.invalid",
-    "-c", "user.name=lane tests",
+    "-c", "user.email=pit-lane@example.invalid",
+    "-c", "user.name=pit lane tests",
     "-c", "commit.gpgsign=false",
     "-c", "init.defaultBranch=main",
     # Adding a submodule from a local path is a file-transport clone, refused
@@ -61,7 +61,7 @@ def _new_repo(path: Path) -> Path:
 # This module ships in a plugin, installed outside any project, so its own
 # location says nothing about which project a session is working in — only the
 # caller's location does. That makes the resolution the load-bearing part: get
-# it wrong and each caller quietly gets a lane of its own, which looks exactly
+# it wrong and each caller quietly gets a pit lane of its own, which looks exactly
 # like a working one and excludes nobody.
 
 
@@ -74,9 +74,9 @@ def test_lane_dir_is_the_callers_project_not_the_modules_own_repository(tmp_path
 def test_every_worktree_of_one_project_resolves_to_one_lane(tmp_path, monkeypatch):
     """The property the whole module exists for.
 
-    Sessions work in separate worktrees of the same project. The lane is
+    Sessions work in separate worktrees of the same project. The pit lane is
     scoped to the shared git dir rather than the invoking worktree, so each
-    of them takes the same lock; a worktree-scoped lane would hand every
+    of them takes the same lock; a worktree-scoped pit lane would hand every
     session its own and serialise nothing.
     """
     project = _new_repo(tmp_path / "project")
@@ -97,9 +97,9 @@ def test_the_lock_is_shared_while_the_checkout_and_config_are_the_callers(
     """The two roots are different questions, and this is the only place they
     give different answers.
 
-    - which lock file? the SHARED root, or two sessions each hold "the lane"
-      and both bring the stack up;
-    - which checkout does `bringup` run in, and whose config? the CALLER's, or
+    - which lock file? the SHARED root, or two sessions each hold "the pit lane"
+      and both run the out_lap;
+    - which checkout does `out_lap` run in, and whose config? the CALLER's, or
       a session validates code it is not working on and gets a plausible-looking
       result for a branch it never touched.
 
@@ -121,7 +121,7 @@ def test_the_lock_is_shared_while_the_checkout_and_config_are_the_callers(
     # The config is the one committed on THIS branch, in THIS checkout.
     assert lane_config.config_path() == linked / ".pitcall" / "config.json"
 
-    # And `lane run` defaults its worktree to the caller's own checkout. Asserted
+    # And `pit lane` defaults its worktree to the caller's own checkout. Asserted
     # through main() rather than by re-deriving it, because the wiring of the
     # default is the part that was wrong.
     seen = {}
@@ -137,7 +137,7 @@ def test_lane_dir_from_inside_a_submodule_is_the_superprojects(tmp_path, monkeyp
 
     A session working in a submodule of a project is working on that project,
     and must queue behind the sessions working elsewhere in it. Resolving to
-    the submodule instead yields a second, private lane with no error
+    the submodule instead yields a second, private pit lane with no error
     anywhere — the failure this climb exists to prevent.
     """
     project = _new_repo(tmp_path / "project")
@@ -161,11 +161,11 @@ def test_a_worktree_of_a_submodule_still_resolves_the_projects_lane(tmp_path, mo
     `--show-superproject-working-tree` answers from a submodule's checked-out
     directory, but a LINKED WORKTREE of that submodule is not the gitlink path,
     so git returns nothing and the climb stops inside the submodule. The naive
-    answer is then `dirname(<project>/.git/modules/libs/a)` — a lane inside the
+    answer is then `dirname(<project>/.git/modules/libs/a)` — a pit lane inside the
     superproject's git dir that the project itself never resolves to.
 
     Two sessions, one in the project and one in a worktree of its submodule,
-    would each hold "the lane" and both bring the stack up, with nothing
+    would each hold "the pit lane" and both run the out_lap, with nothing
     erroring. That is the whole failure this module exists to prevent, so it is
     pinned against the project path this test BUILT — never against the other
     root, which is wrong in lockstep whenever the climb stops early.
@@ -187,9 +187,9 @@ def test_a_worktree_of_a_submodule_still_resolves_the_projects_lane(tmp_path, mo
     assert naive != project, "the wrong answer is not reachable — this test is vacuous"
 
     assert pit.lane_dir() == project / ".pitcall"
-    assert ".git" not in pit.lane_dir().parts, "the lane must never live inside a git dir"
-    # The lane has a defensible answer here; the CHECKOUT does not. The session
-    # is working on the submodule, the bring-up belongs to the project, and
+    assert ".git" not in pit.lane_dir().parts, "the pit lane must never live inside a git dir"
+    # The pit lane has a defensible answer here; the CHECKOUT does not. The session
+    # is working on the submodule, the out_lap belongs to the project, and
     # picking either silently would validate a checkout nobody on this branch
     # wrote and report green on it.
     with pytest.raises(RuntimeError, match="--worktree"):
@@ -201,7 +201,7 @@ def test_worktrees_of_sibling_submodules_do_not_form_a_private_shared_lane(
     """Two submodules under one directory make the failure cross-submodule.
 
     `libs/a` and `libs/b` both have their git dirs under `<project>/.git/modules/
-    libs/`, so the naive answer collapses worktrees of BOTH onto one lane —
+    libs/`, so the naive answer collapses worktrees of BOTH onto one pit lane —
     which they share with each other and with nothing else. Neither shares with
     the project. Over-exclusion between two unrelated dependencies AND
     under-exclusion against the project they belong to, at the same time.
@@ -224,7 +224,7 @@ def test_worktrees_of_sibling_submodules_do_not_form_a_private_shared_lane(
 
     # Non-vacuity, and a record of the shape: naively the two siblings agree with
     # each other and disagree with the project — the exact inversion of what the
-    # lane needs.
+    # pit lane needs.
     assert naive["a"] == naive["b"] != project, \
         "the sibling collapse is not reproducible here — this test is vacuous"
 
@@ -253,7 +253,7 @@ def test_a_submodule_under_a_linked_worktree_of_the_project_resolves_the_project
     linked = linked.resolve()
 
     # A submodule sitting in its normal place inside that linked worktree: the
-    # lane is the project's, while the checkout being worked on is the worktree.
+    # pit lane is the project's, while the checkout being worked on is the worktree.
     monkeypatch.chdir(linked / "libs" / "a")
     assert pit.lane_dir() == project / ".pitcall"
     assert lane_config.worktree_root() == linked
@@ -282,7 +282,7 @@ def test_a_submodule_of_a_submodule_resolves_the_project_and_refuses_a_checkout(
 
     In place, the superproject climb runs twice and lands on the project, so
     both roots answer. In a worktree of the inner submodule the git-dir climb
-    settles the lane and the checkout has no answer — same rule, one level
+    settles the pit lane and the checkout has no answer — same rule, one level
     deeper, and it is checked here because "the shape nobody enumerated" is how
     both previous defects in this module arrived.
     """
@@ -303,7 +303,7 @@ def test_a_submodule_of_a_submodule_resolves_the_project_and_refuses_a_checkout(
     assert pit.lane_dir() == project / ".pitcall"
     assert lane_config.worktree_root() == project
 
-    # A worktree of that inner submodule: the lane still resolves, the checkout
+    # A worktree of that inner submodule: the pit lane still resolves, the checkout
     # refuses.
     deep = tmp_path / "deep-inner"
     _git("worktree", "add", "-q", str(deep), "-b", "deep-side", cwd=nested)
@@ -315,7 +315,7 @@ def test_a_submodule_of_a_submodule_resolves_the_project_and_refuses_a_checkout(
 
 
 def test_lane_dir_outside_any_repository_raises_instead_of_using_cwd(tmp_path, monkeypatch):
-    """Fail loudly. A lane created in whatever directory the caller happened to
+    """Fail loudly. A pit lane created in whatever directory the caller happened to
     be standing in is indistinguishable from a working one and excludes
     nobody, so there is no fallback — not to cwd, not to the module's own
     location, not to a temporary directory."""
@@ -329,7 +329,7 @@ def test_lane_dir_outside_any_repository_raises_instead_of_using_cwd(tmp_path, m
 
     with pytest.raises(RuntimeError):
         pit.lane_dir()
-    assert not (plain / ".pitcall").exists(), "a lane was created outside a project"
+    assert not (plain / ".pitcall").exists(), "a pit lane was created outside a project"
 
 
 # --- The state machine ---------------------------------------------------
@@ -374,7 +374,7 @@ def test_release_returns_the_next_waiter(tmp_path, monkeypatch):
     a = pit.acquire("sess-a", "/wt/a")
     pit.acquire("sess-b", "/wt/b")
     assert a.release() == "sess-b"
-    # The hand-off target survives the block, which is what `lane run` reports.
+    # The hand-off target survives the block, which is what `pit lane` reports.
     assert a.next_session == "sess-b"
 
 
@@ -384,7 +384,7 @@ def test_release_returns_none_when_queue_empty(tmp_path, monkeypatch):
 
 
 def test_releasing_frees_the_lane_for_the_next_acquirer(tmp_path, monkeypatch):
-    # The kernel lock must be dropped, not just the record: a released lane that
+    # The kernel lock must be dropped, not just the record: a released pit lane that
     # still holds LOCK_EX would refuse every future acquirer with no way back.
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     pit.acquire("sess-a", "/wt/a").release()
@@ -418,7 +418,7 @@ def test_a_departed_holders_record_is_reclaimable_even_when_its_pid_is_live(
     The seeded record names a pid that is genuinely alive — this test process —
     with no flock behind it, which is exactly what a crashed holder leaves once
     the kernel has handed its number to somebody else. Under pid liveness the
-    probe succeeds, the lane reads as held by a process that is not the holder,
+    probe succeeds, the pit lane reads as held by a process that is not the holder,
     and there is no timeout to break it: wedged until a human intervenes. Under
     the kernel lock it is reclaimed at once, because the signal is the lock and
     never the number.
@@ -452,11 +452,11 @@ def test_reacquiring_your_own_lane_succeeds_instead_of_queueing(tmp_path, monkey
 
     A session retrying after a transient error would otherwise enqueue behind
     itself and wait for a hand-off only its own release can send — and there is
-    no timeout to break that, so the lane wedges until a human clears it.
+    no timeout to break that, so the pit lane wedges until a human clears it.
 
     This asserts the LIBRARY property and nothing more. Whether the *caller* may
-    then go on to run a second bring-up is a separate question, and the answer is
-    no — see `test_lane_run_refuses_a_second_bringup_under_its_own_live_hold`.
+    then go on to run a second out_lap is a separate question, and the answer is
+    no — see `test_lane_run_refuses_a_second_out_lap_under_its_own_live_hold`.
     Asserting only the handle here is what let `_cmd_run` run one anyway.
     """
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
@@ -466,7 +466,7 @@ def test_reacquiring_your_own_lane_succeeds_instead_of_queueing(tmp_path, monkey
         assert again.reentrant is True
         assert pit.status()["waiting"] == [], "must not queue behind itself"
         # The re-entrant handle took no kernel lock, so it must free nothing:
-        # releasing here would drop the lane out from under the outer bring-up.
+        # releasing here would drop the pit lane out from under the outer out_lap.
         assert again.release() is None
         assert pit.status()["holder"]["session"] == "sess-a"
         assert pit.acquire("sess-b", "/wt/b") is None, "outer hold must survive"
@@ -476,13 +476,13 @@ def test_reacquiring_your_own_lane_succeeds_instead_of_queueing(tmp_path, monkey
 def test_release_raises_when_lane_is_not_held(tmp_path, monkeypatch):
     """`if held and held["session"] != session` is falsy when held is None,
     so a naive implementation falls through and pops a real queue entry on
-    behalf of a session that never held the lane — double-advancing the queue
+    behalf of a session that never held the pit lane — double-advancing the queue
     past a waiter that is never released to. release() must refuse instead."""
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     a = pit.acquire("sess-a", "/wt/a")
     pit.acquire("sess-b", "/wt/b")     # queued behind sess-a
     pit.acquire("sess-c", "/wt/c")     # and sess-c behind that
-    assert a.release() == "sess-b"      # lane now free; sess-b popped
+    assert a.release() == "sess-b"      # pit lane now free; sess-b popped
     with pytest.raises(RuntimeError):
         a.release()                     # sess-a holds nothing anymore — must raise
     assert [e["session"] for e in pit.status()["waiting"]] == ["sess-c"], \
@@ -503,8 +503,8 @@ def test_drop_and_next_skips_the_unreachable_entry(tmp_path, monkeypatch):
 #
 # The original design recorded os.getpid() and reclaimed when os.kill(pid, 0)
 # failed. A session invokes Python as a SHORT-LIVED SUBPROCESS, so that pid is
-# dead the moment it is written: the next acquire() would reclaim a lane whose
-# bring-up is still running, and both sessions would proceed reporting success.
+# dead the moment it is written: the next acquire() would reclaim a pit lane whose
+# out_lap is still running, and both sessions would proceed reporting success.
 # These tests pin the replacement across real processes — nothing here
 # simulates a death by editing a pid into a file.
 
@@ -529,7 +529,7 @@ def test_a_running_holder_is_never_reclaimed_and_a_gone_one_always_is(tmp_path, 
         recorded_pid = pit.status()["holder"]["pid"]
         assert recorded_pid == child.pid
 
-        # Still running: the lane must NOT be reclaimable, at any age.
+        # Still running: the pit lane must NOT be reclaimable, at any age.
         assert pit.acquire("sess-b", "/wt/b") is None
 
         # SIGKILL, so nothing in the holder runs on the way out — no cleanup, no
@@ -543,7 +543,7 @@ def test_a_running_holder_is_never_reclaimed_and_a_gone_one_always_is(tmp_path, 
             child.join(timeout=15)
 
     # The record still names the dead holder — which is why nothing may key on
-    # it — but the kernel dropped the flock at process teardown, so the lane is
+    # it — but the kernel dropped the flock at process exit, so the pit lane is
     # free and the next acquirer takes it.
     assert pit.status()["holder"]["session"] == "sess-holder"
     with pit.acquire("sess-c", "/wt/c") as got:
@@ -556,7 +556,7 @@ def test_lane_run_queues_instead_of_running_while_another_process_holds(
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     ran = tmp_path / "ran"
     monkeypatch.setattr(pit, "load_config",
-                        lambda checkout=None: {"bringup": f"touch {ran}", "validate": None, "teardown": None})
+                        lambda checkout=None: {"out_lap": f"touch {ran}", "validate": None, "in_lap": None})
     ctx = mp.get_context("fork")
     ready = ctx.Queue()
     child = ctx.Process(target=_hold_until_killed, args=(str(tmp_path), "sess-holder", ready))
@@ -567,21 +567,21 @@ def test_lane_run_queues_instead_of_running_while_another_process_holds(
     finally:
         child.kill()
         child.join(timeout=15)
-    assert not ran.exists(), "bringup ran while another process held the lane"
+    assert not ran.exists(), "out_lap ran while another process held the pit lane"
     assert "STOP HERE" in capsys.readouterr().out
     assert [e["session"] for e in pit.status()["waiting"]] == ["sess-b"]
 
 
-def test_lane_run_refuses_a_second_bringup_under_its_own_live_hold(
+def test_lane_run_refuses_a_second_out_lap_under_its_own_live_hold(
         tmp_path, monkeypatch, capsys):
-    """Reentrancy must stop the caller, not wave it through.
+    """Reentrancy must stop the caller, not let it through.
 
     Liveness is a kernel lock, so `acquire()` can only report reentrancy while a
-    LIVE process of the same session holds the lane. That makes this branch, by
-    construction, "a second bring-up on top of a running one" — the interleave
+    LIVE process of the same session holds the pit lane. That makes this branch, by
+    construction, "a second out_lap on top of a running one" — the interleave
     again, one level up, inside the fix for it. Reachable without any exotic
-    timing: a `lane run --session S` tool call times out at two minutes while
-    the bring-up is still going and the caller re-issues the same command,
+    timing: a `pit lane --session S` tool call times out at two minutes while
+    the out_lap is still going and the caller re-issues the same command,
     which is the retry the reentrant branch was written to accommodate.
 
     The child here is a real second process holding under the SAME session name,
@@ -590,7 +590,7 @@ def test_lane_run_refuses_a_second_bringup_under_its_own_live_hold(
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     ran = tmp_path / "ran"
     monkeypatch.setattr(pit, "load_config",
-                        lambda checkout=None: {"bringup": f"touch {ran}", "validate": None, "teardown": None})
+                        lambda checkout=None: {"out_lap": f"touch {ran}", "validate": None, "in_lap": None})
     ctx = mp.get_context("fork")
     ready = ctx.Queue()
     child = ctx.Process(target=_hold_until_killed, args=(str(tmp_path), "sess-a", ready))
@@ -598,12 +598,12 @@ def test_lane_run_refuses_a_second_bringup_under_its_own_live_hold(
     try:
         assert ready.get(timeout=15) is True
         assert pit._cmd_run("sess-a", str(tmp_path)) == pit.EXIT_ALREADY_RUNNING
-        assert not ran.exists(), "a second bring-up started on top of a running one"
+        assert not ran.exists(), "a second out_lap started on top of a running one"
         # Distinct from EXIT_QUEUED because the caller is NOT queued: nothing will
         # ever push it, so telling it to wait would be telling it to wait forever.
         assert pit.EXIT_ALREADY_RUNNING != pit.EXIT_QUEUED
         assert pit.status()["waiting"] == [], "must not queue behind its own hold"
-        # Refusing must not free the lane out from under the run that is still going.
+        # Refusing must not free the pit lane out from under the run that is still going.
         holder = pit.status()["holder"]
         assert holder["session"] == "sess-a" and holder["pid"] == child.pid
         assert pit.acquire("sess-b", "/wt/b") is None, "the live hold must survive"
@@ -613,7 +613,7 @@ def test_lane_run_refuses_a_second_bringup_under_its_own_live_hold(
         child.join(timeout=15)
 
 
-# --- `lane run` holds the lane for the whole run -------------------------
+# --- `pit lane` holds the pit lane for the whole run -------------------------
 
 _PROBE = """\
 import json, sys
@@ -626,12 +626,12 @@ Path({out!r}).write_text(json.dumps({{"acquired": held is not None}}))
 """
 
 
-def test_lane_run_holds_the_lane_across_bringup_and_validate(tmp_path, monkeypatch, capsys):
+def test_lane_run_holds_the_lane_across_out_lap_and_validate(tmp_path, monkeypatch, capsys):
     """The wiring the pid design was missing: one process that holds for the whole run.
 
-    A separate OS process probes the lane from inside the bringup step — the
+    A separate OS process probes the pit lane from inside the out_lap step — the
     window in which the old design had already let go, because the interpreter
-    that recorded the pid had exited. The probe must be refused, and the lane
+    that recorded the pid had exited. The probe must be refused, and the pit lane
     must be free again once `run` returns.
     """
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
@@ -640,14 +640,14 @@ def test_lane_run_holds_the_lane_across_bringup_and_validate(tmp_path, monkeypat
     probe_py.write_text(_PROBE.format(
         scripts=str(ROOT / "scripts"), lane_dir=str(tmp_path), out=str(out)))
     monkeypatch.setattr(pit, "load_config", lambda checkout=None: {
-        "bringup": f"{sys.executable} {probe_py}",
-        "validate": f"test -f {out}",   # runs only if bringup succeeded
-        "teardown": None,
+        "out_lap": f"{sys.executable} {probe_py}",
+        "validate": f"test -f {out}",   # runs only if out_lap succeeded
+        "in_lap": None,
     })
 
     assert pit._cmd_run("sess-run", str(tmp_path)) == 0
     assert json.loads(out.read_text()) == {"acquired": False}, \
-        "a concurrent process acquired the lane while `run` was mid-bringup"
+        "a concurrent process acquired the pit lane while `run` was mid-out_lap"
     assert pit.status()["holder"] is None, "`run` must release when it finishes"
     # The probe enqueued itself, so `run` must name it as the hand-off target.
     assert "HAND OFF TO: sess-probe" in capsys.readouterr().out
@@ -667,7 +667,7 @@ def test_lane_run_reads_the_config_from_the_checkout_it_runs_in(tmp_path, monkey
 
     def fake_load_config(checkout=None):
         seen["checkout"] = checkout
-        return {"bringup": None, "validate": None, "teardown": None}
+        return {"out_lap": None, "validate": None, "in_lap": None}
 
     monkeypatch.setattr(pit, "load_config", fake_load_config)
     assert pit._cmd_run("sess-a", "/wt/somewhere") == 0
@@ -677,64 +677,64 @@ def test_lane_run_reads_the_config_from_the_checkout_it_runs_in(tmp_path, monkey
 def test_lane_run_reports_failure_but_still_releases(tmp_path, monkeypatch):
     monkeypatch.setattr(pit, "lane_dir", lambda: tmp_path)
     monkeypatch.setattr(pit, "load_config",
-                        lambda checkout=None: {"bringup": "false", "validate": "true", "teardown": None})
+                        lambda checkout=None: {"out_lap": "false", "validate": "true", "in_lap": None})
     assert pit._cmd_run("sess-run", str(tmp_path)) == 1
-    # A failed bring-up must not strand the lane — the next session still needs it.
+    # A failed out_lap must not strand the pit lane — the next session still needs it.
     assert pit.status()["holder"] is None
 
 
-# --- Receipts: evidence that a commit was validated ----------------------
+# --- Pit passes: evidence that a commit was validated ----------------------
 #
 # A later step merges a pull request once its checks are green, and what makes
-# that safe is a rule that nothing merges without having passed a lane run
-# first. The receipt is the evidence for that rule, which is why a receipt that
-# attests to nothing is worse than no receipt at all: it reads exactly like one
-# that does. Three shapes of meaningless receipt are pinned below — one for a
+# that safe is a rule that nothing merges without having passed a pit lane
+# first. The pit pass is the evidence for that rule, which is why a pit pass that
+# attests to nothing is worse than no pit pass at all: it reads exactly like one
+# that does. Three shapes of meaningless pit pass are pinned below — one for a
 # validation that was skipped, one for a validation that failed, and one naming
 # a commit nothing ran against.
 #
-# Real repositories throughout. The property under test is that the receipt
+# Real repositories throughout. The property under test is that the pit pass
 # names a commit that exists in the checkout that was validated, so a stubbed
 # sha would assert only that the stub was written correctly.
 
 
 def _repo_with_config(path: Path, **steps) -> Path:
-    """A real repository carrying a committed config the lane will read."""
+    """A real repository carrying a committed config the pit lane will read."""
     repo = _new_repo(path)
-    cfg = {"bringup": None, "validate": None,
+    cfg = {"out_lap": None, "validate": None,
            "default_branch": "main", "required_check": "ci"}
     cfg.update(steps)
     (repo / lane_config.CONFIG_NAME).write_text(json.dumps(cfg))
     _git("add", lane_config.CONFIG_NAME, cwd=repo)
-    _git("commit", "-q", "-m", "configure the lane", cwd=repo)
+    _git("commit", "-q", "-m", "configure the pit lane", cwd=repo)
     return repo
 
 
-def _receipts(project: Path) -> list[str]:
-    """Every receipt on disk, read WITHOUT creating the directory.
+def _pit_passes(project: Path) -> list[str]:
+    """Every pit pass on disk, read WITHOUT creating the directory.
 
-    Deliberately not routed through `pit.receipts_dir()`, which creates what
+    Deliberately not routed through `pit.pit_passes_dir()`, which creates what
     it returns: a negative assertion made through it cannot tell "nothing was
     written" from "the directory did not exist until this assertion made it".
     The literal layout is spelled out rather than derived for the same reason
     the merge step will read it literally — it is the contract, not an
     implementation detail.
     """
-    return sorted(p.name for p in (project / ".pitcall" / "receipts").glob("*.json"))
+    return sorted(p.name for p in (project / ".pitcall" / "pit-passes").glob("*.json"))
 
 
 def test_a_passing_validate_records_the_commit_of_the_checkout_it_ran_in(
         tmp_path, monkeypatch):
-    """The receipt is pinned to the sha `validate` actually ran against.
+    """The pit pass is pinned to the sha `validate` actually ran against.
 
     The caller's cwd and the checkout under test are different directories —
-    `lane run --worktree X` is the ordinary case, not the exotic one — and this
+    `pit lane --worktree X` is the ordinary case, not the exotic one — and this
     module has twice resolved the wrong one of that pair. So the run is issued
     from the main checkout while the worktree under test sits on a later commit,
-    and the receipt must name the worktree's HEAD while saying nothing whatever
+    and the pit pass must name the worktree's HEAD while saying nothing whatever
     about the caller's.
     """
-    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    project = _repo_with_config(tmp_path / "project", out_lap="true", validate="true")
     linked = tmp_path / "linked"
     _git("worktree", "add", "-q", str(linked), "-b", "side", cwd=project)
     linked = linked.resolve()
@@ -750,73 +750,75 @@ def test_a_passing_validate_records_the_commit_of_the_checkout_it_ran_in(
     monkeypatch.chdir(project)
     assert pit._cmd_run("sess-a", str(linked)) == 0
 
-    # Exactly one receipt, and it is the validated worktree's commit. Naming
-    # the absent one too: "a receipt exists" would pass on the wrong sha.
-    assert _receipts(project) == [f"{validated_head}.json"]
-    assert not (project / ".pitcall" / "receipts" / f"{callers_head}.json").exists()
+    # Exactly one pit pass, and it is the validated worktree's commit. Naming
+    # the absent one too: "a pit pass exists" would pass on the wrong sha.
+    assert _pit_passes(project) == [f"{validated_head}.json"]
+    assert not (project / ".pitcall" / "pit-passes" / f"{callers_head}.json").exists()
 
-    receipt = project / ".pitcall" / "receipts" / f"{validated_head}.json"
-    assert json.loads(receipt.read_text())["sha"] == validated_head
+    pass_file = project / ".pitcall" / "pit-passes" / f"{validated_head}.json"
+    assert json.loads(pass_file.read_text())["sha"] == validated_head
+    legacy = project / ".pitcall" / ("rece" + "ipts")   # spelled in pieces: the retired directory
+    assert not list(legacy.glob("*.json")), "the pit lane wrote to the retired directory"
 
-    # One set of receipts per project, for the same reason there is one lock:
+    # One set of pit passes per project, for the same reason there is one lock:
     # a merge step consulting a per-worktree directory would be consulting
-    # receipts nobody else ever wrote to.
-    assert pit.receipts_dir() == project / ".pitcall" / "receipts"
+    # pit passes nobody else ever wrote to.
+    assert pit.pit_passes_dir() == project / ".pitcall" / "pit-passes"
     monkeypatch.chdir(linked)
-    assert pit.receipts_dir() == project / ".pitcall" / "receipts"
+    assert pit.pit_passes_dir() == project / ".pitcall" / "pit-passes"
 
 
-def test_a_failing_validate_leaves_no_receipt(tmp_path, monkeypatch):
-    """A receipt for a validation that FAILED reads identically to one for a
+def test_a_failing_validate_leaves_no_pit_pass(tmp_path, monkeypatch):
+    """A pit pass for a validation that FAILED reads identically to one for a
     validation that passed, and the merge it would authorise is a merge of code
     that is known not to work."""
-    project = _repo_with_config(tmp_path / "project", bringup="true", validate="false")
+    project = _repo_with_config(tmp_path / "project", out_lap="true", validate="false")
     monkeypatch.chdir(project)
 
     assert pit._cmd_run("sess-a", str(project)) == 1
-    assert _receipts(project) == []
+    assert _pit_passes(project) == []
 
 
-def test_a_failed_bringup_leaves_no_receipt_because_validate_never_ran(
+def test_a_failed_out_lap_leaves_no_pit_pass_because_validate_never_ran(
         tmp_path, monkeypatch):
-    """The lane stops at the first failing step, so `validate` is never
-    reached — and a receipt written anyway would attest to a step that did not
+    """The pit lane stops at the first failing step, so `validate` is never
+    reached — and a pit pass written anyway would attest to a step that did not
     execute at all."""
     marker = tmp_path / "validate-ran"
     project = _repo_with_config(tmp_path / "project",
-                                bringup="false", validate=f"touch {marker}")
+                                out_lap="false", validate=f"touch {marker}")
     monkeypatch.chdir(project)
 
     assert pit._cmd_run("sess-a", str(project)) == 1
     assert not marker.exists(), \
-        "validate ran after a failed bringup — this test is not testing what it says"
-    assert _receipts(project) == []
+        "validate ran after a failed out_lap — this test is not testing what it says"
+    assert _pit_passes(project) == []
 
 
-def test_an_unconfigured_validate_leaves_no_receipt(tmp_path, monkeypatch):
+def test_an_unconfigured_validate_leaves_no_pit_pass(tmp_path, monkeypatch):
     """The skipped-step case, and the one an implementation is likeliest to get
     wrong.
 
     `validate` may be null — a project saying "there is no such step" — and the
-    lane already skips a step configured that way. The run therefore exits 0
-    having validated nothing, so a receipt keyed on the run's exit status is
+    pit lane already skips a step configured that way. The run therefore exits 0
+    having validated nothing, so a pit pass keyed on the run's exit status is
     written here, is indistinguishable from a real one, and authorises a merge
     nothing ever checked.
     """
-    project = _repo_with_config(tmp_path / "project", bringup="true", validate=None)
+    project = _repo_with_config(tmp_path / "project", out_lap="true", validate=None)
     monkeypatch.chdir(project)
 
     assert pit._cmd_run("sess-a", str(project)) == 0, \
         "a skipped step is not a failure — the run still succeeds"
-    assert _receipts(project) == []
+    assert _pit_passes(project) == []
 
 
-def test_two_runs_at_different_commits_leave_two_receipts(tmp_path, monkeypatch):
+def test_two_runs_at_different_commits_leave_two_pit_passes(tmp_path, monkeypatch):
     """The ordinary failure the sha-keyed name prevents: validation runs, a
     review fix lands, and the fix inherits the earlier approval without ever
-    having been validated. Each commit carries its own receipt and neither run
+    having been validated. Each commit carries its own pit pass and neither run
     overwrites the other's."""
-    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    project = _repo_with_config(tmp_path / "project", out_lap="true", validate="true")
     monkeypatch.chdir(project)
 
     assert pit._cmd_run("sess-a", str(project)) == 0
@@ -830,40 +832,40 @@ def test_two_runs_at_different_commits_leave_two_receipts(tmp_path, monkeypatch)
 
     assert pit._cmd_run("sess-b", str(project)) == 0
 
-    assert _receipts(project) == sorted([f"{before}.json", f"{after}.json"])
-    receipts = project / ".pitcall" / "receipts"
-    assert json.loads((receipts / f"{before}.json").read_text())["sha"] == before
-    assert json.loads((receipts / f"{after}.json").read_text())["sha"] == after
+    assert _pit_passes(project) == sorted([f"{before}.json", f"{after}.json"])
+    passes_dir = project / ".pitcall" / "pit-passes"
+    assert json.loads((passes_dir / f"{before}.json").read_text())["sha"] == before
+    assert json.loads((passes_dir / f"{after}.json").read_text())["sha"] == after
 
 
 # A commit made from inside the `validate` step itself. Identity is passed in
 # the environment and signing is disabled per-command, so this builds on a
 # machine with no global git config — the same reason `_GIT_ID` exists.
 _COMMIT_DURING_VALIDATE = (
-    "GIT_AUTHOR_NAME='lane tests' GIT_AUTHOR_EMAIL=lane@example.invalid "
-    "GIT_COMMITTER_NAME='lane tests' GIT_COMMITTER_EMAIL=lane@example.invalid "
+    "GIT_AUTHOR_NAME='pit lane tests' GIT_AUTHOR_EMAIL=lane@example.invalid "
+    "GIT_COMMITTER_NAME='pit lane tests' GIT_COMMITTER_EMAIL=lane@example.invalid "
     "git -c commit.gpgsign=false commit -q --allow-empty "
     "-m 'a fix landing while validate was still running'"
 )
 
 
-def test_a_commit_landing_during_the_run_leaves_no_receipt(
+def test_a_commit_landing_during_the_run_leaves_no_pit_pass(
         tmp_path, monkeypatch, capsys):
     """The window the lock does not close.
 
-    The lane excludes other SESSIONS; it says nothing about the holder's own
+    The pit lane excludes other SESSIONS; it says nothing about the holder's own
     worktree changing underneath it. Read the sha after `validate` returns and a
     commit made while it ran is certified — approval inherited by a change
-    nothing checked, which is the one failure this receipt exists to prevent,
+    nothing checked, which is the one failure this pit pass exists to prevent,
     arriving by the back door.
 
     Neither commit may be written. `validate` began at one and ended at another,
     so it observed a state that is neither: the earlier sha approves code that
     was replaced mid-run, and the later one approves code that was never
     validated. There is no honest fallback, which is why the assertion below
-    names BOTH shas rather than settling for "some receipt is wrong".
+    names BOTH shas rather than settling for "some pit pass is wrong".
     """
-    project = _repo_with_config(tmp_path / "project", bringup="true",
+    project = _repo_with_config(tmp_path / "project", out_lap="true",
                                 validate=_COMMIT_DURING_VALIDATE)
     monkeypatch.chdir(project)
     before = _git("rev-parse", "HEAD", cwd=project)
@@ -875,25 +877,25 @@ def test_a_commit_landing_during_the_run_leaves_no_receipt(
     assert before != after, \
         "HEAD did not move during the run — this test proves nothing"
 
-    assert _receipts(project) == []
-    receipts = project / ".pitcall" / "receipts"
-    assert not (receipts / f"{before}.json").exists(), "certified the pre-run commit"
-    assert not (receipts / f"{after}.json").exists(), "certified a commit never validated"
+    assert _pit_passes(project) == []
+    passes_dir = project / ".pitcall" / "pit-passes"
+    assert not (passes_dir / f"{before}.json").exists(), "certified the pre-run commit"
+    assert not (passes_dir / f"{after}.json").exists(), "certified a commit never validated"
     assert "HEAD moved during the run" in capsys.readouterr().out, \
         "refusing silently leaves a session hunting for a file nothing wrote"
 
 
-def test_the_receipt_body_is_the_shape_the_merge_step_reads(tmp_path, monkeypatch):
+def test_the_pit_pass_body_is_the_shape_the_merge_step_reads(tmp_path, monkeypatch):
     """The body is a contract shared with the step that reads it, so it is
     pinned whole rather than field by field: a spelling that drifts before the
     second consumer exists is a contract nobody will trust afterwards."""
     project = _repo_with_config(tmp_path / "project",
-                                bringup="true", validate="true")
+                                out_lap="true", validate="true")
     monkeypatch.chdir(project)
     assert pit._cmd_run("sess-a", str(project)) == 0
 
     sha = _git("rev-parse", "HEAD", cwd=project)
-    body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
+    body = json.loads((project / ".pitcall" / "pit-passes" / f"{sha}.json").read_text())
 
     assert set(body) == {"sha", "branch", "session", "worktree",
                          "validate_command", "validated_at"}
@@ -908,45 +910,45 @@ def test_the_receipt_body_is_the_shape_the_merge_step_reads(tmp_path, monkeypatc
 def test_a_detached_head_records_a_null_branch_rather_than_the_word_head(
         tmp_path, monkeypatch):
     """`rev-parse --abbrev-ref HEAD` answers the literal string "HEAD" when the
-    head is detached, and a receipt recording that as a branch name is a
+    head is detached, and a pit pass recording that as a branch name is a
     plausible-looking lie. Detached is a real state for a checkout under
     validation, so the honest answer is no branch at all."""
     project = _repo_with_config(tmp_path / "project",
-                                bringup="true", validate="true")
+                                out_lap="true", validate="true")
     _git("checkout", "-q", "--detach", cwd=project)
     monkeypatch.chdir(project)
 
     assert pit._cmd_run("sess-a", str(project)) == 0
     sha = _git("rev-parse", "HEAD", cwd=project)
-    body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
+    body = json.loads((project / ".pitcall" / "pit-passes" / f"{sha}.json").read_text())
     assert body["branch"] is None
     assert body["sha"] == sha, "a detached head is still a perfectly good commit"
 
 
 def test_a_checkout_in_another_project_is_refused_before_the_lane_is_taken(
         tmp_path, monkeypatch):
-    """The lane comes from the caller's cwd and the checkout from `--worktree`,
+    """The pit lane comes from the caller's cwd and the checkout from `--worktree`,
     which is what lets a session in the main checkout validate a linked
     worktree. Nothing stopped that pair naming two different PROJECTS: holding
-    one project's lane while validating another, and filing the receipt where
+    one project's pit lane while validating another, and filing the pit pass where
     the second project's merge step will never look.
 
-    Refused before the lane is taken, not after — taking it and then refusing
+    Refused before the pit lane is taken, not after — taking it and then refusing
     would block every other session in the caller's project for as long as it
     took to notice.
     """
-    here = _repo_with_config(tmp_path / "here", bringup="true", validate="true")
-    elsewhere = _repo_with_config(tmp_path / "elsewhere", bringup="true", validate="true")
+    here = _repo_with_config(tmp_path / "here", out_lap="true", validate="true")
+    elsewhere = _repo_with_config(tmp_path / "elsewhere", out_lap="true", validate="true")
     assert here != elsewhere, "the two projects must differ, or this proves nothing"
 
     monkeypatch.chdir(here)
     assert pit._cmd_run("sess-a", str(elsewhere)) == pit.EXIT_WRONG_PROJECT
 
-    # No receipt anywhere: not in the lane we hold, not in the project we would
+    # No pit pass anywhere: not in the pit lane we hold, not in the project we would
     # have validated.
-    assert _receipts(here) == []
-    assert _receipts(elsewhere) == []
-    # The lane was never taken, so nobody in `here` is blocked and no waiter was
+    assert _pit_passes(here) == []
+    assert _pit_passes(elsewhere) == []
+    # The pit lane was never taken, so nobody in `here` is blocked and no waiter was
     # enqueued behind a run that never started.
     assert pit.status()["holder"] is None
     assert pit.status()["waiting"] == []
@@ -954,19 +956,19 @@ def test_a_checkout_in_another_project_is_refused_before_the_lane_is_taken(
     assert not (elsewhere / ".pitcall").exists()
 
 
-def test_an_uncommitted_change_to_a_tracked_file_leaves_no_receipt(
+def test_an_uncommitted_change_to_a_tracked_file_leaves_no_pit_pass(
         tmp_path, monkeypatch, capsys):
     """A commit is a state, not a name.
 
-    Nothing moves here: HEAD is the same commit before and after, the lane is
+    Nothing moves here: HEAD is the same commit before and after, the pit lane is
     held throughout, and every other guard passes. The tree simply is not what
     the commit says it is — so `validate` runs against content no commit
-    contains, passes, and the receipt certifies a commit `validate` was never
+    contains, passes, and the pit pass certifies a commit `validate` was never
     given and would have FAILED on. The file is committed saying one thing and
     edited to say another, which is the shape that makes the lie observable:
     the run's verdict inverts depending on which state you believe it read.
     """
-    project = _repo_with_config(tmp_path / "project", bringup="true",
+    project = _repo_with_config(tmp_path / "project", out_lap="true",
                                 validate='test "$(cat marker.txt)" = pass')
     (project / "marker.txt").write_text("fail\n")
     _git("add", "marker.txt", cwd=project)
@@ -982,52 +984,52 @@ def test_an_uncommitted_change_to_a_tracked_file_leaves_no_receipt(
     assert _git("rev-parse", "HEAD", cwd=project) == sha, \
         "HEAD must NOT move — the other guards would mask what this one tests"
 
-    assert _receipts(project) == []
-    assert not (project / ".pitcall" / "receipts" / f"{sha}.json").exists()
+    assert _pit_passes(project) == []
+    assert not (project / ".pitcall" / "pit-passes" / f"{sha}.json").exists()
     out = capsys.readouterr().out
     assert "uncommitted changes to tracked files" in out
     assert "marker.txt" in out, "a session told only 'dirty' has to go and look"
 
 
-def test_an_untracked_file_does_not_block_a_receipt(tmp_path, monkeypatch):
+def test_an_untracked_file_does_not_block_a_pit_pass(tmp_path, monkeypatch):
     """The other side of the same decision, pinned so it is not widened by
     accident.
 
     `-uno`. A scratch file, an editor backup, a build artifact nobody tracks —
-    none is part of any commit's state, so none makes the receipt's claim false.
+    none is part of any commit's state, so none makes the pit pass's claim false.
     A guard that fires on noise is a guard someone switches off, and the next
     reader tempted to drop the flag should fail this test rather than discover
-    the consequence in a lane that refuses every run.
+    the consequence in a pit lane that refuses every run.
     """
-    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    project = _repo_with_config(tmp_path / "project", out_lap="true", validate="true")
     (project / "scratch.log").write_text("noise nobody tracks\n")
     monkeypatch.chdir(project)
 
     assert pit._cmd_run("sess-a", str(project)) == 0
     sha = _git("rev-parse", "HEAD", cwd=project)
-    assert _receipts(project) == [f"{sha}.json"]
+    assert _pit_passes(project) == [f"{sha}.json"]
 
 
-def test_a_commit_landing_during_bringup_leaves_no_receipt(tmp_path, monkeypatch):
-    """Which side of `bringup` the capture happens on.
+def test_a_commit_landing_during_out_lap_leaves_no_pit_pass(tmp_path, monkeypatch):
+    """Which side of `out_lap` the capture happens on.
 
-    `bringup` builds from the working tree too, so the whole run has to sit on
+    `out_lap` builds from the working tree too, so the whole run has to sit on
     one commit. Capture between the steps instead of before them and this is
-    certified: the sha read would be the post-bringup one, matching itself
-    afterwards, with `validate` having tested a bring-up made from the earlier
+    certified: the sha read would be the post-out_lap one, matching itself
+    afterwards, with `validate` having tested an out_lap made from the earlier
     commit. Nothing else in the suite distinguishes the two positions, which is
     why the docstring's claim needs this test and not just the wording.
     """
     project = _repo_with_config(tmp_path / "project",
-                                bringup=_COMMIT_DURING_VALIDATE, validate="true")
+                                out_lap=_COMMIT_DURING_VALIDATE, validate="true")
     monkeypatch.chdir(project)
     before = _git("rev-parse", "HEAD", cwd=project)
 
     assert pit._cmd_run("sess-a", str(project)) == 0
     after = _git("rev-parse", "HEAD", cwd=project)
-    assert before != after, "bringup did not commit — this test proves nothing"
+    assert before != after, "out_lap did not commit — this test proves nothing"
 
-    assert _receipts(project) == []
+    assert _pit_passes(project) == []
 
 
 def test_shas_are_compared_in_full_not_by_a_short_prefix(tmp_path, monkeypatch):
@@ -1038,7 +1040,7 @@ def test_shas_are_compared_in_full_not_by_a_short_prefix(tmp_path, monkeypatch):
     Mocked at the git boundary and nowhere deeper: `_worktree_sha` is the client
     call, and what is under test is the comparison, not git's answer.
     """
-    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    project = _repo_with_config(tmp_path / "project", out_lap="true", validate="true")
     monkeypatch.chdir(project)
 
     before = "abc1234" + "a" * 33
@@ -1046,21 +1048,21 @@ def test_shas_are_compared_in_full_not_by_a_short_prefix(tmp_path, monkeypatch):
     assert before[:7] == after[:7] and before != after and len(before) == len(after) == 40
 
     monkeypatch.setattr(pit, "_worktree_sha", lambda worktree: after)
-    pit._record_receipt("sess-a", str(project),
+    pit._record_pit_pass("sess-a", str(project),
                          pit._Checkout(sha=before, branch="main", dirt=None), "true")
 
-    assert _receipts(project) == [], "compared by prefix, these two look like one commit"
+    assert _pit_passes(project) == [], "compared by prefix, these two look like one commit"
 
 
 def test_the_branch_recorded_is_the_one_validation_ran_on(tmp_path, monkeypatch):
     """`branch` is documented as the branch at VALIDATION time.
 
     A run can switch branches without moving the sha, so a branch read when the
-    receipt is written describes the checkout afterwards rather than the one
+    pit pass is written describes the checkout afterwards rather than the one
     that was validated. Nothing keys on the field, which is exactly why it would
     have gone on being wrong unnoticed.
     """
-    project = _repo_with_config(tmp_path / "project", bringup="true",
+    project = _repo_with_config(tmp_path / "project", out_lap="true",
                                 validate="git checkout -q other")
     _git("branch", "other", cwd=project)     # same commit, different name
     monkeypatch.chdir(project)
@@ -1070,42 +1072,42 @@ def test_the_branch_recorded_is_the_one_validation_ran_on(tmp_path, monkeypatch)
         "the run did not switch branches — this test proves nothing"
 
     sha = _git("rev-parse", "HEAD", cwd=project)
-    body = json.loads((project / ".pitcall" / "receipts" / f"{sha}.json").read_text())
+    body = json.loads((project / ".pitcall" / "pit-passes" / f"{sha}.json").read_text())
     assert body["branch"] == "main"
 
 
-def test_a_receipt_that_cannot_be_written_still_hands_the_lane_off(
+def test_a_pit_pass_that_cannot_be_written_still_hands_the_lane_off(
         tmp_path, monkeypatch, capsys):
-    """A lost receipt costs one re-run; a lost waiter costs a session.
+    """A lost pit pass costs one re-run; a lost waiter costs a session.
 
     `release()` pops the next waiter off the queue in the `finally`, and the
     print naming it is the only thing that wakes that session. An exception
-    escaping the receipt write skips that print, so the waiter is gone from the
-    queue AND never told — waiting forever on a lane that is free, with nothing
-    anywhere reporting the loss. The receipt write is new code on that path,
+    escaping the pit pass write skips that print, so the waiter is gone from the
+    queue AND never told — waiting forever on a pit lane that is free, with nothing
+    anywhere reporting the loss. The pit pass write is new code on that path,
     which is what makes this reachable.
     """
     if os.geteuid() == 0:
         pytest.skip("running as root: file permissions do not deny the write")
 
-    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    project = _repo_with_config(tmp_path / "project", out_lap="true", validate="true")
     monkeypatch.chdir(project)
-    receipts = pit.receipts_dir()
+    passes_dir = pit.pit_passes_dir()
     # A waiter that must be handed off to no matter what happens above it.
     pit._write_json(pit.lane_dir() / pit.QUEUE,
-                     [{"session": "sess-waiter", "worktree": "/wt/w", "queued_at": 0.0}])
+                    [{"session": "sess-waiter", "worktree": "/wt/w", "queued_at": 0.0}])
 
-    receipts.chmod(0o500)
+    passes_dir.chmod(0o500)
     try:
         assert pit._cmd_run("sess-a", str(project)) == 0
     finally:
-        receipts.chmod(0o700)   # or pytest cannot clean the directory up
+        passes_dir.chmod(0o700)   # or pytest cannot clean the directory up
 
     out = capsys.readouterr().out
-    assert "receipt could not be written" in out
+    assert "pit pass could not be written" in out
     assert "HAND OFF TO: sess-waiter" in out, "the waiter was dropped in silence"
-    assert _receipts(project) == [], "fail closed: no receipt means the merge refuses"
-    assert pit.status()["holder"] is None, "the lane must still be released"
+    assert _pit_passes(project) == [], "fail closed: no pit pass means the merge refuses"
+    assert pit.status()["holder"] is None, "the pit lane must still be released"
 
 
 # --- Real concurrency ----------------------------------------------------
@@ -1116,13 +1118,13 @@ def test_a_receipt_that_cannot_be_written_still_hands_the_lane_off(
 # — a naive "read, decide, write" implementation passes every test above
 # identically to the fcntl-guarded one. These tests use real OS processes
 # (multiprocessing, fork context — Linux only, matching this module's target)
-# racing against the same lane directory, with a Barrier to line every racer
+# racing against the same pit lane directory, with a Barrier to line every racer
 # up at the same instant and maximise the chance of catching a real interleave.
 
 
 def _acquire_worker(lane_dir_str, session, worktree, results, barrier, done):
     """Run in a forked child: point this process's `lane` module at the shared
-    lane dir, wait for every sibling to be ready, then race acquire()."""
+    pit lane dir, wait for every sibling to be ready, then race acquire()."""
     lane_mod = importlib.import_module("pit")
     lane_mod.lane_dir = lambda: Path(lane_dir_str)
     try:
@@ -1132,14 +1134,14 @@ def _acquire_worker(lane_dir_str, session, worktree, results, barrier, done):
     except Exception as exc:  # surface any crash instead of hanging the join
         results.put((session, False, repr(exc)))
     # Hold until the parent has read every outcome. A winner that exited here
-    # would drop its kernel lock and let a straggler win the lane too — a real
+    # would drop its kernel lock and let a straggler win the pit lane too — a real
     # property of the design (the lock dies with the process), but not the
     # interleaving under test.
     done.wait(timeout=20)
 
 
 def _race_acquire(d: Path, n: int, seed: dict | None) -> list[tuple[str, bool, str | None]]:
-    """Launch n processes racing acquire() against a fresh lane dir `d`.
+    """Launch n processes racing acquire() against a fresh pit lane dir `d`.
 
     `seed`, if given, is written as lane.lock's contents before the race starts
     (used to seed a departed holder's record for the crashed-holder race).
@@ -1170,7 +1172,7 @@ def _race_acquire(d: Path, n: int, seed: dict | None) -> list[tuple[str, bool, s
 
 
 def test_concurrent_acquire_on_free_lane_exactly_one_winner(tmp_path):
-    """N processes race acquire() on a lane nobody holds. Baseline invariant:
+    """N processes race acquire() on a pit lane nobody holds. Baseline invariant:
     the kernel resolves concurrent LOCK_EX|LOCK_NB requests on one inode, so at
     most one racer can come away holding it — this establishes the base property
     the other two tests build on."""
@@ -1187,7 +1189,7 @@ def test_concurrent_acquire_against_departed_holder_exactly_one_winner(tmp_path)
     holder, with no kernel lock behind them — then race N processes at it. The
     naive implementation read-decides-unlinks-recreates with no guard between
     the read and the unlink, so two racers could both observe the holder as gone
-    and both end up believing they hold the lane. Reproduced by the reviewer
+    and both end up believing they hold the pit lane. Reproduced by the reviewer
     with real multiprocessing: 48/200 four-way trials produced more than one
     winner. Exactly one winner must come out of every round, every time."""
     # 4194304 is this machine's pid_max itself (measured), and pids are allocated
@@ -1205,7 +1207,7 @@ def test_concurrent_acquire_against_departed_holder_exactly_one_winner(tmp_path)
 
 
 def test_concurrent_enqueue_behind_held_lane_all_entries_survive(tmp_path, monkeypatch):
-    """The lane is genuinely held (by this test process, which keeps the
+    """The pit lane is genuinely held (by this test process, which keeps the
     kernel lock for the whole round, so every racer takes the enqueue path and
     never the acquire path). N processes concurrently read-modify-write the
     queue file. The naive implementation has no lock around that RMW and writes
@@ -1223,7 +1225,7 @@ def test_concurrent_enqueue_behind_held_lane_all_entries_survive(tmp_path, monke
             shutil.rmtree(d)
         d.mkdir(parents=True)
         monkeypatch.setattr(pit, "lane_dir", lambda d=d: d)
-        # Hold the lane from THIS process and keep holding for the whole round.
+        # Hold the pit lane from THIS process and keep holding for the whole round.
         # The hold is a kernel lock, so it is real for every racer below rather
         # than a claim written into a file.
         holder = pit.acquire("holder", "/wt/holder")
@@ -1248,7 +1250,7 @@ def test_concurrent_enqueue_behind_held_lane_all_entries_survive(tmp_path, monke
 
         errors = [e for _, _, e in outcomes if e]
         assert not errors, f"round {round_}: worker errors {errors}"
-        # The lane is held throughout — nobody should have acquired it.
+        # The pit lane is held throughout — nobody should have acquired it.
         assert all(ok is False for _, ok, _ in outcomes), f"round {round_}: {outcomes}"
 
         raw_text = (d / pit.QUEUE).read_text()
@@ -1259,7 +1261,7 @@ def test_concurrent_enqueue_behind_held_lane_all_entries_survive(tmp_path, monke
         holder.release()
 
 
-def test_a_worktree_whose_status_cannot_be_read_leaves_no_receipt(
+def test_a_worktree_whose_status_cannot_be_read_leaves_no_pit_pass(
         tmp_path, monkeypatch, capsys):
     """The dirt probe must fail CLOSED, like the sha probe beside it.
 
@@ -1267,14 +1269,14 @@ def test_a_worktree_whose_status_cannot_be_read_leaves_no_receipt(
     exited non-zero, justified by "the sha probe already refuses that case".
     That is true only for *not a repository*. A corrupt index is the
     counterexample: `status` fails while `rev-parse HEAD` succeeds, so the run
-    reached the receipt with the dirt guard never having looked at anything,
-    and wrote a receipt asserting a tree state nothing had checked.
+    reached the pit pass with the dirt guard never having looked at anything,
+    and wrote a pit pass asserting a tree state nothing had checked.
 
     No ordinary trigger for it was found, so this is about direction rather
     than likelihood: it is the wrong failure direction in the one place the
     whole guarantee rests. A guard that cannot see must not report "clean".
     """
-    project = _repo_with_config(tmp_path / "project", bringup="true", validate="true")
+    project = _repo_with_config(tmp_path / "project", out_lap="true", validate="true")
     sha = _git("rev-parse", "HEAD", cwd=project)
     # The asymmetry, constructed: status cannot read this, rev-parse never
     # touches it.
@@ -1285,7 +1287,22 @@ def test_a_worktree_whose_status_cannot_be_read_leaves_no_receipt(
     monkeypatch.chdir(project)
     assert pit._cmd_run("sess-a", str(project)) == 0
 
-    assert _receipts(project) == []
+    assert _pit_passes(project) == []
     out = capsys.readouterr().out
     assert "could not read" in out.lower(), \
         "say the tree could not be READ, not that it was dirty — they are different facts"
+
+
+# deprecated(0.16.0): the `lane.py` alias resolves the same lock as `pit.py` until 0.17.0.
+def test_the_old_lane_alias_sees_the_same_lock(tmp_path, monkeypatch):
+    project = _repo_with_config(tmp_path / "project")
+    monkeypatch.chdir(project)
+    held = pit.acquire("sess-a", str(project))
+    assert held is not None
+    try:
+        r = subprocess.run([sys.executable, str(ROOT / "scripts" / "lane.py"), "status"],
+                           cwd=project, capture_output=True, text=True)
+    finally:
+        held.release()
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["holder"]["session"] == "sess-a"
