@@ -98,7 +98,7 @@ def test_the_lock_is_shared_while_the_checkout_and_config_are_the_callers(
     give different answers.
 
     - which lock file? the SHARED root, or two sessions each hold "the pit lane"
-      and both bring the stack up;
+      and both run the out_lap;
     - which checkout does `out_lap` run in, and whose config? the CALLER's, or
       a session validates code it is not working on and gets a plausible-looking
       result for a branch it never touched.
@@ -165,7 +165,7 @@ def test_a_worktree_of_a_submodule_still_resolves_the_projects_lane(tmp_path, mo
     superproject's git dir that the project itself never resolves to.
 
     Two sessions, one in the project and one in a worktree of its submodule,
-    would each hold "the pit lane" and both bring the stack up, with nothing
+    would each hold "the pit lane" and both run the out_lap, with nothing
     erroring. That is the whole failure this module exists to prevent, so it is
     pinned against the project path this test BUILT — never against the other
     root, which is wrong in lockstep whenever the climb stops early.
@@ -189,7 +189,7 @@ def test_a_worktree_of_a_submodule_still_resolves_the_projects_lane(tmp_path, mo
     assert pit.lane_dir() == project / ".pitcall"
     assert ".git" not in pit.lane_dir().parts, "the pit lane must never live inside a git dir"
     # The pit lane has a defensible answer here; the CHECKOUT does not. The session
-    # is working on the submodule, the bring-up belongs to the project, and
+    # is working on the submodule, the out_lap belongs to the project, and
     # picking either silently would validate a checkout nobody on this branch
     # wrote and report green on it.
     with pytest.raises(RuntimeError, match="--worktree"):
@@ -455,7 +455,7 @@ def test_reacquiring_your_own_lane_succeeds_instead_of_queueing(tmp_path, monkey
     no timeout to break that, so the pit lane wedges until a human clears it.
 
     This asserts the LIBRARY property and nothing more. Whether the *caller* may
-    then go on to run a second bring-up is a separate question, and the answer is
+    then go on to run a second out_lap is a separate question, and the answer is
     no — see `test_lane_run_refuses_a_second_out_lap_under_its_own_live_hold`.
     Asserting only the handle here is what let `_cmd_run` run one anyway.
     """
@@ -466,7 +466,7 @@ def test_reacquiring_your_own_lane_succeeds_instead_of_queueing(tmp_path, monkey
         assert again.reentrant is True
         assert pit.status()["waiting"] == [], "must not queue behind itself"
         # The re-entrant handle took no kernel lock, so it must free nothing:
-        # releasing here would drop the pit lane out from under the outer bring-up.
+        # releasing here would drop the pit lane out from under the outer out_lap.
         assert again.release() is None
         assert pit.status()["holder"]["session"] == "sess-a"
         assert pit.acquire("sess-b", "/wt/b") is None, "outer hold must survive"
@@ -504,7 +504,7 @@ def test_drop_and_next_skips_the_unreachable_entry(tmp_path, monkeypatch):
 # The original design recorded os.getpid() and reclaimed when os.kill(pid, 0)
 # failed. A session invokes Python as a SHORT-LIVED SUBPROCESS, so that pid is
 # dead the moment it is written: the next acquire() would reclaim a pit lane whose
-# bring-up is still running, and both sessions would proceed reporting success.
+# out_lap is still running, and both sessions would proceed reporting success.
 # These tests pin the replacement across real processes — nothing here
 # simulates a death by editing a pid into a file.
 
@@ -578,10 +578,10 @@ def test_lane_run_refuses_a_second_out_lap_under_its_own_live_hold(
 
     Liveness is a kernel lock, so `acquire()` can only report reentrancy while a
     LIVE process of the same session holds the pit lane. That makes this branch, by
-    construction, "a second bring-up on top of a running one" — the interleave
+    construction, "a second out_lap on top of a running one" — the interleave
     again, one level up, inside the fix for it. Reachable without any exotic
     timing: a `pit lane --session S` tool call times out at two minutes while
-    the bring-up is still going and the caller re-issues the same command,
+    the out_lap is still going and the caller re-issues the same command,
     which is the retry the reentrant branch was written to accommodate.
 
     The child here is a real second process holding under the SAME session name,
@@ -598,7 +598,7 @@ def test_lane_run_refuses_a_second_out_lap_under_its_own_live_hold(
     try:
         assert ready.get(timeout=15) is True
         assert pit._cmd_run("sess-a", str(tmp_path)) == pit.EXIT_ALREADY_RUNNING
-        assert not ran.exists(), "a second bring-up started on top of a running one"
+        assert not ran.exists(), "a second out_lap started on top of a running one"
         # Distinct from EXIT_QUEUED because the caller is NOT queued: nothing will
         # ever push it, so telling it to wait would be telling it to wait forever.
         assert pit.EXIT_ALREADY_RUNNING != pit.EXIT_QUEUED
@@ -679,7 +679,7 @@ def test_lane_run_reports_failure_but_still_releases(tmp_path, monkeypatch):
     monkeypatch.setattr(pit, "load_config",
                         lambda checkout=None: {"out_lap": "false", "validate": "true", "in_lap": None})
     assert pit._cmd_run("sess-run", str(tmp_path)) == 1
-    # A failed bring-up must not strand the pit lane — the next session still needs it.
+    # A failed out_lap must not strand the pit lane — the next session still needs it.
     assert pit.status()["holder"] is None
 
 
@@ -1016,7 +1016,7 @@ def test_a_commit_landing_during_out_lap_leaves_no_pit_pass(tmp_path, monkeypatc
     `out_lap` builds from the working tree too, so the whole run has to sit on
     one commit. Capture between the steps instead of before them and this is
     certified: the sha read would be the post-out_lap one, matching itself
-    afterwards, with `validate` having tested a bring-up made from the earlier
+    afterwards, with `validate` having tested an out_lap made from the earlier
     commit. Nothing else in the suite distinguishes the two positions, which is
     why the docstring's claim needs this test and not just the wording.
     """

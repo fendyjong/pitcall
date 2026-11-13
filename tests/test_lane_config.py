@@ -181,7 +181,7 @@ def test_load_config_outside_any_repository_raises_rather_than_searching_cwd(
     """Same loud-failure stance the pit lane takes for an unresolvable pit lane.
 
     There is no directory to fall back to: a config picked up from wherever the
-    caller happened to be standing would configure a bring-up against the wrong
+    caller happened to be standing would configure an out_lap against the wrong
     project, and look exactly like a correct one.
     """
     plain = tmp_path / "plain"
@@ -286,7 +286,7 @@ def test_every_missing_key_is_named_at_once(tmp_path, monkeypatch):
 def test_a_required_key_may_be_explicitly_empty(tmp_path, monkeypatch):
     """Presence is what is checked, never truthiness.
 
-    A project with nothing to run after bring-up writes `null` and says so; the
+    A project with nothing to run after out_lap writes `null` and says so; the
     pit lane already skips a step configured that way. Checking truthiness instead
     would make an explicit "none" indistinguishable from a key nobody wrote,
     which is the exact distinction this check exists to preserve.

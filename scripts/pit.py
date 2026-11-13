@@ -1,4 +1,4 @@
-"""Pit pit lane: one out_lap at a time, machine-wide.
+"""The pit lane: one out_lap at a time, machine-wide.
 
 Several sessions share one machine, each working in its own worktree, and only
 one local stack can exist — the containers share a project name and bind fixed
@@ -7,7 +7,7 @@ the other's stack is broken **with nothing erroring**. This module serialises
 them: one holder at a time, a queue, and a hand-off.
 
 Two roots, and they are not the same question. The exclusion only works if
-every caller resolves to the SAME lock file, so the LANE is scoped to the
+every caller resolves to the SAME lock file, so the PIT LANE is scoped to the
 project's shared git dir (`lane_config.shared_root()`) and never to the invoking
 worktree. What gets brought up and validated is the CALLER's checkout
 (`lane_config.worktree_root()`), because validation runs from a worktree and a
@@ -20,7 +20,7 @@ their divergence.
 Both follow the CALLER, because this module ships in a plugin installed outside
 the project, and both climb out of submodules, because a call made from inside
 one would otherwise resolve to the submodule's own git dir and silently yield a
-second, private lane.
+second, private pit lane.
 
 ## Liveness is a held kernel lock, never a recorded pid
 
@@ -271,7 +271,7 @@ class Held:
             # here would free a pit lane out from under a live out_lap.
             return None
         if self._released:
-            raise RuntimeError(f"lane already released by {self.session}")
+            raise RuntimeError(f"pit lane already released by {self.session}")
         with _guard(self._d):
             lock = self._d / LOCK
             record = _read(lock)
@@ -279,9 +279,9 @@ class Held:
                 # Not merely "someone else holds it" — nobody does. Falling through here
                 # would pop a queue entry on behalf of a session that never held the pit lane,
                 # double-advancing the queue past a waiter that is never woken.
-                raise RuntimeError(f"lane is not held; {self.session} cannot release it")
+                raise RuntimeError(f"pit lane is not held; {self.session} cannot release it")
             if record["session"] != self.session:
-                raise RuntimeError(f"lane held by {record['session']}, not {self.session}")
+                raise RuntimeError(f"pit lane held by {record['session']}, not {self.session}")
             # Clear the record BEFORE dropping the kernel lock, both inside the guard:
             # a stale holder displayed over an already-free lock is the one state that
             # would make status() lie.
@@ -714,7 +714,7 @@ def _cmd_run(session: str, worktree: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="pit",
-        description="Serialise stack out_laps across every worktree on this machine.",
+        description="Serialise out laps across every worktree on this machine.",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -724,7 +724,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_run.add_argument("--session", required=True, help="this session's addressable name")
     # Resolved after parsing, not as a default here: building the parser must
-    # not require a project, or `pit.py pit lane --help` outside one dies before argparse
+    # not require a project, or `pit.py lane --help` outside one dies before argparse
     # can answer.
     p_run.add_argument(
         "--worktree", default=None,

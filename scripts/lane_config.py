@@ -46,7 +46,6 @@ REQUIRED_KEYS = ("out_lap", "validate", "default_branch", "required_check")
 RENAMED_KEYS = {"bringup": "out_lap", "teardown": "in_lap"}
 
 
-
 def _git(*args: str) -> str:
     """Run git and return stripped stdout, or "" when the command failed.
 
@@ -169,7 +168,7 @@ def shared_root(start: Path | None = None) -> Path:
     The parent of the shared git dir, so a project checked out into five
     worktrees still has one pit lane. Exclusion has to be machine-wide: a
     worktree-scoped answer hands each session a pit lane of its own, and then two
-    sessions both hold "the pit lane" and both bring the stack up — the interleave
+    sessions both hold "the pit lane" and both run the out_lap — the interleave
     with no error that this module exists to prevent.
 
     Unaffected by the ambiguity `worktree_root()` refuses on: "which pit lane" has
