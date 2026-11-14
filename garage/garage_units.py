@@ -92,7 +92,9 @@ def start_commands(platform: str, uid: int, running: bool, env=None) -> list[lis
         return commands
     if platform == "darwin":
         commands = [["launchctl", "bootout", f"gui/{uid}/{LAUNCHD_LABEL}"]] if running else []
-        return commands + [["launchctl", "bootstrap", f"gui/{uid}", str(launchd_plist_path(env))]]
+        # A service `stop` disabled cannot be bootstrapped until it is enabled again.
+        return commands + [["launchctl", "enable", f"gui/{uid}/{LAUNCHD_LABEL}"],
+                           ["launchctl", "bootstrap", f"gui/{uid}", str(launchd_plist_path(env))]]
     raise _unsupported(platform)
 
 
@@ -100,7 +102,9 @@ def stop_commands(platform: str, uid: int) -> list[list[str]]:
     if platform == "linux":
         return [["systemctl", "--user", "disable", "--now", SERVICE]]
     if platform == "darwin":
-        return [["launchctl", "bootout", f"gui/{uid}/{LAUNCHD_LABEL}"]]
+        # bootout alone lasts until the next login, which loads every LaunchAgents plist again.
+        return [["launchctl", "disable", f"gui/{uid}/{LAUNCHD_LABEL}"],
+                ["launchctl", "bootout", f"gui/{uid}/{LAUNCHD_LABEL}"]]
     raise _unsupported(platform)
 
 

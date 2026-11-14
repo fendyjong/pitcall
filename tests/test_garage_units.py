@@ -73,15 +73,21 @@ def test_linux_commands():
 
 def test_macos_commands():
     plist = str(garage_units.launchd_plist_path())
+    # A disabled service cannot be bootstrapped, so start enables it first.
     assert garage_units.start_commands("darwin", 501, running=False) == [
+        ["launchctl", "enable", "gui/501/dev.pitcall.garage"],
         ["launchctl", "bootstrap", "gui/501", plist]]
     assert garage_units.start_commands("darwin", 501, running=True) == [
         ["launchctl", "bootout", "gui/501/dev.pitcall.garage"],
+        ["launchctl", "enable", "gui/501/dev.pitcall.garage"],
         ["launchctl", "bootstrap", "gui/501", plist]]
     assert garage_units.start_commands("darwin", 501, running=False, env=HOME) == [
+        ["launchctl", "enable", "gui/501/dev.pitcall.garage"],
         ["launchctl", "bootstrap", "gui/501",
          "/home/op/Library/LaunchAgents/dev.pitcall.garage.plist"]]
+    # bootout alone lasts until the next login, which loads every LaunchAgents plist again.
     assert garage_units.stop_commands("darwin", 501) == [
+        ["launchctl", "disable", "gui/501/dev.pitcall.garage"],
         ["launchctl", "bootout", "gui/501/dev.pitcall.garage"]]
     assert garage_units.status_command("darwin", 501) == [
         "launchctl", "print", "gui/501/dev.pitcall.garage"]

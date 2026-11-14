@@ -189,7 +189,11 @@ def test_start_on_macos_writes_the_plist_and_bootstraps_it(home):
     assert garage(env, "start", run=run, platform="darwin") == 0
     plist = (Path(env["HOME"]) / "Library" / "LaunchAgents" / "dev.pitcall.garage.plist").read_text()
     assert "ExitTimeOut" in plist and "garage_service.py" in plist
-    assert any(argv[:3] == ["launchctl", "bootstrap", "gui/1000"] for argv in run.calls)
+    plist_path = str(Path(env["HOME"]) / "Library" / "LaunchAgents" / "dev.pitcall.garage.plist")
+    assert [argv for argv in run.calls if argv[0] == "launchctl"] == [
+        ["launchctl", "print", "gui/1000/dev.pitcall.garage"],
+        ["launchctl", "enable", "gui/1000/dev.pitcall.garage"],
+        ["launchctl", "bootstrap", "gui/1000", plist_path]]
     assert not any(argv[0] == "loginctl" for argv in run.calls)
 
 
