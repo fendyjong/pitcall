@@ -107,3 +107,35 @@ def test_linger():
     assert garage_units.linger_enabled("Linger=yes\n") is True
     assert garage_units.linger_enabled("Linger=no\n") is False
     assert garage_units.linger_enabled("") is False
+
+
+# --- sweep (#59) -------------------------------------------------------------------------------
+
+
+def test_execstart_doubles_a_dollar_and_escapes_quotes_and_backslashes():
+    unit = garage_units.systemd_unit("/opt/a$b/python3", Path('/srv/"q"\\x/svc.py'))
+    assert 'ExecStart=/opt/a$$b/python3 "/srv/\\"q\\"\\\\x/svc.py"\n' in unit
+
+
+def test_the_unit_and_the_plist_carry_the_path_they_are_given():
+    unit = configparser.ConfigParser(interpolation=None)
+    unit.optionxform = str
+    unit.read_string(garage_units.systemd_unit("/usr/bin/python3", ENTRY, path="/opt/b:/usr/bin"))
+    assert unit["Service"]["Environment"] == "PATH=/opt/b:/usr/bin"
+    assert "Environment" not in garage_units.systemd_unit("/usr/bin/python3", ENTRY)
+    # Environment= expands specifiers (%) but no variables, so `$` stays single.
+    assert 'Environment="PATH=/opt/my tools/bin:/x%%y:/a$b"\n' in garage_units.systemd_unit(
+        "/usr/bin/python3", ENTRY, path="/opt/my tools/bin:/x%y:/a$b")
+    plist = plistlib.loads(garage_units.launchd_plist(
+        "/usr/bin/python3", ENTRY, Path("/l.log"), path="/opt/b:/usr/bin&/bin").encode())
+    assert plist["EnvironmentVariables"] == {"PATH": "/opt/b:/usr/bin&/bin"}
+    assert garage_units.launchd_plist("/p", ENTRY, Path("/l.log")).splitlines()[1] == (
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">')  # one line, as launchd reads it
+
+
+def test_stopping_an_agent_launchd_has_not_loaded_only_disables_it():
+    assert garage_units.stop_commands("darwin", 501, running=False) == [
+        ["launchctl", "disable", "gui/501/dev.pitcall.garage"]]
+    assert garage_units.stop_commands("linux", 1000, running=False) == [
+        ["systemctl", "--user", "disable", "--now", "pitcall-garage"]]

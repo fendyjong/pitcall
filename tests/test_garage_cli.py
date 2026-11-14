@@ -8,6 +8,7 @@ or the real service manager.
 import importlib.util
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -217,11 +218,14 @@ def test_a_failing_service_manager_command_is_reported(home, capsys):
 def test_stop_names_the_jobs_it_ends_and_disables_the_service(home, capsys):
     env, token = home
     write_config(env, token)
+    assert garage(env, "start") == 0
     write_busy_state(env)
+    capsys.readouterr()
     run = FakeRun(active=True)
     assert garage(env, "stop", run=run) == 0
     assert "r1: octo/app build" in capsys.readouterr().out
-    assert run.calls == [["systemctl", "--user", "disable", "--now", "pitcall-garage"]]
+    assert run.calls == [["systemctl", "--user", "is-active", "pitcall-garage"],
+                         ["systemctl", "--user", "disable", "--now", "pitcall-garage"]]
 
 
 def test_status_shows_a_running_garage_whose_code_matches(home, capsys):
@@ -324,3 +328,128 @@ def test_leave_removes_the_repo(home):
     config = write_config(env, token, repos={"octo/app": {"labels": [["self-hosted", "linux"]]}})
     assert garage(env, "leave", "--repo", "octo/app") == 0
     assert json.loads(config.read_text())["repos"] == {}
+
+
+# --- sweep (#59) -------------------------------------------------------------------------------
+
+
+def unit_text(env):
+    unit = Path(env["XDG_CONFIG_HOME"]) / "systemd" / "user" / "pitcall-garage.service"
+    return unit.read_text()
+
+
+def test_start_gives_the_service_the_path_of_the_shell_that_ran_it(home):
+    env, token = home
+    env["PATH"] = "/opt/homebrew/bin:/usr/bin:/bin"
+    write_config(env, token)
+    assert garage(env, "start") == 0
+    assert "Environment=PATH=/opt/homebrew/bin:/usr/bin:/bin\n" in unit_text(env)
+    assert garage(env, "start", platform="darwin") == 0
+    plist = Path(env["HOME"]) / "Library" / "LaunchAgents" / "dev.pitcall.garage.plist"
+    assert plistlib.loads(plist.read_bytes())["EnvironmentVariables"] == {
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin"}
+
+
+def test_stop_names_no_jobs_from_the_state_file_a_stopped_service_left(home, capsys):
+    env, token = home
+    write_config(env, token)
+    assert garage(env, "start") == 0
+    write_busy_state(env)
+    capsys.readouterr()
+    assert garage(env, "stop", run=FakeRun(active=False)) == 0
+    assert "octo/app" not in capsys.readouterr().out
+
+
+def test_stop_on_a_garage_never_started_says_so_and_succeeds(home, capsys):
+    env, token = home
+    write_config(env, token)
+    run = FakeRun(fail="disable")  # systemctl refuses to disable a unit file that does not exist
+    assert garage(env, "stop", run=run) == 0
+    assert "not installed" in capsys.readouterr().out and run.calls == []
+
+
+def test_a_second_stop_on_macos_succeeds_without_booting_out_again(home):
+    env, token = home
+    write_config(env, token)
+    assert garage(env, "start", platform="darwin") == 0
+    run = FakeRun(active=False, fail="bootout")  # launchctl refuses an agent it has not loaded
+    assert garage(env, "stop", run=run, platform="darwin") == 0
+    assert ["launchctl", "disable", "gui/1000/dev.pitcall.garage"] in run.calls
+    assert not any("bootout" in argv for argv in run.calls)
+
+
+@pytest.mark.parametrize("command", ["join", "leave"])
+def test_join_and_leave_without_gh_say_to_pass_a_repo(home, capsys, monkeypatch, command):
+    env, token = home
+    write_config(env, token)
+
+    def no_gh(cwd=None):
+        raise FileNotFoundError(2, "No such file or directory", "gh")
+
+    monkeypatch.setattr(cli.tracker, "origin_repo", no_gh)
+    assert garage(env, command) == 1
+    assert "--repo owner/name" in capsys.readouterr().err
+
+
+def test_a_start_that_fails_leaves_the_code_that_last_ran(home, capsys, monkeypatch):
+    env, token = home
+    write_config(env, token)
+    assert garage(env, "start") == 0
+    (installed(env) / "VERSION").write_text("0.16.0\n")  # stands in for the code that last ran
+    assert garage(env, "start", run=FakeRun(fail="enable")) == 1  # the service manager refuses
+    assert (installed(env) / "VERSION").read_text() == "0.16.0\n"
+    assert sorted(p.name for p in installed(env).parent.iterdir()) == ["garage"]
+
+    def disk_full(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(cli.shutil, "copytree", disk_full)
+    capsys.readouterr()
+    assert garage(env, "start") == 1  # the copy itself fails
+    assert "No space left on device" in capsys.readouterr().err
+    assert (installed(env) / "VERSION").read_text() == "0.16.0\n"
+
+
+def test_start_names_the_jobs_before_it_restarts(home, capsys):
+    env, token = home
+    write_config(env, token)
+    write_busy_state(env)
+    printed_before_restart = []
+
+    class Watching(FakeRun):
+        def __call__(self, argv, **kwargs):
+            if "restart" in argv:
+                printed_before_restart.append(capsys.readouterr().out)
+            return super().__call__(argv, **kwargs)
+
+    assert garage(env, "start", run=Watching(active=True)) == 0
+    assert "r1: octo/app build" in printed_before_restart[0]
+
+
+def test_status_ends_in_one_newline_and_the_token_is_in_no_call_output_or_unit(home, capsys):
+    env, token = home
+    write_config(env, token)
+    run, printed = FakeRun(active=True), {}
+    for command in ("start", "status", "stop"):
+        assert garage(env, command, run=run) == 0
+        printed[command] = capsys.readouterr()
+    assert printed["status"].out.endswith("\n") and not printed["status"].out.endswith("\n\n")
+    assert not any("test-token" in " ".join(argv) for argv in run.calls)
+    assert not any("test-token" in out.out + out.err for out in printed.values())
+    assert "test-token" not in unit_text(env)
+
+
+@pytest.mark.parametrize("runners", [{"r1": "x", "r2": {"state": "busy", "repo": "octo/app",
+                                                        "job": "build"}}, ["r1"]],
+                         ids=["an-entry-not-an-object", "runners-not-an-object"])
+def test_stop_reads_a_state_file_whose_runners_are_not_objects(home, capsys, runners):
+    env, token = home
+    write_config(env, token)
+    assert garage(env, "start") == 0
+    state = Path(env["XDG_STATE_HOME"]) / "pitcall" / "garage.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps({"runners": runners}))
+    capsys.readouterr()
+    assert garage(env, "stop", run=FakeRun(active=True)) == 0
+    named = isinstance(runners, dict)
+    assert ("r2: octo/app build" in capsys.readouterr().out) is named

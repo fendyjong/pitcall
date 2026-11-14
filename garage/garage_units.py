@@ -17,23 +17,36 @@ import garage_paths
 
 SERVICE = "pitcall-garage"
 LAUNCHD_LABEL = "dev.pitcall.garage"
+#: Split over two source lines only; the plist carries it as one.
+PLIST_DOCTYPE = ('<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                 '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">')
 
 
-def _systemd_arg(value: str) -> str:
-    """One ExecStart word: `%` and `$` doubled, quoted when it holds a space, quote or backslash."""
-    value = value.replace("%", "%%").replace("$", "$$")
+def _systemd_word(value: str) -> str:
+    """One unit-file word: `%` doubled, quoted when it holds a space, quote or backslash."""
+    value = value.replace("%", "%%")
     if any(ch in value for ch in ' \t"\\'):
         value = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return value
 
 
-def systemd_unit(python: str, entry: Path) -> str:
+def _systemd_arg(value: str) -> str:
+    """One ExecStart word: `$` doubled too, since ExecStart expands variables (Environment= does
+    not)."""
+    return _systemd_word(value.replace("$", "$$"))
+
+
+def systemd_unit(python: str, entry: Path, path: str | None = None) -> str:
+    """`path`: the PATH the service runs with, so the recipes find `docker` or `lxc` where the
+    shell that ran `garage start` does."""
+    environment = f"Environment={_systemd_word('PATH=' + path)}\n" if path else ""
     return (
         "[Unit]\n"
         "Description=pitcall garage\n"
         "\n"
         "[Service]\n"
         f"ExecStart={_systemd_arg(python)} {_systemd_arg(str(entry))}\n"
+        f"{environment}"
         "Restart=on-failure\n"
         "TimeoutStopSec=5min\n"
         "\n"
@@ -42,11 +55,18 @@ def systemd_unit(python: str, entry: Path) -> str:
     )
 
 
-def launchd_plist(python: str, entry: Path, log_path: Path) -> str:
+def launchd_plist(python: str, entry: Path, log_path: Path, path: str | None = None) -> str:
+    """`path`: the PATH the agent runs with; launchd's own, `/usr/bin:/bin:/usr/sbin:/sbin`, has
+    neither Docker Desktop's nor Homebrew's `docker`."""
     def text(value):
         return escape(str(value))
+    environment = ("  <key>EnvironmentVariables</key>\n"
+                   "  <dict>\n"
+                   "    <key>PATH</key>\n"
+                   f"    <string>{text(path)}</string>\n"
+                   "  </dict>\n") if path else ""
     return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+{PLIST_DOCTYPE}
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -56,7 +76,7 @@ def launchd_plist(python: str, entry: Path, log_path: Path) -> str:
     <string>{text(python)}</string>
     <string>{text(entry)}</string>
   </array>
-  <key>RunAtLoad</key>
+{environment}  <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
@@ -98,13 +118,15 @@ def start_commands(platform: str, uid: int, running: bool, env=None) -> list[lis
     raise _unsupported(platform)
 
 
-def stop_commands(platform: str, uid: int) -> list[list[str]]:
+def stop_commands(platform: str, uid: int, running: bool = True) -> list[list[str]]:
     if platform == "linux":
         return [["systemctl", "--user", "disable", "--now", SERVICE]]
     if platform == "darwin":
-        # bootout alone lasts until the next login, which loads every LaunchAgents plist again.
-        return [["launchctl", "disable", f"gui/{uid}/{LAUNCHD_LABEL}"],
-                ["launchctl", "bootout", f"gui/{uid}/{LAUNCHD_LABEL}"]]
+        # bootout alone lasts until the next login, which loads every LaunchAgents plist again;
+        # and launchctl refuses to boot out an agent it has not loaded.
+        disable = [["launchctl", "disable", f"gui/{uid}/{LAUNCHD_LABEL}"]]
+        return disable + ([["launchctl", "bootout", f"gui/{uid}/{LAUNCHD_LABEL}"]]
+                          if running else [])
     raise _unsupported(platform)
 
 
@@ -117,5 +139,5 @@ def status_command(platform: str, uid: int) -> list[str]:
 
 
 def linger_enabled(show_user_output: str) -> bool:
-    """`loginctl show-user <user> -p Linger` prints `Linger=yes` when the service outlives logout."""
+    """`loginctl show-user <user> -p Linger` says `Linger=yes` when the service outlives logout."""
     return any(line.strip() == "Linger=yes" for line in show_user_output.splitlines())

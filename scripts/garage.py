@@ -95,33 +95,54 @@ def service_running(ctx):
 def busy_jobs(ctx):
     """`  r1: owner/name job` for each runner the state file says is busy."""
     state = garage_state.read_state(garage_paths.state_file_path(ctx.env)) or {}
+    runners = state.get("runners")  # a hand-edited or foreign file can hold anything here
+    runners = runners if isinstance(runners, dict) else {}
     return [f"  {name}: {runner.get('repo')} {runner.get('job') or '(job not yet named)'}"
-            for name, runner in sorted(state.get("runners", {}).items())
-            if runner.get("state") == "busy"]
+            for name, runner in sorted(runners.items())
+            if isinstance(runner, dict) and runner.get("state") == "busy"]
 
 
 def install(ctx):
-    """Replace the installed copy with this plugin's `garage/`; returns where it went."""
+    """Put this plugin's `garage/` in the install directory; returns (target, previous).
+
+    The copy is staged beside the installed one and swapped in by renames, so a failure leaves the
+    installed code as it was. `previous` keeps the code it replaced until the start succeeds.
+    """
     target = garage_paths.install_dir(ctx.env)
-    fresh = target.with_name(target.name + ".new")
-    shutil.rmtree(fresh, ignore_errors=True)
-    shutil.copytree(GARAGE, fresh, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    (fresh / "VERSION").write_text(plugin_version() + "\n")
-    shutil.rmtree(target, ignore_errors=True)
-    fresh.rename(target)
-    return target
+    fresh, previous = (target.with_name(target.name + suffix) for suffix in (".new", ".old"))
+    for leftover in (fresh, previous):
+        shutil.rmtree(leftover, ignore_errors=True)
+    try:
+        shutil.copytree(GARAGE, fresh, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        (fresh / "VERSION").write_text(plugin_version() + "\n")
+        if target.exists():
+            target.rename(previous)
+        fresh.rename(target)
+    except OSError:
+        shutil.rmtree(fresh, ignore_errors=True)
+        put_back(target, previous)
+        raise
+    return target, previous
+
+
+def put_back(target, previous):
+    """Return the code a failed start replaced; a first install has none to return."""
+    if previous.exists():
+        shutil.rmtree(target, ignore_errors=True)
+        previous.rename(target)
 
 
 def write_unit(ctx, target):
     entry = target / "garage_service.py"
     path = unit_path(ctx)
+    search = ctx.env.get("PATH")  # the recipes find docker or lxc where this shell does
     path.parent.mkdir(parents=True, exist_ok=True)
     if ctx.platform == "linux":
-        path.write_text(garage_units.systemd_unit(sys.executable, entry))
+        path.write_text(garage_units.systemd_unit(sys.executable, entry, search))
         return
     log = garage_paths.state_home(ctx.env) / "pitcall" / "garage.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(garage_units.launchd_plist(sys.executable, entry, log))
+    path.write_text(garage_units.launchd_plist(sys.executable, entry, log, search))
 
 
 def warn_linger(ctx):
@@ -142,8 +163,15 @@ def cmd_start(ctx, cfg, config_path):
         return fail(str(exc))
     garage_id = garage_config.ensure_id(config_path)
     running = service_running(ctx)
-    target = install(ctx)
-    write_unit(ctx, target)
+    try:
+        target, previous = install(ctx)
+    except OSError as exc:
+        return fail(f"cannot install the garage's code: {exc}; the installed code is unchanged.")
+    try:
+        write_unit(ctx, target)
+    except OSError as exc:
+        put_back(target, previous)
+        return fail(f"cannot write {unit_path(ctx)}: {exc}")
     if running:
         jobs = busy_jobs(ctx)
         print("garage: restarting the running service to pick up the refreshed code"
@@ -151,7 +179,9 @@ def cmd_start(ctx, cfg, config_path):
         for line in jobs:
             print(line)
     if call_all(ctx, garage_units.start_commands(ctx.platform, ctx.uid, running, ctx.env)):
+        put_back(target, previous)
         return 1
+    shutil.rmtree(previous, ignore_errors=True)
     if ctx.platform == "linux":
         warn_linger(ctx)
     print(f"garage: started -- id {garage_id}, {cfg['runners']} runners, code in {target}.")
@@ -161,13 +191,20 @@ def cmd_start(ctx, cfg, config_path):
 def cmd_stop(ctx):
     if ctx.platform not in PLATFORMS:
         return unsupported(ctx)
-    jobs = busy_jobs(ctx)
+    if not unit_path(ctx).exists():
+        print("garage: not installed, so there is nothing to stop.")
+        return 0
+    running = service_running(ctx)
+    jobs = busy_jobs(ctx) if running else []  # a stopped service's state file is history
     if jobs:
         print("garage: stopping; these jobs end now and fail on GitHub:")
         for line in jobs:
             print(line)
-    if call_all(ctx, garage_units.stop_commands(ctx.platform, ctx.uid)):
+    if call_all(ctx, garage_units.stop_commands(ctx.platform, ctx.uid, running)):
         return 1
+    if not running:
+        print("garage: already stopped; the service is disabled, so it stays stopped.")
+        return 0
     print("garage: stopped. On its way down the service deleted unclaimed registrations "
           "and cleaned and stopped every runner, keeping their disks.")
     return 0
@@ -211,7 +248,12 @@ def cmd_status(ctx):
 
 
 def resolve_repo(args):
-    return args.repo or tracker.origin_repo()
+    if args.repo:
+        return args.repo
+    try:
+        return tracker.origin_repo()
+    except FileNotFoundError:  # no gh on this machine
+        raise tracker.TrackerError("gh: not found") from None
 
 
 def cmd_join(ctx, args, cfg, config_path):
@@ -240,12 +282,13 @@ def main(argv=None, env=None, run=subprocess.run, platform=sys.platform, uid=Non
         prog="garage", description="One pool of self-hosted runners serving every joined repo.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("start", help="install the service's code, then enable and start it")
-    sub.add_parser("stop", help="end running jobs, clean and stop every runner, disable the service")
+    sub.add_parser("stop", help="end running jobs, clean and stop every runner, "
+                                "disable the service")
     sub.add_parser("status", help="the service, the token, each runner and each repo")
     p_join = sub.add_parser("join", help="show what joining a repo means; --yes writes it")
     p_join.add_argument("--repo", help="owner/name (default: this checkout's GitHub repo)")
-    p_join.add_argument("--labels",
-                        help='label sets replacing the found ones: "self-hosted,linux;self-hosted,large"')
+    p_join.add_argument("--labels", help="label sets replacing the found ones: "
+                                         '"self-hosted,linux;self-hosted,large"')
     p_join.add_argument("--allow-public", action="store_true",
                         help="join a public repo despite the fork pull request risk")
     p_join.add_argument("--yes", action="store_true", help="write the repo into the machine config")
