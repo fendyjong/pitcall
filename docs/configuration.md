@@ -97,6 +97,7 @@ branch on it.
 | `backlog_milestone` | The milestone holding not-yet-scheduled work. | Yes for `file`. | `scripts/file.py`'s `build_command()`. | `file` refuses rather than filing into the milestone in flight. |
 | `notes_milestone` | The milestone holding **recorded decisions that are not work** — a ruling and its reasoning, kept so a later reader finds the answer rather than assuming an oversight. | Yes for `file --notes`; unused otherwise. | `scripts/file.py`'s `build_command()`. | `file --notes` refuses, naming the key. It never falls back to `backlog_milestone`: a note filed silently into the backlog is the defect the key exists to remove, and the fallback would be indistinguishable from not having the key at all. |
 | `bounded_via_wdd` | Keeps its name from before the rename; `true` reads "through race". Whether a bounded change goes through race (`true`) or is implemented directly (`false`). | No. | `skills/race/scripts/project-config` (`--flag`), `skills/brainstorming/SKILL.md` (the bounded path). | Bounded implements directly; brainstorming warns when the project's own instructions require the race. |
+| `runner` | The garage's per-repo settings: an object with two optional keys. `env` is an object of string variables set for every garage job of this repo; `setup` is a root command run once per runner, before that runner's first job for this repo, and again whenever its text changes. Only a machine running a garage this repo has joined reads it (see [`garage.md`](garage.md)). | No. | `garage/garage_config.py` (`parse_runner_section`, which checks it), `garage/garage_service.py` (fetches it from each joined repo's **default branch** through the GitHub API, never from a checkout, so a pull request cannot change a command that runs as root in a shared runner). | The repo still gets runners, with no extra variables and no setup. An `env` name that is not a plain variable name (letters, digits and `_`, not starting with a digit), or that starts with `ACTIONS_RUNNER_` or `PITCALL_`, or that is a name the recipe's host side reads (`PATH`, `HOME`, `LANG`, `LC_*`, `DOCKER_*` and the rest listed in `garage.md`), makes the repo "config invalid" in `garage status`, and it gets no runner until a fixed config reaches its default branch. |
 
 **How to recognise the right value:**
 
@@ -135,6 +136,12 @@ branch on it.
   or a reviewed plan. Found → propose `true` and quote that line as the evidence.
   Propose `false` only when the project explicitly allows small changes directly.
   Otherwise leave it unset: `false` is a decision the project makes, not a default.
+- `runner` — propose it only when the project's CI already runs on self-hosted runners (a
+  `runs-on` naming `self-hosted` under `.github/workflows/`). `setup`: the system packages those
+  jobs install for themselves today — an `apt-get install` step repeated in every self-hosted job
+  is the clearest evidence. `env`: plain, non-secret variables every such job sets in its
+  workflow's `env:`. Never a token or a password: those belong in GitHub secrets, and this file is
+  tracked. Otherwise leave it unset — a repo with no `runner` section still gets runners.
 
 ## Declared, but nothing reads them yet
 

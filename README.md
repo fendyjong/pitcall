@@ -11,6 +11,22 @@ Add this repository as a plugin source in Claude Code and enable it, or clone it
 point Claude Code's plugin loader at the checkout. See the skills under `skills/` and
 the commands under `commands/` for what each piece does once installed.
 
+### Upgrading to 0.17.0
+
+0.17.0 adds the garage (see "The garage", below) and removes everything 0.16.0 kept working for
+the old names. Before upgrading:
+
+- Every old spelling in 0.16.0's table is gone: the old skill, the old script paths and verbs, and
+  `init`, the old name of `/pitcall:setup`. Update CLAUDE.md files, memories and allow rules first.
+  Allow rules for the old paths can then be deleted.
+- A config with `bringup` or `teardown` fails until those keys are renamed `out_lap` and `in_lap`.
+- A plan with a `## Waves` table fails `qualifying` until the table is renamed `## Laps`, with
+  columns `Lap` and `Tasks`.
+- A run started before 0.16.0, meaning a ledger in `.pitcall/wdd/`, old ledger lines or a receipt
+  in `.pitcall/receipts/`, has to be finished on 0.16.0 before upgrading.
+- The `solution-ready` label no longer authorizes the green-flag path. Move those issues to
+  `green-flag`.
+
 ### Upgrading to 0.16.0
 
 0.16.0 renames pitcall's commands toward F1 words. Every old name keeps working
@@ -189,6 +205,20 @@ do-NOT-proceed outcome, which is why it is not 0.
 The backticked fragment is what makes the comparison mechanical rather than a judgement, and an
 `Expected today:` line without one reads as *no failure was ever observed* — which is a refusal, not
 a detail.
+
+## The garage
+
+On a personal GitHub account a self-hosted runner belongs to one repo, so runners divided across
+repos sit idle in one while jobs queue in another. The garage is one pool of runners on one machine
+that serves every repo that joins it: a pitcall user service (systemd on Linux, launchd on macOS)
+polls the joined repos for queued jobs and registers a one-job runner for whichever repo's turn it
+is. It is off until you start it:
+
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/garage.py start|stop|status|join|leave`
+
+[`docs/garage.md`](docs/garage.md) covers the token it needs, the machine config, the Docker and
+LXD recipes, joining a repo, what `status` shows, and the acceptance check to run on a real
+machine.
 
 ## License
 
