@@ -107,9 +107,12 @@ class Garage:
                 del self.repo_status[repo]
                 self.sections.pop(repo, None)
             for repo, entry in joined.items():
+                # Private (never in the state file): failures counts backoff rounds, cleared_by
+                # says what ends a failing status ("poll": a clean read; "job": a job that runs),
+                # probe names the one runner trying the repo again once its wait is over.
                 status = self.repo_status.setdefault(repo, {
                     "status": "ok", "reason": None, "queued": 0, "labels": [], "retry_at": None,
-                    "failures": 0})
+                    "failures": 0, "cleared_by": None, "probe": None})
                 status["labels"] = entry["labels"]
 
     def reload_config(self) -> None:
@@ -132,15 +135,17 @@ class Garage:
 
     # --- repos ----------------------------------------------------------------------------------
 
-    def _block(self, repo: str, reason: str) -> None:
+    def _back_off(self, repo: str, failing: str, reason: str, cleared_by: str) -> None:
+        """One failure per backoff round: one that lands while the repo already waits joins it."""
+        now = self.clock()
         with self._lock:
             status = self.repo_status.get(repo)
-            if status is None:
+            if status is None or (status["status"] == failing and status["retry_at"] > now):
                 return
             status["failures"] += 1
-            status.update(status="blocked", reason=reason,
-                          retry_at=self.clock() + garage_decide.backoff_seconds(status["failures"]))
-        self.log(f"{repo}: blocked — {reason}")
+            status.update(status=failing, reason=reason, cleared_by=cleared_by,
+                          retry_at=now + garage_decide.backoff_seconds(status["failures"]))
+        self.log(f"{repo}: {failing} — {reason}")
 
     def poll(self) -> dict[str, list[dict]]:
         now = self.clock()
@@ -161,7 +166,7 @@ class Garage:
                          + time.strftime("%H:%M:%S", time.localtime(exc.retry_at)))
                 break
             except garage_github.ApiError as exc:
-                self._block(repo, _reason(exc))
+                self._back_off(repo, "blocked", _reason(exc), "poll")
                 continue
             except OSError as exc:
                 self.log(f"GitHub unreachable, polling again next time: {exc}")
@@ -179,13 +184,15 @@ class Garage:
                 with self._lock:
                     if status["status"] != "config invalid":
                         self.log(f"{repo}: config invalid — {exc}")
-                    status.update(status="config invalid", reason=str(exc), queued=len(matching))
+                    status.update(status="config invalid", reason=str(exc), queued=len(matching),
+                                  cleared_by="poll")
                 continue
             self.sections[repo] = section
             with self._lock:
                 status["queued"] = len(matching)
-                if status["status"] in ("blocked", "config invalid"):
-                    status.update(status="ok", reason=None, retry_at=None, failures=0)
+                if status["cleared_by"] == "poll":
+                    status.update(status="ok", reason=None, retry_at=None, failures=0,
+                                  cleared_by=None)
             wanted[repo] = matching
         for slot in self.slots.values():
             with slot.lock:
@@ -195,18 +202,20 @@ class Garage:
 
     # --- handing out ----------------------------------------------------------------------------
 
-    def _may_serve(self, repo: str, now: float) -> bool:
-        status = self.repo_status.get(repo)
-        if status is None:
-            return False
-        if status["status"] == "ok":
-            return True
-        return status["status"] == "setup failing" and now >= status["retry_at"]
-
     def _hand_out(self, wanted: dict[str, list[dict]], now: float) -> None:
         repos = sorted(self.cfg["repos"])
+        eligible, probes = {}, set()
         with self._lock:
-            eligible = {repo: jobs for repo, jobs in wanted.items() if self._may_serve(repo, now)}
+            for repo, jobs in wanted.items():
+                status = self.repo_status.get(repo)
+                if status is None:
+                    continue
+                if status["status"] == "ok":
+                    eligible[repo] = jobs
+                elif (status["status"] in ("setup failing", "blocked") and status["probe"] is None
+                      and now >= status["retry_at"]):
+                    eligible[repo] = jobs
+                    probes.add(repo)
         pending: dict[tuple, int] = {}
         free = []
         for slot in self.slots.values():
@@ -217,6 +226,10 @@ class Garage:
                 elif slot.state in FREE and not slot.needs_cleanup:
                     free.append(slot.name)
         demand = garage_decide.demand(eligible, pending)
+        for repo in probes & demand.keys():  # its wait is over: one runner tries it again
+            first = min(demand[repo], key=lambda d: d.oldest)
+            first.count = 1
+            demand[repo] = [first]
         if not free or not repos or not any(demand.values()):
             return
         assignments, self.cursor = garage_decide.hand_out(free, demand, repos, self.cursor)
@@ -226,28 +239,30 @@ class Garage:
             slot = self.slots[runner]
             with slot.lock:
                 slot.state, slot.since, slot.repo, slot.labels = "starting", now, repo, labels
+            if repo in probes:
+                with self._lock:
+                    self.repo_status[repo]["probe"] = runner
             self.log(f"{runner}: handed to {repo} ({', '.join(labels)})")
             self._start(lambda s=slot, r=repo, l=labels, c=section: self._run(s, r, l, c))
 
     def _run(self, slot, repo, labels, section) -> None:
         outcome = self.worker.run_job(slot, repo, labels, section)  # never raises: its backstop
-        now = self.clock()
         with self._lock:
             status = self.repo_status.get(repo)
             if status is None:  # the repo left while its job ran
                 return
+            if status["probe"] == slot.name:
+                status["probe"] = None
             if outcome.kind == "setup failed":
-                status["failures"] += 1
-                status.update(status="setup failing", reason=_tail(outcome.detail),
-                              retry_at=now + garage_decide.backoff_seconds(status["failures"]))
-                self.log(f"{repo}: setup failing — {status['reason']}")
+                self._back_off(repo, "setup failing", _tail(outcome.detail), "job")
             elif outcome.kind == "api error" and isinstance(outcome.api_error,
                                                            garage_github.RateLimited):
                 self.paused_until = outcome.api_error.retry_at
             elif outcome.kind == "api error" and outcome.api_error is not None:
-                self._block(repo, _reason(outcome.api_error))
-            elif outcome.kind == "done" and status["status"] == "setup failing":
-                status.update(status="ok", reason=None, retry_at=None, failures=0)
+                self._back_off(repo, "blocked", _reason(outcome.api_error), "job")
+            elif outcome.kind == "done" and status["cleared_by"] == "job":
+                status.update(status="ok", reason=None, retry_at=None, failures=0,
+                              cleared_by=None)
 
     # --- the loop -------------------------------------------------------------------------------
 

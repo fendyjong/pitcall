@@ -304,6 +304,27 @@ def test_a_failing_setup_marks_the_repo_and_waits_out_its_backoff(world):
     assert status["retry_at"] == w.clock.t + 120
 
 
+def test_setup_failing_on_every_runner_at_once_is_one_failure_and_then_one_probe(world):
+    later = Later()
+    w = world({A: [LINUX]}, runners=3, spawn=later)
+    w.api.configs[A] = json.dumps({"runner": {"setup": "false"}})
+    w.api.jobs[A] = [job(job_id=n) for n in (1, 2, 3)]
+    w.box.fail.add(("exec setup", None))
+    w.garage.tick()
+    while later.pending:
+        later.pending.pop(0)()
+    status = w.garage.repo_status[A]
+    assert steps(w).count("exec setup") == 3
+    assert status["retry_at"] == T0 + 60  # one round of failures waits the first minute
+    w.clock.t = T0 + 60
+    w.garage.tick()
+    w.garage.tick()  # the probe is still starting: no second runner joins it
+    assert len(later.pending) == 1
+    later.pending.pop()()
+    assert steps(w).count("exec setup") == 4
+    assert status["retry_at"] == T0 + 60 + 120
+
+
 def test_a_repo_whose_env_breaks_the_rules_is_config_invalid_while_others_are_served(world):
     w = world({A: [LINUX], B: [LINUX]}, runners=2)
     w.api.configs[A] = json.dumps({"runner": {"env": {"PITCALL_TOKEN": "x"}}})
@@ -399,6 +420,29 @@ def test_github_refusing_a_registration_blocks_the_repo(world):
     w.garage.tick()
     assert w.garage.repo_status[A]["status"] == "blocked"
     assert w.garage.slots["r1"].state == "idle"
+
+
+def test_a_registration_github_keeps_refusing_waits_longer_each_round_until_a_job_runs(world):
+    w = world({A: [LINUX]}, runners=1)
+    w.api.errors[("jit_config", A)] = garage_github.ApiError(
+        403, f"/repos/{A}/actions/runners/generate-jitconfig")
+    w.api.jobs[A] = [job()]
+    status = w.garage.repo_status[A]
+    waits = []
+    for _ in range(3):
+        w.garage.tick()
+        assert status["status"] == "blocked"
+        waits.append(status["retry_at"] - w.clock.t)
+        w.clock.t = status["retry_at"] - 1
+        before = len(w.events)
+        w.garage.tick()
+        assert status["status"] == "blocked"
+        assert api_calls(w, "jit_config", A, since=before) == []
+        w.clock.t += 1
+    assert waits == [60, 120, 240]
+    del w.api.errors[("jit_config", A)]
+    w.garage.tick()  # the next probe registers, and its job runs
+    assert status["status"] == "ok" and status["failures"] == 0
 
 
 # --- reconcile -----------------------------------------------------------------------------------
