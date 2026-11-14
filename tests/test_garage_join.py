@@ -71,7 +71,10 @@ class FakeApi:
 
     def file_text(self, repo, path, ref):
         self.calls.append(("file_text", path, ref))
-        return self.workflows[path.rsplit("/", 1)[1]]
+        text = self.workflows[path.rsplit("/", 1)[1]]
+        if isinstance(text, Exception):
+            raise text
+        return text
 
 
 def write_config(tmp_path, repos=None):
@@ -113,8 +116,9 @@ def test_found_sets_are_listed_and_nothing_is_written_without_yes(tmp_path):
     api = FakeApi()
     code, text, repos = join(tmp_path, api)
     assert code == 0
-    assert "self-hosted, linux\n" in text + "\n"
-    assert "self-hosted, linux, large" in text
+    lines = text.splitlines()
+    found = lines.index("Label sets that include self-hosted in octo/app's workflows on trunk:")
+    assert lines[found + 1:found + 3] == ["  - self-hosted, linux", "  - self-hosted, linux, large"]
     assert "ubuntu-latest" not in text
     assert ".github/workflows/ci.yml:15" in text
     assert garage_join.TRUST_LINE in text
@@ -246,3 +250,13 @@ def test_leave_on_a_repo_not_joined_says_so(tmp_path):
     lines = []
     assert garage_join.run_leave("octo/app", path, out=lines.append) == 0
     assert lines == ["octo/app was not joined."]
+
+
+def test_a_workflow_file_that_is_not_utf8_is_listed_as_unreadable(tmp_path):
+    bad = garage_github.ContentError(".github/workflows/legacy.yml on trunk is not UTF-8")
+    api = FakeApi(workflows={"ci.yml": CI, "legacy.yml": bad})
+    code, text, repos = join(tmp_path, api)
+    assert code == 0 and repos == {}
+    assert "  - .github/workflows/legacy.yml: not UTF-8" in text.splitlines()
+    assert "a runner group, or a file that is not UTF-8)" in text  # the list's heading says so
+    assert "  - self-hosted, linux, large" in text.splitlines()  # the readable file still counts
