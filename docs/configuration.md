@@ -33,8 +33,6 @@ once — that's true of the four keys below that `lane_config.py`'s `REQUIRED_KE
 names. `out_lap` and `validate` may still be `null` — required means the *key* must exist, not
 that it must do anything.
 
-A config that still says `bringup` or `teardown` is read as `out_lap` or `in_lap` until 0.17.0, with a one-line warning; when both spellings are set, the new key wins. <!-- deprecated(0.16.0) -->
-
 | Key | Meaning | Required? | What reads it | If absent |
 | --- | --- | --- | --- | --- |
 | `out_lap` | Shell command line that brings the project's stack up, run before validation. | Yes — the key must exist. May be `null`. | `scripts/pit.py` (runs it), `scripts/lane_config.py` (checks the key exists). | Key missing entirely: `load_config()` raises, naming it. Key present as `null` or `""`: `pit.py` prints `[pit lane] out_lap: none configured, skipping` and moves on — this is the correct value for a project with nothing to bring up. |
