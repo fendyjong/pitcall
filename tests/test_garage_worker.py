@@ -1,0 +1,426 @@
+"""The runner worker (Task 11): one slot's lifecycle against a fake GitHub, a fake recipe and a
+fake clock. Jobs that must stay running while the test acts run on a real thread, with a fake
+process the test releases; nothing sleeps."""
+
+import json
+import sys
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "garage"))
+import garage_config  # noqa: E402
+import garage_github  # noqa: E402
+import garage_recipe  # noqa: E402
+import garage_state  # noqa: E402
+import garage_worker  # noqa: E402
+
+ID = "3f9c2a71"
+REPO = "octo/app"
+LABELS = ["Self-Hosted", "linux"]
+SECRET = "jit-secret-value"
+NOTHING = garage_config.RunnerSection()
+
+
+class Clock:
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+class FakeProc:
+    """`exec job`: returns at once, or blocks until the test (or terminate) releases it."""
+
+    def __init__(self, code=0, block=False, on_exit=None, events=None):
+        self.code, self.on_exit, self.terminated, self.events = code, on_exit, False, events
+        self.entered, self.released = threading.Event(), threading.Event()
+        if not block:
+            self.released.set()
+
+    def wait(self):
+        self.entered.set()
+        assert self.released.wait(5), "the fake job never finished"
+        if self.on_exit:
+            self.on_exit()
+        return -15 if self.terminated else self.code
+
+    def terminate(self):
+        if self.events is not None:
+            self.events.append(("terminate",))
+        self.terminated = True
+        self.released.set()
+
+    def finish(self, code=0):
+        self.code = code
+        self.released.set()
+
+
+class FakeApi:
+    def __init__(self, events):
+        self.events, self.registered, self.next_id = events, {}, 100
+        self.jit_error = None
+        self.busy_on_delete = False
+
+    def jit_config(self, repo, name, labels):
+        self.events.append(("jit_config", repo, name, list(labels)))
+        if self.jit_error:
+            raise self.jit_error
+        self.next_id += 1
+        self.registered[self.next_id] = {"id": self.next_id, "name": name, "busy": False}
+        return self.next_id, SECRET
+
+    def runner(self, repo, runner_id):
+        self.events.append(("runner", repo, runner_id))
+        found = self.registered.get(runner_id)
+        return dict(found) if found else None
+
+    def delete_runner(self, repo, runner_id):
+        self.events.append(("delete_runner", repo, runner_id))
+        found = self.registered.get(runner_id)
+        if found and self.busy_on_delete:  # a job arrives in the same moment
+            found["busy"] = True
+        if found and found["busy"]:
+            return False
+        self.registered.pop(runner_id, None)
+        return True
+
+    def consume(self):
+        """GitHub removes a JIT runner once its one job is done."""
+        self.registered.clear()
+
+
+class FakeRecipe:
+    def __init__(self, events, fail=(), proc=None):
+        self.events, self.fail, self.proc, self.hooks, self.jobs = events, set(fail), proc, {}, []
+
+    def run(self, command, runner, repo=None, args=(), extra_env=None):
+        name = " ".join((command, *args))
+        self.events.append(("recipe", name, runner, repo, dict(extra_env or {})))
+        if name in self.hooks:
+            self.hooks[name]()
+        code = 1 if name in self.fail else 0
+        return garage_recipe.Result(code, f"{name} said no\n" if code else "")
+
+    def spawn_job(self, runner, repo, variables):
+        self.events.append(("recipe", "exec job", runner, repo, dict(variables)))
+        self.jobs.append(dict(variables))
+        return self.proc
+
+
+@pytest.fixture
+def world():
+    events, logs, clock = [], [], Clock()
+    api = FakeApi(events)
+
+    def make(fail=(), proc=None):
+        recipe = FakeRecipe(events, fail, proc or FakeProc(on_exit=api.consume))
+        return garage_worker.Worker(ID, api, recipe, clock=clock, log=logs.append), recipe
+
+    return SimpleNamespace(events=events, logs=logs, clock=clock, api=api, make=make)
+
+
+def handed(slot, repo=REPO, labels=LABELS):
+    """What the service does before it starts run_job on a thread."""
+    slot.state, slot.repo, slot.labels = "starting", repo, list(labels)
+    return slot
+
+
+def steps(events):
+    return [e[1] for e in events if e[0] == "recipe"]
+
+
+def names(events):
+    return [e[1] if e[0] == "recipe" else e[0] for e in events]
+
+
+def in_thread(fn, *args):
+    box = {}
+    thread = threading.Thread(target=lambda: box.update(outcome=fn(*args)))
+    thread.start()
+    return thread, box
+
+
+def joined(thread, box):
+    thread.join(5)
+    assert not thread.is_alive(), "the worker never finished"
+    return box["outcome"]
+
+
+# --- a job, start to finish ----------------------------------------------------------------------
+
+
+def test_a_job_starts_registers_runs_and_cleans(world):
+    worker, _ = world.make()
+    slot = handed(garage_worker.Slot("r1"))
+    outcome = worker.run_job(slot, REPO, LABELS, NOTHING)
+    assert outcome.kind == "done"
+    assert steps(world.events) == ["start", "exec job", "cleanup"]
+    assert ("jit_config", REPO, f"pitcall-{ID}-r1-1", LABELS) in world.events
+    # GitHub removed the one-job runner after its job, so nothing is left to delete; a job done
+    # between two pickup checks (never seen busy) is not mistaken for a failure.
+    assert not any(e[0] == "delete_runner" for e in world.events)
+    assert slot.state == "idle" and slot.container_running
+    assert slot.repo is None and slot.registration_id is None and slot.failures == 0
+
+
+def test_the_jit_config_reaches_only_the_jobs_environment(world):
+    worker, recipe = world.make()
+    slot = handed(garage_worker.Slot("r1"))
+    worker.run_job(slot, REPO, LABELS, garage_config.RunnerSection(env={"TZ": "UTC"}))
+    assert recipe.jobs == [{"TZ": "UTC", "ACTIONS_RUNNER_INPUT_JITCONFIG": SECRET}]
+    assert not any(SECRET in line for line in world.logs)
+    assert SECRET not in json.dumps(slot.to_state())
+
+
+def test_a_running_container_is_not_started_again(world):
+    worker, _ = world.make()
+    slot = handed(garage_worker.Slot("r1"))
+    slot.container_running = True
+    worker.run_job(slot, REPO, LABELS, NOTHING)
+    assert steps(world.events) == ["exec job", "cleanup"]
+
+
+def test_registration_names_count_up_per_runner(world):
+    worker, _ = world.make()
+    slot = garage_worker.Slot("r2")
+    worker.run_job(handed(slot), REPO, LABELS, NOTHING)
+    worker.run_job(handed(slot), REPO, LABELS, NOTHING)
+    registered = [e[2] for e in world.events if e[0] == "jit_config"]
+    assert registered == [f"pitcall-{ID}-r2-1", f"pitcall-{ID}-r2-2"]
+
+
+# --- setup ---------------------------------------------------------------------------------------
+
+
+def test_setup_runs_as_the_setup_script_before_the_job(world):
+    worker, _ = world.make()
+    slot = handed(garage_worker.Slot("r1"))
+    worker.run_job(slot, REPO, LABELS, garage_config.RunnerSection(setup="apt-get install -y jq"))
+    assert steps(world.events) == ["start", "exec setup", "exec job", "cleanup"]
+    setup = next(e for e in world.events if e[0] == "recipe" and e[1] == "exec setup")
+    assert setup[3] == REPO
+    assert setup[4] == {"PITCALL_SETUP": garage_recipe.setup_script(REPO, "apt-get install -y jq")}
+
+
+def test_a_failing_setup_frees_the_runner_without_breaking_it(world):
+    worker, _ = world.make(fail={"exec setup"})
+    slot = handed(garage_worker.Slot("r1"))
+    outcome = worker.run_job(slot, REPO, LABELS, garage_config.RunnerSection(setup="false"))
+    assert outcome.kind == "setup failed"
+    assert "exec setup said no" in outcome.detail
+    assert slot.state == "idle" and slot.failures == 0 and slot.repo is None
+    assert not any(e[0] == "jit_config" for e in world.events)
+
+
+# --- recipe and container failures ---------------------------------------------------------------
+
+
+def test_a_failing_start_breaks_the_runner_and_backs_off(world):
+    worker, _ = world.make(fail={"start"})
+    slot = handed(garage_worker.Slot("r1"))
+    outcome = worker.run_job(slot, REPO, LABELS, NOTHING)
+    assert outcome.kind == "broken"
+    assert slot.state == "broken" and slot.failures == 1
+    assert slot.retry_at == world.clock.t + 60
+    assert "start exited 1" in slot.error
+    assert slot.repo is None
+    assert not any(e[0] == "jit_config" for e in world.events)
+
+
+def test_backoff_doubles_up_to_thirty_minutes(world):
+    worker, _ = world.make(fail={"start"})
+    slot = garage_worker.Slot("r1")
+    waits = []
+    for _ in range(7):
+        worker.run_job(handed(slot), REPO, LABELS, NOTHING)
+        waits.append(slot.retry_at - world.clock.t)
+    assert waits == [60, 120, 240, 480, 960, 1800, 1800]
+
+
+def test_an_api_error_on_registering_frees_the_runner(world):
+    worker, _ = world.make()
+    world.api.jit_error = garage_github.ApiError(403, f"/repos/{REPO}/actions/runners/generate-jitconfig")
+    slot = handed(garage_worker.Slot("r1"))
+    outcome = worker.run_job(slot, REPO, LABELS, NOTHING)
+    assert outcome.kind == "api error"
+    assert outcome.api_error is world.api.jit_error
+    assert slot.state == "idle" and slot.container_running
+    assert "exec job" not in steps(world.events)
+
+
+def test_a_job_that_exits_before_pickup_breaks_the_runner(world):
+    worker, _ = world.make(proc=FakeProc(code=1))  # GitHub still lists the registration
+    slot = handed(garage_worker.Slot("r1"))
+    outcome = worker.run_job(slot, REPO, LABELS, NOTHING)
+    assert outcome.kind == "broken"
+    assert "before its runner picked up a job" in slot.error
+    assert steps(world.events) == ["start", "exec job", "cleanup"]
+    assert any(e[0] == "delete_runner" for e in world.events)
+    assert world.api.registered == {}
+
+
+def test_a_runner_that_dies_mid_job_is_cleaned_and_freed_and_the_job_not_rerun(world):
+    proc = FakeProc(block=True)
+    worker, _ = world.make(proc=proc)
+    slot = handed(garage_worker.Slot("r1"))
+    thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert proc.entered.wait(5)
+    rid = slot.registration_id
+    world.api.registered[rid]["busy"] = True
+    worker.check_pickup(slot, world.clock.t, 300)
+    assert slot.state == "busy" and slot.seen_busy
+    world.api.registered[rid]["busy"] = False  # the container died: GitHub lists it, offline
+    proc.finish(137)
+    outcome = joined(thread, box)
+    assert outcome.kind == "done"
+    assert slot.state == "idle" and world.api.registered == {}
+    order = names(world.events)
+    assert order.index("cleanup") < len(order) - 1 - order[::-1].index("delete_runner")
+    assert order.count("jit_config") == 1
+
+
+def test_a_failed_cleanup_keeps_the_runner_from_jobs_until_a_retry_succeeds(world):
+    worker, recipe = world.make(fail={"cleanup"})
+    slot = handed(garage_worker.Slot("r1"))
+    outcome = worker.run_job(slot, REPO, LABELS, NOTHING)
+    assert outcome.kind == "broken"
+    assert slot.state == "broken" and slot.needs_cleanup
+    assert worker.retry(slot, world.clock.t + 59) is False
+    recipe.fail.clear()
+    world.clock.t += 60
+    del world.events[:]
+    assert worker.retry(slot, world.clock.t) is True
+    assert steps(world.events) == ["cleanup", "stop"]
+    assert slot.state == "stopped" and not slot.container_running
+    assert not slot.needs_cleanup and slot.error is None
+
+
+def test_a_retry_that_fails_backs_off_further(world):
+    worker, recipe = world.make(fail={"start"})
+    slot = handed(garage_worker.Slot("r1"))
+    worker.run_job(slot, REPO, LABELS, NOTHING)
+    recipe.fail = {"cleanup"}
+    world.clock.t += 60
+    assert worker.retry(slot, world.clock.t) is False
+    assert slot.state == "broken" and slot.failures == 2 and slot.needs_cleanup
+    assert slot.retry_at == world.clock.t + 120
+
+
+def test_a_retry_runs_once_even_when_asked_twice(world):
+    worker, recipe = world.make(fail={"start"})
+    slot = handed(garage_worker.Slot("r1"))
+    worker.run_job(slot, REPO, LABELS, NOTHING)
+    recipe.fail.clear()
+    world.clock.t += 60
+    inner = []
+    recipe.hooks["cleanup"] = lambda: inner.append(worker.retry(slot, world.clock.t))
+    assert worker.retry(slot, world.clock.t) is True
+    assert inner == [False]
+
+
+# --- the pickup deadline -------------------------------------------------------------------------
+
+
+def test_an_unpicked_registration_is_deleted_at_the_deadline_then_the_job_ends(world):
+    proc = FakeProc(block=True, events=world.events)
+    worker, _ = world.make(proc=proc)
+    slot = handed(garage_worker.Slot("r1"))
+    thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert proc.entered.wait(5)
+    assert slot.state == "waiting"
+    since = slot.since
+    worker.check_pickup(slot, since + 299, 300)
+    assert not proc.terminated and slot.state == "waiting"
+    worker.check_pickup(slot, since + 300, 300)
+    outcome = joined(thread, box)
+    assert proc.terminated and outcome.kind == "ended"
+    order = names(world.events)
+    # cleanup runs on the worker thread and can trail a late delete; terminate pins the order.
+    assert order.index("delete_runner") < order.index("terminate") < order.index("cleanup")
+    assert slot.state == "idle" and world.api.registered == {}
+    assert slot.failures == 0 and not slot.ended_by_garage
+
+
+def test_a_job_arriving_as_the_registration_is_deleted_keeps_running(world):
+    proc = FakeProc(block=True, on_exit=world.api.consume)
+    worker, _ = world.make(proc=proc)
+    slot = handed(garage_worker.Slot("r1"))
+    thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert proc.entered.wait(5)
+    world.api.busy_on_delete = True
+    worker.check_pickup(slot, slot.since + 300, 300)
+    assert slot.state == "busy" and not proc.terminated
+    proc.finish(0)
+    assert joined(thread, box).kind == "done"
+
+
+def test_a_registration_github_no_longer_lists_counts_as_picked_up(world):
+    proc = FakeProc(block=True)
+    worker, _ = world.make(proc=proc)
+    slot = handed(garage_worker.Slot("r1"))
+    thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert proc.entered.wait(5)
+    world.api.consume()
+    worker.check_pickup(slot, slot.since + 300, 300)
+    assert slot.state == "busy" and slot.seen_busy and not proc.terminated
+    proc.finish(0)
+    assert joined(thread, box).kind == "done"
+
+
+# --- idle stop and shutdown ----------------------------------------------------------------------
+
+
+def test_an_idle_container_stops_at_the_idle_timeout(world):
+    worker, _ = world.make()
+    slot = handed(garage_worker.Slot("r1"))
+    worker.run_job(slot, REPO, LABELS, NOTHING)
+    del world.events[:]
+    idle_since = slot.since
+    assert worker.stop_idle(slot, idle_since + 599, 600) is False
+    assert worker.stop_idle(slot, idle_since + 600, 600) is True
+    assert steps(world.events) == ["stop"]
+    assert slot.state == "stopped" and not slot.container_running
+
+
+def test_a_failing_stop_breaks_the_runner(world):
+    worker, _ = world.make(fail={"stop"})
+    slot = handed(garage_worker.Slot("r1"))
+    worker.run_job(slot, REPO, LABELS, NOTHING)
+    assert worker.stop_idle(slot, slot.since + 600, 600) is False
+    assert slot.state == "broken" and "stop exited 1" in slot.error
+
+
+def test_ending_a_waiting_runner_deletes_its_registration_and_ends_its_job(world):
+    proc = FakeProc(block=True)
+    worker, _ = world.make(proc=proc)
+    slot = handed(garage_worker.Slot("r1"))
+    thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert proc.entered.wait(5)
+    rid = slot.registration_id
+    worker.end(slot)
+    assert joined(thread, box).kind == "ended"
+    assert proc.terminated
+    assert ("delete_runner", REPO, rid) in world.events
+    assert world.api.registered == {}
+
+
+def test_ending_during_setup_registers_nothing(world):
+    worker, recipe = world.make()
+    slot = handed(garage_worker.Slot("r1"))
+    recipe.hooks["exec setup"] = lambda: worker.end(slot)
+    outcome = worker.run_job(slot, REPO, LABELS, garage_config.RunnerSection(setup="true"))
+    assert outcome.kind == "ended"
+    assert not any(e[0] == "jit_config" for e in world.events)
+    assert slot.state == "idle" and not slot.ended_by_garage
+
+
+def test_to_state_is_the_state_files_runner_entry(world):
+    slot = garage_worker.Slot("r2")
+    entry = slot.to_state()
+    assert set(entry) == {"state", "repo", "labels", "registration", "job", "error", "retry_at", "since"}
+    assert entry["state"] in garage_state.RUNNER_STATES
