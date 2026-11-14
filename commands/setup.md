@@ -115,8 +115,8 @@ default this command is entitled to make for it.
 # Step 6 — Propose the remaining optional and declared keys
 
 For `regenerated_paths`, `refresh_commands`, `migration_homes`, `status_labels`, `in_lap`,
-`branch_prefix`, `backlog_milestone`, `claim_expiry_hours`, `bounded_via_wdd`, and `runner`: follow each
-key's own "how to recognise the right value" guidance in
+`branch_prefix`, `backlog_milestone`, `claim_expiry_hours`, `bounded_via_wdd`, and `runner`:
+follow each key's own "how to recognise the right value" guidance in
 `${CLAUDE_PLUGIN_ROOT}/docs/configuration.md`. Propose
 with evidence exactly as in Step 4, and leave unset and record what you looked at wherever the
 project gives you nothing to stand on. (`worktree_dir` and `plan_dir` moved to Step 4 — both are
