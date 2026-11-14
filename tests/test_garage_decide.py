@@ -83,3 +83,8 @@ def test_hand_out_stops_when_runners_or_demand_run_out_and_does_not_mutate_input
 def test_backoff_doubles_from_one_minute_and_caps_at_thirty():
     assert [backoff_seconds(n) // 60 for n in range(1, 9)] == [1, 2, 4, 8, 16, 30, 30, 30]
     assert backoff_seconds(1000) == 1800
+
+
+def test_demand_drops_a_set_its_pending_runners_already_cover_or_exceed():
+    by_repo = {"octo/app": [job(1, LINUX, "t1")], "octo/site": [job(2, LINUX, "t2")]}
+    assert demand(by_repo, {("octo/app", K_LINUX): 3, ("octo/site", K_LINUX): 1}) == {}
