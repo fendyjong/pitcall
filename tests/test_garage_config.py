@@ -1,0 +1,372 @@
+"""The garage's paths, machine config and repo `runner` section (Task 2)."""
+
+import fcntl
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "garage"))
+import garage_config  # noqa: E402
+import garage_paths  # noqa: E402
+import garage_recipe  # noqa: E402
+from garage_config import ConfigError, RunnerSection  # noqa: E402
+
+HOME = {"HOME": "/home/op"}
+
+
+def machine(**over):
+    cfg = {"runners": 2, "token_file": "~/.config/pitcall/garage.token",
+           "recipe": {name: f"/r/{name}.sh" for name in garage_config.RECIPE_COMMANDS}}
+    cfg.update(over)
+    return cfg
+
+
+def write(tmp_path, cfg):
+    path = tmp_path / "garage.json"
+    path.write_text(json.dumps(cfg, indent=2) + "\n")
+    return path
+
+
+# --- paths --------------------------------------------------------------------
+
+def test_paths_default_under_home():
+    assert garage_paths.machine_config_path(HOME) == Path("/home/op/.config/pitcall/garage.json")
+    assert garage_paths.install_dir(HOME) == Path("/home/op/.local/share/pitcall/garage")
+    assert garage_paths.state_file_path(HOME) == Path("/home/op/.local/state/pitcall/garage.json")
+
+
+def test_paths_honour_xdg_variables():
+    env = {**HOME, "XDG_CONFIG_HOME": "/x/c", "XDG_DATA_HOME": "/x/d", "XDG_STATE_HOME": "/x/s"}
+    assert garage_paths.machine_config_path(env) == Path("/x/c/pitcall/garage.json")
+    assert garage_paths.install_dir(env) == Path("/x/d/pitcall/garage")
+    assert garage_paths.state_file_path(env) == Path("/x/s/pitcall/garage.json")
+
+
+def test_an_empty_or_relative_xdg_variable_means_the_default():
+    assert garage_paths.config_home({**HOME, "XDG_CONFIG_HOME": ""}) == Path("/home/op/.config")
+    assert garage_paths.data_home({**HOME, "XDG_DATA_HOME": "rel"}) == Path("/home/op/.local/share")
+
+
+def test_expand_replaces_only_a_leading_tilde():
+    assert garage_paths.expand("~/.config/pitcall/garage.token", HOME) == Path(
+        "/home/op/.config/pitcall/garage.token")
+    assert garage_paths.expand("~", HOME) == Path("/home/op")
+    assert garage_paths.expand("/abs/~/x", HOME) == Path("/abs/~/x")
+
+
+# --- machine config -----------------------------------------------------------
+
+def test_defaults_are_filled_and_written_keys_kept():
+    cfg = garage_config.parse_machine_config(json.dumps(machine(poll_seconds=30)))
+    assert cfg["idle_timeout_minutes"] == 10
+    assert cfg["pickup_deadline_minutes"] == 5
+    assert cfg["poll_seconds"] == 30
+    assert cfg["repos"] == {}
+
+
+@pytest.mark.parametrize("over, key", [
+    ({"runners": 0}, "runners"),
+    ({"runners": True}, "runners"),
+    ({"runners": "3"}, "runners"),
+    ({"recipe": {"start": "a", "stop": "b", "exec": "c"}}, "recipe.cleanup"),
+    ({"recipe": {"start": "a", "stop": "b", "exec": " ", "cleanup": "d"}}, "recipe.exec"),
+    ({"token_file": ""}, "token_file"),
+    ({"poll_seconds": 0}, "poll_seconds"),
+    ({"id": "XYZ12345"}, "id"),
+    ({"repos": {"no-slash": {"labels": [["self-hosted"]]}}}, "no-slash"),
+    ({"repos": {"octo/app": {"labels": []}}}, "repos.octo/app.labels"),
+    ({"repos": {"octo/app": {"labels": [["self-hosted", ""]]}}}, "repos.octo/app.labels"),
+])
+def test_an_invalid_machine_config_names_the_key(over, key):
+    with pytest.raises(ConfigError) as err:
+        garage_config.parse_machine_config(json.dumps(machine(**over)))
+    assert key in str(err.value)
+
+
+def test_text_that_is_not_json_is_a_config_error():
+    with pytest.raises(ConfigError, match="not valid JSON"):
+        garage_config.parse_machine_config('{"runners": 2,')
+
+
+def test_a_missing_config_says_where_to_copy_the_example_from(tmp_path):
+    with pytest.raises(ConfigError) as err:
+        garage_config.load_machine_config(tmp_path / "garage.json")
+    assert str(garage_config.EXAMPLE_PATH) in str(err.value)
+    assert "copy" in str(err.value)
+
+
+def test_the_shipped_example_parses_with_no_id_and_no_repos():
+    cfg = garage_config.load_machine_config(garage_config.EXAMPLE_PATH)
+    assert "id" not in cfg
+    assert cfg["repos"] == {}
+    assert cfg["runners"] == 3
+
+
+def test_ensure_id_writes_eight_hex_once(tmp_path):
+    path = write(tmp_path, machine(note="kept"))
+    assert garage_config.ensure_id(path, token_hex=lambda n: "3f9c2a71"[: n * 2]) == "3f9c2a71"
+    assert garage_config.ensure_id(path, token_hex=lambda n: pytest.fail("rewrote the id")) == "3f9c2a71"
+    raw = json.loads(path.read_text())
+    assert raw["id"] == "3f9c2a71"
+    assert raw["note"] == "kept"
+    assert "poll_seconds" not in raw  # defaults are never written into the operator's file
+
+
+def test_update_keeps_the_file_mode_and_refuses_an_invalid_result(tmp_path):
+    path = write(tmp_path, machine())
+    path.chmod(0o640)
+    garage_config.set_repo(path, "octo/app", [["self-hosted", "linux"]])
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    before = path.read_text()
+    with pytest.raises(ConfigError):
+        garage_config.update_machine_config(path, lambda raw: raw.__setitem__("runners", 0))
+    assert path.read_text() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["garage.json"]  # no temp file left behind
+
+
+def test_set_and_remove_repo(tmp_path):
+    path = write(tmp_path, machine())
+    garage_config.set_repo(path, "octo/site", [["self-hosted", "linux"], ["self-hosted", "large"]])
+    assert json.loads(path.read_text())["repos"] == {
+        "octo/site": {"labels": [["self-hosted", "linux"], ["self-hosted", "large"]]}}
+    assert garage_config.remove_repo(path, "octo/site") is True
+    assert garage_config.remove_repo(path, "octo/site") is False
+    assert json.loads(path.read_text())["repos"] == {}
+
+
+# --- repo runner section ------------------------------------------------------
+
+def test_no_file_and_no_section_are_an_empty_section():
+    assert garage_config.parse_runner_section(None) == RunnerSection()
+    assert garage_config.parse_runner_section('{"validate": "make test"}') == RunnerSection()
+
+
+def test_a_valid_section():
+    text = json.dumps({"runner": {"env": {"TZ": "UTC", "_X1": "y"}, "setup": "apt-get update"}})
+    assert garage_config.parse_runner_section(text) == RunnerSection(
+        env={"TZ": "UTC", "_X1": "y"}, setup="apt-get update")
+
+
+@pytest.mark.parametrize("runner, reason", [
+    ([], "runner: must be an object"),
+    ({"env": ["TZ"]}, "runner.env"),
+    ({"env": {"1X": "a"}}, "not a plain variable name"),
+    ({"env": {"MY-VAR": "a"}}, "not a plain variable name"),
+    ({"env": {"ACTIONS_RUNNER_INPUT_JITCONFIG": "a"}}, "reserved prefix"),
+    ({"env": {"PITCALL_REPO": "a"}}, "reserved prefix"),
+    ({"env": {"N": 5}}, "runner.env.N"),
+    ({"setup": ""}, "runner.setup"),
+    ({"setup": ["apt-get"]}, "runner.setup"),
+])
+def test_an_invalid_section_is_refused_with_a_reason(runner, reason):
+    with pytest.raises(ConfigError) as err:
+        garage_config.parse_runner_section(json.dumps({"runner": runner}))
+    assert reason in str(err.value)
+
+
+def test_an_env_value_never_appears_in_the_reason():
+    with pytest.raises(ConfigError) as err:
+        garage_config.parse_runner_section(json.dumps({"runner": {"env": {"9BAD": "s3cr3t-value"}}}))
+    assert "s3cr3t-value" not in str(err.value)
+
+
+def test_a_repo_config_that_is_not_json_is_refused():
+    with pytest.raises(ConfigError, match="not valid JSON"):
+        garage_config.parse_runner_section("{")
+
+
+@pytest.mark.parametrize("name", ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD",
+                                  "OLDPWD", "IFS", "ENV", "CDPATH", "LANG", "LANGUAGE", "SNAP",
+                                  "LC_ALL", "LD_PRELOAD", "DOCKER_HOST", "LXD_DIR", "LXC_CONF",
+                                  "XDG_RUNTIME_DIR", "SNAP_NAME", "PPID", "OPTIND", "SHELLOPTS",
+                                  "BASHOPTS", "BASH_ENV"])
+def test_an_env_name_the_recipe_host_side_reads_is_refused(name):
+    text = json.dumps({"runner": {"env": {name: "x"}}})
+    with pytest.raises(garage_config.ConfigError) as err:
+        garage_config.parse_runner_section(text)
+    assert name in str(err.value)
+    assert "host" in str(err.value)
+
+
+@pytest.mark.parametrize("name", ["TZ", "PATHS", "MY_PATH", "HOMEBREW_NO_ANALYTICS", "CI", "LCX",
+                                  "DOCKERFILE", "NODE_ENV"])
+def test_ordinary_env_names_still_pass(name):
+    assert garage_config.parse_runner_section(
+        json.dumps({"runner": {"env": {name: "x"}}})).env == {name: "x"}
+
+
+def test_the_host_name_lists_are_pinned():
+    assert garage_config.HOST_NAMES == frozenset({
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD", "OLDPWD", "IFS", "ENV",
+        "CDPATH", "LANG", "LANGUAGE", "SNAP", "PPID", "OPTIND", "SHELLOPTS", "BASHOPTS",
+        "BASH_ENV"})
+    assert garage_config.HOST_PREFIXES == ("LC_", "LD_", "DOCKER_", "LXD_", "LXC_", "XDG_",
+                                           "SNAP_")
+
+
+# --- sweep (#59): what the config refuses, and how it is written ------------------------------
+
+
+@pytest.mark.parametrize("repo", ["../..", "./app", "octo/..", "octo/."])
+def test_a_repo_segment_of_dots_alone_is_refused(repo):
+    cfg = machine(repos={repo: {"labels": [["self-hosted"]]}})
+    with pytest.raises(ConfigError) as err:
+        garage_config.parse_machine_config(json.dumps(cfg))
+    assert repr(repo) in str(err.value)
+
+
+def test_a_repo_name_with_dots_in_it_is_kept():
+    cfg = machine(repos={"octo/.github": {"labels": [["self-hosted"]]},
+                         "octo/app.js": {"labels": [["self-hosted"]]}})
+    assert set(garage_config.parse_machine_config(json.dumps(cfg))["repos"]) == {
+        "octo/.github", "octo/app.js"}
+
+
+def test_a_config_that_is_not_utf8_is_a_config_error(tmp_path):
+    path = tmp_path / "garage.json"
+    path.write_bytes(b'{"runners": 2, "note": "caf\xe9"}')
+    with pytest.raises(ConfigError) as err:
+        garage_config.load_machine_config(path)
+    assert str(path) in str(err.value) and "not UTF-8" in str(err.value)
+
+
+def test_a_config_that_cannot_be_read_is_a_config_error(tmp_path, monkeypatch):
+    path = write(tmp_path, machine())
+
+    def refuse(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(garage_config.Path, "read_text", refuse)
+    with pytest.raises(ConfigError) as err:
+        garage_config.load_machine_config(path)
+    assert str(path) in str(err.value) and "Permission denied" in str(err.value)
+
+
+def test_a_machine_config_nested_too_deeply_is_a_config_error():
+    with pytest.raises(ConfigError, match="nested too deeply"):
+        garage_config.parse_machine_config("[" * 100_000)
+
+
+def test_an_update_writes_through_a_symlinked_config(tmp_path):
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    target = write(dotfiles, machine())
+    link = tmp_path / "garage.json"
+    link.symlink_to(target)
+    garage_config.set_repo(link, "octo/app", [["self-hosted", "linux"]])
+    assert link.is_symlink()
+    assert json.loads(target.read_text())["repos"] == {
+        "octo/app": {"labels": [["self-hosted", "linux"]]}}
+    assert [p.name for p in dotfiles.iterdir()] == ["garage.json"]
+
+
+def test_an_update_keeps_a_concurrent_update_out_until_it_is_done(tmp_path):
+    path = write(tmp_path, machine())
+    seen = []
+
+    def mutate(raw):
+        fd = os.open(tmp_path, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            seen.append("free")
+        except BlockingIOError:
+            seen.append("held")
+        finally:
+            os.close(fd)
+
+    garage_config.update_machine_config(path, mutate)
+    assert seen == ["held"]
+
+
+def test_a_failed_replace_leaves_the_config_and_no_temp_file(tmp_path, monkeypatch):
+    path = write(tmp_path, machine())
+    before = path.read_text()
+
+    def disk_full(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(garage_config.os, "replace", disk_full)
+    with pytest.raises(OSError):
+        garage_config.set_repo(path, "octo/app", [["self-hosted"]])
+    assert path.read_text() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["garage.json"]
+
+
+@pytest.mark.parametrize("bad", ["\x00", "\ud800", "\udfff"],
+                         ids=["nul", "high-surrogate", "low-surrogate"])
+@pytest.mark.parametrize("make, key", [
+    (lambda bad: {"env": {"TZ": f"UTC{bad}rm -rf /"}}, "runner.env.TZ"),
+    (lambda bad: {"setup": f"apt-get update{bad}"}, "runner.setup"),
+    (lambda bad: {"env": {f"T{bad}Z": "UTC"}}, "not a plain variable name"),
+], ids=["env-value", "setup", "env-name"])
+def test_text_popen_cannot_pass_is_refused_naming_the_key_never_the_value(make, key, bad):
+    # json.dumps writes a lone surrogate as an escape, which json.loads reads back alone.
+    with pytest.raises(ConfigError) as err:
+        garage_config.parse_runner_section(json.dumps({"runner": make(bad)}))
+    assert key in str(err.value)
+    assert "rm -rf" not in str(err.value) and "apt-get" not in str(err.value)
+
+
+@pytest.mark.parametrize("text, reason", [
+    ("[" * 100_000, "nested too deeply"),
+    pytest.param('{"runner": {"env": {"N": ' + "1" * 5000 + "}}}", "not valid JSON",
+                 marks=pytest.mark.skipif(not hasattr(sys, "set_int_max_str_digits"),
+                                          reason="no integer-digits limit before Python 3.11")),
+], ids=["nested", "a-5000-digit-number"])
+def test_a_repo_config_json_cannot_hold_is_a_config_error(text, reason):
+    with pytest.raises(ConfigError, match=reason):
+        garage_config.parse_runner_section(text)
+
+
+# --- review #2 (#59): what the host side cannot pass to a job ---------------------------------
+
+
+@pytest.mark.parametrize("runner, key", [
+    ({"env": {"TZ": "x" * 65537}}, "runner.env.TZ"),
+    ({"env": {"TZ": "\u00e9" * 32769}}, "runner.env.TZ"),  # 32769 characters, 65538 bytes
+    ({"setup": "x" * 65537}, "runner.setup"),
+    ({"setup": "xx" + "'" * 13107}, "runner.setup"),  # quoted, each ' is five bytes: 65537
+    ({"env": {"N" * 32769: ""}}, "runner.env: the names"),
+    ({"env": {"A": "x" * 65536, "B": "x" * 65536, "C": "x" * 65536, "D": "x" * 65536}},
+     "runner: env names, values and setup"),
+    ({"env": {"A": "x" * 65536, "B": "x" * 65536, "C": "x" * 65536}, "setup": "x" * 65534},
+     "runner: env names, values and setup"),
+], ids=["value", "value-utf8", "setup", "setup-quotes", "names", "total", "total-with-setup"])
+def test_a_section_over_a_size_limit_is_refused_naming_the_key_never_the_text(runner, key):
+    with pytest.raises(ConfigError) as err:
+        garage_config.parse_runner_section(json.dumps({"runner": runner}))
+    assert key in str(err.value) and "bytes" in str(err.value)
+    assert "xxxx" not in str(err.value) and "NNNN" not in str(err.value)
+    assert "\u00e9" not in str(err.value) and "''''" not in str(err.value)
+
+
+@pytest.mark.parametrize("runner", [
+    {"env": {"TZ": "x" * 65536}},
+    {"env": {"TZ": "\u00e9" * 32768}},
+    {"setup": "x" * 65536},
+    {"setup": "x" + "'" * 13107},  # quoted: 65536 bytes
+    {"env": {"N" * 32768: ""}},
+    {"env": {"A": "x" * 65535, "B": "x" * 65535, "C": "x" * 65535, "D": "x" * 65535}},
+], ids=["value", "value-utf8", "setup", "setup-quotes", "names", "total"])
+def test_a_section_at_a_size_limit_passes(runner):
+    section = garage_config.parse_runner_section(json.dumps({"runner": runner}))
+    assert section == RunnerSection(env=runner.get("env", {}), setup=runner.get("setup"))
+
+
+def test_the_largest_section_accepted_fits_every_string_the_recipe_is_handed():
+    # Linux refuses an environment string over 131072 bytes, its NUL counted (MAX_ARG_STRLEN).
+    name = "N" * garage_config.MAX_NAMES_BYTES
+    value = "\u00e9" * (garage_config.MAX_VALUE_BYTES // 2)
+    setup = "x" + "'" * (garage_config.MAX_VALUE_BYTES // 5)  # quoted: 65536 bytes
+    section = garage_config.parse_runner_section(
+        json.dumps({"runner": {"env": {name: value}, "setup": setup}}))
+    handed = {}
+    recipe = garage_recipe.Recipe({c: "/r/x.sh" for c in garage_config.RECIPE_COMMANDS},
+                                  base_env={}, popen=lambda argv, env, **kw: handed.update(env))
+    recipe.spawn_job("r1", "octo/app", {**section.env, "ACTIONS_RUNNER_INPUT_JITCONFIG": "jit"})
+    handed["PITCALL_SETUP"] = garage_recipe.setup_script("octo/app", section.setup)
+    assert max(len(f"{k}={v}\0".encode()) for k, v in handed.items()) <= 131072

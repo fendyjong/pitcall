@@ -29,7 +29,8 @@ BASE_REF = "origin/main"
 
 # Only what an installed plugin executes. A README or a test changing does not
 # change what a user runs, and a gate that fires on those becomes noise.
-WATCHED = ("skills/", "commands/", "scripts/")
+# `garage/` counts: `garage start` copies it out and runs it as a service.
+WATCHED = ("skills/", "commands/", "scripts/", "garage/")
 
 
 def _git(root, *args):
@@ -163,6 +164,14 @@ def test_a_changed_skill_without_a_bump_fails(tmp_path):
     found = problems(root)
     assert found, "a skill changed and the version did not — the gate must fail"
     assert "0.1.0" in found[0]
+
+
+def test_a_changed_garage_file_without_a_bump_fails(tmp_path):
+    root = _repo(tmp_path)
+    _commit(root, "garage/garage_x.py", "changed\n", "touch the garage")
+    found = problems(root)
+    assert found, "the garage is code the installed plugin runs — a change needs a bump"
+    assert "garage/garage_x.py" in found[0]
 
 
 def test_the_same_change_with_a_bump_passes(tmp_path):

@@ -331,37 +331,27 @@ def test_allowlisted_rejects_substring_and_superstring_variations(project):
     assert not lane_config.allowlisted("155500011"), "substring must be rejected"
 
 
-# deprecated(0.16.0): the 0.15.0 key names are read as the new ones until 0.17.0.
-def test_an_old_key_alone_is_read_as_the_new_one(tmp_path, capsys):
-    write(tmp_path, {"bringup": "make up", "validate": "true",
+def test_the_old_out_lap_key_alone_fails_naming_out_lap(tmp_path, capsys):
+    write(tmp_path, {"bring" + "up": "make up", "validate": "true",
+                     "default_branch": "main", "required_check": "ci"})
+    with pytest.raises(RuntimeError, match="missing required key\\(s\\): out_lap"):
+        lane_config.load_config(tmp_path)
+    assert capsys.readouterr().err == ""
+
+
+def test_the_old_in_lap_key_is_not_read(tmp_path, capsys):
+    write(tmp_path, {"out_lap": None, "tear" + "down": "make down", "validate": "true",
                      "default_branch": "main", "required_check": "ci"})
     cfg = lane_config.load_config(tmp_path)
-    assert cfg["out_lap"] == "make up" and "bringup" not in cfg
-    assert capsys.readouterr().err == (
-        "pitcall: config key 'bringup' is deprecated; rename it to 'out_lap'\n")
+    assert "in_lap" not in cfg
+    assert capsys.readouterr().err == ""
 
-# deprecated(0.16.0): both spellings set -- the new key wins until 0.17.0.
-def test_both_keys_set_the_new_one_wins(tmp_path, capsys):
-    write(tmp_path, {"bringup": "old", "out_lap": "new", "validate": "true",
-                     "default_branch": "main", "required_check": "ci"})
-    cfg = lane_config.load_config(tmp_path)
-    assert cfg["out_lap"] == "new" and "bringup" not in cfg
-    assert capsys.readouterr().err == (
-        "pitcall: config key 'bringup' is deprecated and ignored, because 'out_lap' "
-        "is also set; delete it\n")
 
-# deprecated(0.16.0): an old `bringup` still satisfies the required `out_lap`.
-def test_bringup_satisfies_the_required_out_lap(tmp_path):
-    write(tmp_path, {"bringup": None, "validate": "true",
-                     "default_branch": "main", "required_check": "ci"})
-    assert lane_config.load_config(tmp_path)["out_lap"] is None
+def test_this_repositorys_own_config_spells_the_lap_keys():
+    """The config this repository's own runs read is the one 0.17.0 requires."""
+    cfg = lane_config.load_config(ROOT)
+    assert "out_lap" in cfg and "in_lap" in cfg
 
-# deprecated(0.16.0): `teardown` is read as `in_lap` until 0.17.0.
-def test_teardown_is_read_as_in_lap(tmp_path, capsys):
-    write(tmp_path, {"out_lap": None, "teardown": "make down", "validate": "true",
-                     "default_branch": "main", "required_check": "ci"})
-    assert lane_config.load_config(tmp_path)["in_lap"] == "make down"
-    assert "rename it to 'in_lap'" in capsys.readouterr().err
 
 def test_out_lap_is_required(tmp_path):
     write(tmp_path, {"validate": "true", "default_branch": "main", "required_check": "ci"})

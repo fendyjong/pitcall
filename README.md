@@ -11,6 +11,22 @@ Add this repository as a plugin source in Claude Code and enable it, or clone it
 point Claude Code's plugin loader at the checkout. See the skills under `skills/` and
 the commands under `commands/` for what each piece does once installed.
 
+### Upgrading to 0.17.0
+
+0.17.0 adds the garage (see "The garage", below) and removes everything 0.16.0 kept working for
+the old names. Before upgrading:
+
+- Every old spelling in 0.16.0's table is gone: the old skill, the old script paths and verbs, and
+  `init`, the old name of `/pitcall:setup`. Update CLAUDE.md files, memories and allow rules first.
+  Allow rules for the old paths can then be deleted.
+- A config with `bringup` or `teardown` fails until those keys are renamed `out_lap` and `in_lap`.
+- A plan with a `## Waves` table fails `qualifying` until the table is renamed `## Laps`, with
+  columns `Lap` and `Tasks`.
+- A run started before 0.16.0, meaning a ledger in `.pitcall/wdd/`, old ledger lines or a receipt
+  in `.pitcall/receipts/`, has to be finished on 0.16.0 before upgrading.
+- The `solution-ready` label no longer authorizes the green-flag path. Move those issues to
+  `green-flag`.
+
 ### Upgrading to 0.16.0
 
 0.16.0 renames pitcall's commands toward F1 words. Every old name keeps working
@@ -18,14 +34,14 @@ until 0.17.0, printing one line that names its replacement.
 
 | Old | New |
 |---|---|
-| skill `pitcall:wave-driven-development` | skill `pitcall:race` |
-| `wdd check` / `ship` / `merge` / `cleanup` | `race check` / `grid` / `finish` / `pack-down` |
+| skill wave-driven-development | skill `pitcall:race` |
+| wdd check / ship / merge / cleanup | `race check` / `grid` / `finish` / `pack-down` |
 | `plan-tasks --validate` | `qualifying` |
-| `wave-worktree`, `wdd-ledger`, `wdd-workspace` | `lap-worktree`, `race-ledger`, `race-workspace` |
-| `/pitcall:init` | `/pitcall:setup` |
-| `scripts/claim.py`, `scripts/block.py` | `scripts/enter.py`, `scripts/red_flag.py` |
-| `scripts/lane.py run` / `status` / `drop` | `scripts/pit.py lane` / `status` / `drop` |
-| `scripts/solution_ready.py`, label `solution-ready` | `scripts/green_flag.py`, label `green-flag` |
+| wave-worktree, wdd-ledger, wdd-workspace | `lap-worktree`, `race-ledger`, `race-workspace` |
+| the init command | `/pitcall:setup` |
+| scripts/claim.py, scripts/block.py | `scripts/enter.py`, `scripts/red_flag.py` |
+| scripts/lane.py run / status / drop | `scripts/pit.py lane` / `status` / `drop` |
+| scripts/solution_ready.py, label `solution-ready` | `scripts/green_flag.py`, label `green-flag` |
 | lane receipt, `.pitcall/receipts/` | pit pass, `.pitcall/pit-passes/` |
 | config `bringup` / `teardown` | config `out_lap` / `in_lap` |
 | plan table `## Waves` | plan table `## Laps` |
@@ -33,16 +49,16 @@ until 0.17.0, printing one line that names its replacement.
 What you change yourself — pitcall edits nobody's settings:
 
 - **CLAUDE.md, AGENTS.md and memories** that name old commands, paths or the skill: update them by the table. They keep working until 0.17.0.
-- **Allow rules.** A rule matching an old path or command needs a twin for the new one, or auto mode prompts for (or blocks) the new spelling: a rule for `${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd merge *` needs a `${CLAUDE_PLUGIN_ROOT}/skills/race/scripts/race finish *` twin, a rule for `${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run *` a `${CLAUDE_PLUGIN_ROOT}/scripts/pit.py lane *` twin, `claim.py` an `enter.py` twin, `block.py` a `red_flag.py` twin. Keep the old rules until 0.17.0, since old instructions still call the old paths.
+- **Allow rules.** A rule matching an old path or command needs a twin for the new one, or auto mode prompts for (or blocks) the new spelling: a rule for ${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd merge * needs a `${CLAUDE_PLUGIN_ROOT}/skills/race/scripts/race finish *` twin, a rule for ${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run * a `${CLAUDE_PLUGIN_ROOT}/scripts/pit.py lane *` twin, claim.py an `enter.py` twin, block.py a `red_flag.py` twin. Keep the old rules until 0.17.0, since old instructions still call the old paths.
 - **Config:** rename `bringup` to `out_lap` and `teardown` to `in_lap`, or run `/pitcall:setup --force`.
 - **Repos that use the `solution-ready` label:** create `green-flag` and move the labelled issues across. The old label works until 0.17.0.
-- **Plans** with a `## Waves` table and **runs in flight** keep working. One case does not: a session still on 0.15.0 cannot see a pit pass written by 0.16.0, so its `wdd merge` refuses, which is safe. Finish a run on the version it started on, or re-run the pit lane on the new one.
+- **Plans** with a `## Waves` table and **runs in flight** keep working. One case does not: a session still on 0.15.0 cannot see a pit pass written by 0.16.0, so its wdd merge refuses, which is safe. Finish a run on the version it started on, or re-run the pit lane on the new one.
 - **0.17.0 removes** every alias, the old config keys, `## Waves`, the old ledger lines, the `.pitcall/receipts/` and `.pitcall/wdd/` fallbacks and the old label.
 
 ### Upgrading to 0.10.0
 
 WDD runs the validation lane itself. Through 0.9.0 the skill named the lane run as
-the human's, and listed no step for it in Phase 3 — so `wdd merge`, which refuses
+the human's, and listed no step for it in Phase 3 — so wdd merge, which refuses
 without a receipt, could never reach one on its own. The spec is now the only human
 gate: from an approved spec the skill plans, executes, runs `lane run`, and merges.
 
@@ -189,6 +205,20 @@ do-NOT-proceed outcome, which is why it is not 0.
 The backticked fragment is what makes the comparison mechanical rather than a judgement, and an
 `Expected today:` line without one reads as *no failure was ever observed* — which is a refusal, not
 a detail.
+
+## The garage
+
+On a personal GitHub account a self-hosted runner belongs to one repo, so runners divided across
+repos sit idle in one while jobs queue in another. The garage is one pool of runners on one machine
+that serves every repo that joins it: a pitcall user service (systemd on Linux, launchd on macOS)
+polls the joined repos for queued jobs and registers a one-job runner for whichever repo's turn it
+is. It is off until you start it:
+
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/garage.py start|stop|status|join|leave`
+
+[`docs/garage.md`](docs/garage.md) covers the token it needs, the machine config, the Docker and
+LXD recipes, joining a repo, what `status` shows, and the acceptance check to run on a real
+machine.
 
 ## License
 

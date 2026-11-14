@@ -290,11 +290,6 @@ failures** — never write them:
    | 2 | 2, 3, 5 | all depend on 1; disjoint from each other |
    ```
 
-   <!-- deprecated(0.16.0) -->
-   A plan with a `## Waves` table still qualifies, with one notice; a plan
-   with both tables is refused. In such a plan the sweep adds its rows to that
-   existing `## Waves` table and never adds a `## Laps` table.
-
 5. **Assign every task's `Model:` tier here, in Phase 1 — not at dispatch.**
    This is the same reasoning as migration numbers in step 3: a decision
    deferred to dispatch is a decision skipped. A lap is dispatched in a single
@@ -1018,13 +1013,6 @@ fresh start over a run that is in fact resumable. Enumerate roots with `git work
 lap: exactly one, resume it; none, nothing to resume; more than one, stop and ask which, because
 guessing picks somebody's other run.
 
-<!-- deprecated(0.16.0) -->
-The scan for ledgers globs `<root>/.pitcall/race/*/progress.md` and then
-`<root>/.pitcall/wdd/*/progress.md`; a run found in the old directory carries on there, and a
-ledger never moves mid-run. A ledger begun on 0.15.0 has `Wave <N>:` lines and a
-`Sweep plan: waves …` line: read them exactly as `Lap <N>:` and `Sweep plan: laps …`; write only
-the new forms, even into an old ledger. Read a `## Waves` table wherever this skill says `## Laps`.
-
 **1. Find the open lap** — a `Lap N: dispatched` with no matching `Lap N: integrated`.
 
 - **Found one** → this lap was interrupted; resume it, starting at step 2 below.
@@ -1304,10 +1292,6 @@ was given at. `<K>` is one more than the amendments already on the spec, from an
 the amendment as its own comment headed `# Spec amendment <K>: <issue title>`, with no version,
 and write the ledger line without `(v<N>)`.
 
-<!-- deprecated(0.16.0) -->
-An issue still labelled `solution-ready` is treated exactly as `green-flag` until 0.17.0, and is
-never relabelled.
-
 `must-fix` items are not listed — fixing a defect the branch caused does not change what the spec
 asked for. Each amendment line is also a `Ruling:` line, so it reaches your human partner in
 Phase 3. Append `Amendment <K>: written (v<N>)` once the PATCH succeeds.
@@ -1542,9 +1526,6 @@ which catches a pit pass copied or symlinked onto another commit's name. That
 check is **one-directional**: it can turn a pass into a refusal, never a
 refusal into a pass, so existence remains the only thing that permits
 anything.
-
-<!-- deprecated(0.16.0) -->
-`race finish` also accepts a receipt `.pitcall/receipts/<sha>.json` filed by 0.15.0's lane.
 
 Pinning to the sha rather than to the branch is the whole point. A pit pass for
 `branch@<a>` says nothing about `branch@<b>`, so **a review fix pushed after the

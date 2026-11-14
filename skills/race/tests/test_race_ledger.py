@@ -170,18 +170,16 @@ def test_a_malformed_second_sweep_plan_still_counts_as_a_second(tmp_path):
     assert "one sweep pass" in r.stderr
 
 
-# deprecated(0.16.0): a ledger begun on 0.15.0 keeps its `Wave <N>:` lines; read until 0.17.0.
-def test_old_lap_lines_are_read_as_laps(tmp_path):
-    p = ledger(tmp_path, "Wave 1: dispatched (BASE a1b2c3d)", "Wave 1: integrated (merge 9f2c1ab)",
-               "Sweep plan: waves 2-2", "Lap 2: dispatched (BASE 9f2c1ab)")
+def test_a_line_in_the_old_spelling_is_not_a_lap(tmp_path):
+    p = ledger(tmp_path, "Sweep plan: laps 2-2", "Wa" + "ve 3: dispatched (BASE 9f2c1ab)")
     assert ledger_cmd(tmp_path, "sweep-guard", str(p)).returncode == 0
 
 
-# deprecated(0.16.0): a lap dispatched after an old-spelled sweep range is still caught.
-def test_an_old_sweep_range_still_guards(tmp_path):
-    p = ledger(tmp_path, "Sweep plan: waves 2-2", "Wave 3: dispatched (BASE 9f2c1ab)")
+def test_a_sweep_plan_in_the_old_spelling_does_not_parse(tmp_path):
+    p = ledger(tmp_path, "Sweep plan: " + "wa" + "ves 2-2")
     r = ledger_cmd(tmp_path, "sweep-guard", str(p))
-    assert r.returncode == 1 and "lap 3 was dispatched after the sweep range 2-2" in r.stderr
+    assert r.returncode == 1
+    assert "does not parse as 'Sweep plan: laps <A>-<B>'" in r.stderr
 
 
 def test_a_lap_after_the_sweep_range_is_caught(tmp_path):

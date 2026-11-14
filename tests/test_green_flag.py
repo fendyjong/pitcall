@@ -333,15 +333,19 @@ def test_an_outsiders_labelled_issue_never_runs_the_check(monkeypatch):
     assert OUTSIDER in str(exc.value)
 
 
-# deprecated(0.16.0): the old label still authorizes, with one notice, until 0.17.0.
-def test_the_old_label_proceeds_with_one_notice(monkeypatch, capsys):
+def test_an_issue_with_only_the_renamed_label_is_refused(monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(green_flag.tracker, "run", _fake_tracker_run(calls, labels=["solution-ready"]))
-    monkeypatch.setattr(green_flag, "run_check", lambda command: (1, "E   AssertionError: 4 != 5"))
-    assert green_flag.main(["7"]) == 0
-    out, err = capsys.readouterr()
-    assert "green-flag: proceed" in out
-    assert err == "pitcall: label 'solution-ready' is deprecated and goes in 0.17.0; use 'green-flag'\n"
+    old = "solution" + "-ready"
+    monkeypatch.setattr(green_flag.tracker, "run", _fake_tracker_run(calls, labels=[old]))
+
+    def never(command, cwd=None):
+        raise AssertionError("the check must not run for an issue the label does not authorize")
+
+    monkeypatch.setattr(green_flag, "run_check", never)
+    assert not green_flag.authorized_by_label([old])
+    with pytest.raises(green_flag.tracker.TrackerError, match="not labelled green-flag"):
+        green_flag.main(["7"])
+    assert capsys.readouterr().err == ""
 
 
 def test_the_new_label_proceeds_with_no_notice(monkeypatch, capsys):

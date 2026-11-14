@@ -45,10 +45,6 @@ override it:
   pitcall:race. The issue body is the spec; no spec comment
   is written.
 
-  <!-- deprecated(0.16.0) -->
-  An issue still labelled `solution-ready` is honoured as `green-flag` until 0.17.0,
-  with a one-line notice on stderr; nothing relabels it.
-
 - **Spike** — a feasibility question ("can we...", "is it possible...",
   "quick and dirty is fine") whose output is an answer, not code you
   keep. Present the question and what you'll try in 2-3 sentences, get
