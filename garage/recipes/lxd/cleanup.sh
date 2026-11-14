@@ -3,6 +3,7 @@
 # missing container. A stopped one is started first (start.sh is idempotent), so that what a job
 # left in it, and in its Docker, can be removed.
 set -eu
+export LC_ALL=C  # lxc's output untranslated: the scripts compare it as text
 : "${PITCALL_RUNNER:?PITCALL_RUNNER is not set}"
 name="pitcall-garage-$PITCALL_RUNNER"
 here=$(cd "$(dirname "$0")" && pwd)

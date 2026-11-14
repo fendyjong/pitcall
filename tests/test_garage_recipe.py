@@ -7,6 +7,7 @@ what they were given.
 
 import hashlib
 import os
+import signal
 import stat
 import subprocess
 import sys
@@ -24,24 +25,35 @@ SECRET = "jit-secret-value"
 JIT = "ACTIONS_RUNNER_INPUT_JITCONFIG"
 
 
-def recorder(code=0, output=b""):
-    """A fake Popen class and the list of every process it 'started'."""
+def recorder(code=0, output=b"", timeouts=0):
+    """A fake Popen class and the list of every process it 'started'.
+
+    Its first `timeouts` calls to communicate() run out of time, as a hung command's would.
+    """
     made = []
 
     class FakePopen:
+        pid = 4242
+
         def __init__(self, argv, env=None, **kwargs):
             self.argv, self.env, self.kwargs, self.returncode = argv, env, kwargs, code
+            self.waits, self.timeouts = [], timeouts
             made.append(self)
 
-        def communicate(self, *args, **kwargs):
+        def communicate(self, *args, timeout=None, **kwargs):
+            self.waits.append(timeout)
+            if self.timeouts:
+                self.timeouts -= 1
+                raise subprocess.TimeoutExpired(self.argv, timeout, output=output)
             return output, None
 
     return FakePopen, made
 
 
-def recipe(popen, base_env=None):
+def recipe(popen, base_env=None, **kwargs):
     commands = {c: f"/r/{c}.sh" for c in COMMANDS}
-    return garage_recipe.Recipe(commands, base_env=base_env or {"HOME": "/home/op"}, popen=popen)
+    return garage_recipe.Recipe(commands, base_env=base_env or {"HOME": "/home/op"}, popen=popen,
+                                **kwargs)
 
 
 # --- the runner, against a fake Popen ------------------------------------------------------------
@@ -84,6 +96,32 @@ def test_the_result_carries_the_exit_status_and_the_end_of_the_output():
     assert result.output.endswith("tail")
 
 
+def test_a_command_gets_an_hour_by_default():
+    popen, made = recorder()
+    recipe(popen).run("start", "r1")
+    assert made[0].waits == [garage_recipe.TIMEOUT_SECONDS] == [3600]
+
+
+def test_a_command_that_runs_too_long_is_killed_with_its_whole_group():
+    killed = []
+    popen, made = recorder(output=b"x" * 5000, timeouts=1)
+    result = recipe(popen, killpg=lambda pid, sig: killed.append((pid, sig))).run(
+        "start", "r1", timeout=5)
+    assert made[0].kwargs.get("start_new_session") is True
+    assert killed == [(4242, signal.SIGKILL)]
+    assert result.returncode == 124
+    assert len(result.output) == 4000
+    assert result.output.endswith("x\n[garage: timed out after 5 s]")
+
+
+def test_a_killed_command_whose_output_stays_open_still_returns():
+    popen, made = recorder(output=b"partial", timeouts=2)
+    result = recipe(popen, killpg=lambda pid, sig: None).run("start", "r1", timeout=5)
+    assert result.returncode == 124
+    assert result.output == "partial\n[garage: timed out after 5 s]"
+    assert len(made[0].waits) == 2 and made[0].waits[1] is not None
+
+
 def test_a_job_carries_its_variables_in_the_environment_and_never_in_argv():
     popen, made = recorder()
     recipe(popen).spawn_job("r1", "octo/app", {JIT: SECRET, "TZ": "UTC"})
@@ -102,6 +140,12 @@ def test_a_job_writes_to_the_services_own_output_not_a_pipe():
     recipe(popen).spawn_job("r1", "octo/app", {})
     assert made[0].kwargs.get("stdout") is None
     assert made[0].kwargs.get("stderr") is None
+
+
+def test_a_job_runs_in_its_own_session_so_it_can_be_ended_with_its_group():
+    popen, made = recorder()
+    recipe(popen).spawn_job("r1", "octo/app", {})
+    assert made[0].kwargs.get("start_new_session") is True
 
 
 # --- the runner, against tiny real scripts --------------------------------------------------------
@@ -222,8 +266,13 @@ printf '%s\\n' "$@" >> "$FAKE_LOG"
 printf -- '--\\n' >> "$FAKE_LOG"
 printf '%s\\n' "${ACTIONS_RUNNER_INPUT_JITCONFIG:-}" >> "$FAKE_ENV"
 case "$*" in
-  "container inspect"*|"info "*) exit "${FAKE_MISSING:-0}" ;;
-  *"id -u runner"|*"id -g runner") echo 1001; exit 0 ;;
+  "container inspect"*) exit "${FAKE_MISSING:-0}" ;;
+  "info "*)
+    # A real lxc translates its output unless the locale is C.
+    if [ "${LC_ALL:-}" = C ]; then label="Status:"; else label="Statut :"; fi
+    [ -z "${FAKE_STATUS:-}" ] || echo "$label $FAKE_STATUS"
+    exit "${FAKE_MISSING:-0}" ;;
+  "stop --timeout"*) exit "${FAKE_STOP_FAILS:-0}" ;;
 esac
 cat >> "$FAKE_STDIN"
 """
@@ -247,6 +296,10 @@ def run_recipe(kind, command, args, env):
 
 def logged_argv(tmp_path):
     return (tmp_path / "argv").read_text().splitlines()
+
+
+def recorded_calls(tmp_path):
+    return [c for c in (tmp_path / "argv").read_text().split("--\n") if c]
 
 
 def test_the_docker_job_names_its_variables_and_never_their_values(tmp_path):
@@ -281,7 +334,8 @@ def test_the_lxd_job_sends_its_variables_on_stdin(tmp_path):
     assert result.returncode == 0, result.stderr
     argv = "\n".join(logged_argv(tmp_path))
     assert SECRET not in argv and "it's UTC" not in argv
-    assert "--user\n1001" in argv
+    # As root, then runuser: it gives `runner` its groups, `docker` among them; --user would not.
+    assert "--\nrunuser\n-u\nrunner\n--\nsh\n-s" in argv and "--user" not in argv
     lines = (tmp_path / "stdin").read_text().splitlines()
     assert lines[-1] == "exec ./run.sh"
     exports = tmp_path / "exports.sh"
@@ -305,10 +359,42 @@ def test_cleanup_and_stop_succeed_on_a_missing_container_and_only_look(tmp_path,
     for command in ("cleanup", "stop"):
         result = run_recipe(kind, command, [], env)
         assert result.returncode == 0, (command, result.stderr)
-    calls = [c for c in (tmp_path / "argv").read_text().split("--\n") if c]
+    calls = recorded_calls(tmp_path)
     assert calls and all(c.startswith(("container\ninspect\n", "info\n")) for c in calls)
+
+
+def test_the_lxd_start_leaves_a_running_container_running(tmp_path):
+    env = fake_tools(tmp_path, FAKE_STATUS="RUNNING", LC_ALL="xx_XX.UTF-8")
+    result = run_recipe("lxd", "start", [], env)
+    assert result.returncode == 0, result.stderr
+    assert "start\npitcall-garage-r1\n" not in recorded_calls(tmp_path)
+
+
+def test_the_lxd_stop_forces_a_container_that_does_not_stop_in_time(tmp_path):
+    env = fake_tools(tmp_path, FAKE_STATUS="RUNNING", FAKE_STOP_FAILS="1", LC_ALL="xx_XX.UTF-8")
+    result = run_recipe("lxd", "stop", [], env)
+    assert result.returncode == 0, result.stderr
+    assert recorded_calls(tmp_path)[-2:] == ["stop\n--timeout\n30\npitcall-garage-r1\n",
+                                             "stop\n--force\npitcall-garage-r1\n"]
 
 
 @pytest.mark.parametrize("kind", ["docker", "lxd"])
 def test_exec_refuses_an_unknown_mode(tmp_path, kind):
     assert run_recipe(kind, "exec", ["dance"], fake_tools(tmp_path)).returncode == 2
+
+
+def heredoc(script):
+    """The body of the one `<<'EOF'` script a recipe file runs inside its container."""
+    text = script.read_text()
+    assert text.count("<<'EOF'\n") == 1, script
+    start = text.index("<<'EOF'\n") + len("<<'EOF'\n")
+    return text[start:text.index("\nEOF\n", start) + 1]
+
+
+@pytest.mark.parametrize("command", ["start", "cleanup"])
+def test_both_recipes_run_the_same_script_inside_their_container(command):
+    # Each recipe directory is copied and edited on its own, so the copies stay; this keeps a fix
+    # to one from missing the other.
+    docker, lxd = (RECIPES / kind / f"{command}.sh" for kind in ("docker", "lxd"))
+    assert heredoc(docker) == heredoc(lxd), (
+        f"{docker.relative_to(ROOT)} and {lxd.relative_to(ROOT)} differ inside their <<'EOF' script")

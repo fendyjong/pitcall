@@ -2,6 +2,7 @@
 # LXD recipe, start: make this runner's container exist and run, unprivileged, on its own network,
 # with its own Docker and the GitHub Actions runner installed. Exits 0 once `lxc exec` works.
 set -eu
+export LC_ALL=C  # lxc's output untranslated: the scripts compare it as text
 : "${PITCALL_RUNNER:?PITCALL_RUNNER is not set}"
 name="pitcall-garage-$PITCALL_RUNNER"
 net="pitcall-$PITCALL_RUNNER"  # a network's bridge name is limited to 15 characters
