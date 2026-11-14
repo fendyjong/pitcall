@@ -76,7 +76,8 @@ The garage refuses a token file that is not owned by you, or that your group or 
 permission on, and says `chmod 600 <file>`. It sends the token only in the `Authorization` header
 to `api.github.com`: never on a command line, in a log, or in the state file. `garage status` warns
 from 7 days before the token expires, from the `GitHub-Authentication-Token-Expiration` header
-GitHub returns.
+GitHub returns. To renew it, create a new token, put it in the token file the same way, then run
+`garage start`: the service reads the token only when it starts.
 
 ## 2. Write the machine config
 
@@ -115,7 +116,8 @@ every `garage` command except `status` prints its full path when the config is m
 The service re-reads this file when it changes, so joining needs no restart. A change it cannot
 read, such as a typo in the JSON, is not applied: the service carries on with the last config it
 read, and `garage status` shows the error. `repos` and the three timing keys apply at once; a change
-to `runners`, `recipe` or `token_file` applies at the next `garage start`.
+to `runners`, `recipe` or `token_file`, or a new token in the token file, applies at the next
+`garage start`.
 
 `garage start` installs the service's code to `~/.local/share/pitcall/garage/` (honouring
 `$XDG_DATA_HOME`), and the service writes its state to `~/.local/state/pitcall/garage.json`
@@ -178,6 +180,10 @@ containers are unprivileged; it starts the Actions runner as the container's `ru
   `ExitTimeOut` 300), then runs `launchctl enable` and `launchctl bootstrap gui/<uid>`. The
   `enable` undoes the `disable` that `stop` leaves, so a stopped garage stays stopped across
   logins and a started one starts again;
+- writes the `PATH` of the shell you run it in into the unit (`Environment=PATH=…`) or the plist
+  (`EnvironmentVariables`), so the recipes find `docker` or `lxc` where that shell does. launchd's
+  own `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin`, which has neither Docker Desktop's nor Homebrew's
+  `docker`. Run `garage start` again after you move a tool the recipe calls;
 - on a garage that is already running, restarts it to pick up the refreshed code. That ends the
   jobs in progress, as `stop` does, so `start` names them first.
 
@@ -201,7 +207,8 @@ Run `garage join` in a repo's checkout, for the repo `gh repo view` names there,
    read", naming the missing permission when GitHub's answer does.
 4. **Labels.** It reads the workflow files on the default branch and lists every `runs-on` label
    set that includes `self-hosted`, in the scalar, inline-list and block-list forms. A `runs-on`
-   it cannot read, such as an expression or a runner group, is listed as unreadable.
+   it cannot read, such as an expression or a runner group, is listed as unreadable, and so is a
+   workflow file that is not UTF-8.
    `--labels "self-hosted,linux;self-hosted,large"` replaces the sets it found. Your confirmation is
    the real check, and only matching jobs are served, so existing workflows need no edits.
 5. It prints one line about trust: "A joined repo is trusted like your own code: its jobs share
@@ -272,7 +279,7 @@ too short for several runners, and what they cut short would be left running, pe
 | Dies mid-job | The runner or its container dies before the job finishes: it is cleaned, its registration deleted, and it is free. The job is never re-run; that is a person's decision, made on GitHub. |
 | Recipe or container failure | A non-zero exit from `start` or `cleanup`, or a runner exiting before it picked up a job, marks that runner broken in `status`, with the error, and it is retried after 1, 2, 4 … minutes, at most 30. The other runners carry on. A runner whose `cleanup` failed gets no new job until a retried `cleanup` succeeds, so no job ever starts in a dirty runner. |
 | Setup failing | `status` shows "setup failing" with the end of its output. That repo's jobs stay queued, the runner is freed (it is not broken), and setup is retried with the same backoff. |
-| Config invalid | A repo whose `env` breaks the rules shows "config invalid" with the reason. It gets no runner, so its jobs stay queued, until a fixed `.pitcall/config.json` reaches its default branch. The other repos carry on. |
+| Config invalid | A repo whose `.pitcall/config.json` cannot be used shows "config invalid" with the reason: a file that is not UTF-8, is not valid JSON or is nested too deeply, or a `runner` section that breaks the rules (a NUL or a lone surrogate in a value among them). It gets no runner, so its jobs stay queued, until a fixed `.pitcall/config.json` reaches its default branch. The other repos carry on. |
 | Token or repo access | A 401, 403 or 404 for a repo marks it blocked, with the reason; the others carry on, and the repo is checked again with backoff. A missing `.pitcall/config.json` is not an access problem, just a repo with no `runner` section. |
 | GitHub errors and rate limits | The service backs off on a 5xx. On a primary rate limit it waits until the `x-ratelimit-reset` time; on a secondary one it honours `retry-after`. |
 | Crash or reboot | The service manager restarts the service, which recovers before it polls: it runs `cleanup` on every runner, then deletes every registration in the joined repos whose name starts with `pitcall-<id>-`, since no runner is live right after a start. Cleaning first ends any job the crash orphaned before its registration goes. |
