@@ -12,6 +12,7 @@ default branch (decision 16). Error messages never quote an `env` value.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -31,7 +32,8 @@ DEFAULTS = {"idle_timeout_minutes": 10, "poll_seconds": 15, "pickup_deadline_min
 RECIPE_COMMANDS = ("start", "stop", "exec", "cleanup")
 EXAMPLE_PATH = Path(__file__).resolve().parent / "garage.example.json"
 
-REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+#: `owner/name`; a segment of dots alone (`..`, `.`) would walk the API path, so it is refused.
+REPO_RE = re.compile(r"(?!\.+/)[A-Za-z0-9_.-]+/(?!\.+\Z)[A-Za-z0-9_.-]+\Z")
 ID_RE = re.compile(r"[0-9a-f]{8}\Z")
 ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 RESERVED_PREFIXES = ("ACTIONS_RUNNER_", "PITCALL_")
@@ -41,6 +43,9 @@ RESERVED_PREFIXES = ("ACTIONS_RUNNER_", "PITCALL_")
 HOST_NAMES = frozenset({"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD", "OLDPWD",
                         "IFS", "ENV", "CDPATH", "LANG", "LANGUAGE", "SNAP"})
 HOST_PREFIXES = ("LC_", "LD_", "DOCKER_", "LXD_", "LXC_", "XDG_", "SNAP_")
+#: What no process environment or command line can carry, so Popen refuses it: a NUL, or a lone
+#: surrogate (JSON's "\ud800" reads back as one).
+UNPASSABLE = re.compile("[\x00\ud800-\udfff]")
 
 
 def _positive_int(value) -> bool:
@@ -56,7 +61,9 @@ def _label_sets_ok(sets) -> bool:
 def parse_machine_config(text: str) -> dict:
     try:
         raw = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except RecursionError:
+        raise ConfigError("the garage config is nested too deeply to read") from None
+    except ValueError as exc:  # JSONDecodeError, and the integer-digits limit
         raise ConfigError(f"the garage config is not valid JSON: {exc}") from None
     if not isinstance(raw, dict):
         raise ConfigError("the garage config must be a JSON object")
@@ -91,26 +98,40 @@ def load_machine_config(path: Path) -> dict:
     path = Path(path)
     if not path.is_file():
         raise ConfigError(f"no garage config at {path}: copy {EXAMPLE_PATH} to {path} and edit it")
-    return parse_machine_config(path.read_text(encoding="utf-8"))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise ConfigError(f"the garage config at {path} is not UTF-8") from None
+    except OSError as exc:
+        raise ConfigError(f"cannot read the garage config at {path}: "
+                          f"{exc.strerror or exc}") from None
+    return parse_machine_config(text)
 
 
 def update_machine_config(path: Path, mutate: Callable[[dict], None]) -> dict:
-    path = Path(path)
-    load_machine_config(path)  # refuse a missing or broken file before rewriting anything
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    mutate(raw)
-    text = json.dumps(raw, indent=2) + "\n"
-    parse_machine_config(text)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".garage-", suffix=".json")
+    load_machine_config(path)  # refuse a missing or broken file before locking or rewriting
+    path = Path(path).resolve()  # a symlinked config is written through, not replaced
+    # Lock the directory, not the file: os.replace swaps the file, so a lock on it would not keep
+    # the next writer out. A `join`, a `leave` and a `start` at once then apply one by one.
+    lock = os.open(path.parent, os.O_RDONLY)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        mutate(raw)
+        text = json.dumps(raw, indent=2) + "\n"
+        parse_machine_config(text)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".garage-", suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+            os.replace(tmp, path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+    finally:
+        os.close(lock)  # closing the descriptor releases the lock
     return raw
 
 
@@ -148,7 +169,9 @@ def parse_runner_section(text: str | None) -> RunnerSection:
         return RunnerSection()
     try:
         cfg = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except RecursionError:
+        raise ConfigError(".pitcall/config.json is nested too deeply to read") from None
+    except ValueError as exc:  # JSONDecodeError, and the integer-digits limit
         raise ConfigError(f".pitcall/config.json is not valid JSON: {exc}") from None
     if not isinstance(cfg, dict):
         raise ConfigError(".pitcall/config.json must be a JSON object")
@@ -173,7 +196,11 @@ def parse_runner_section(text: str | None) -> RunnerSection:
                               "names); set it in the job's workflow instead")
         if not isinstance(value, str):
             raise ConfigError(f"runner.env.{name}: must be a string")
+        if UNPASSABLE.search(value):  # else every runner handed to the repo would break
+            raise ConfigError(f"runner.env.{name}: must not hold a NUL or a lone surrogate")
     setup = section.get("setup")
     if setup is not None and (not isinstance(setup, str) or not setup.strip()):
         raise ConfigError("runner.setup: must be a non-empty command")
+    if setup is not None and UNPASSABLE.search(setup):
+        raise ConfigError("runner.setup: must not hold a NUL or a lone surrogate")
     return RunnerSection(env=dict(env), setup=setup)

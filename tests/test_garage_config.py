@@ -1,6 +1,8 @@
 """The garage's paths, machine config and repo `runner` section (Task 2)."""
 
+import fcntl
 import json
+import os
 import stat
 import sys
 from pathlib import Path
@@ -201,3 +203,117 @@ def test_the_host_name_lists_are_pinned():
         "CDPATH", "LANG", "LANGUAGE", "SNAP"})
     assert garage_config.HOST_PREFIXES == ("LC_", "LD_", "DOCKER_", "LXD_", "LXC_", "XDG_",
                                            "SNAP_")
+
+
+# --- sweep (#59): what the config refuses, and how it is written ------------------------------
+
+
+@pytest.mark.parametrize("repo", ["../..", "./app", "octo/..", "octo/."])
+def test_a_repo_segment_of_dots_alone_is_refused(repo):
+    cfg = machine(repos={repo: {"labels": [["self-hosted"]]}})
+    with pytest.raises(ConfigError) as err:
+        garage_config.parse_machine_config(json.dumps(cfg))
+    assert repr(repo) in str(err.value)
+
+
+def test_a_repo_name_with_dots_in_it_is_kept():
+    cfg = machine(repos={"octo/.github": {"labels": [["self-hosted"]]},
+                         "octo/app.js": {"labels": [["self-hosted"]]}})
+    assert set(garage_config.parse_machine_config(json.dumps(cfg))["repos"]) == {
+        "octo/.github", "octo/app.js"}
+
+
+def test_a_config_that_is_not_utf8_is_a_config_error(tmp_path):
+    path = tmp_path / "garage.json"
+    path.write_bytes(b'{"runners": 2, "note": "caf\xe9"}')
+    with pytest.raises(ConfigError) as err:
+        garage_config.load_machine_config(path)
+    assert str(path) in str(err.value) and "not UTF-8" in str(err.value)
+
+
+def test_a_config_that_cannot_be_read_is_a_config_error(tmp_path, monkeypatch):
+    path = write(tmp_path, machine())
+
+    def refuse(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(garage_config.Path, "read_text", refuse)
+    with pytest.raises(ConfigError) as err:
+        garage_config.load_machine_config(path)
+    assert str(path) in str(err.value) and "Permission denied" in str(err.value)
+
+
+def test_a_machine_config_nested_too_deeply_is_a_config_error():
+    with pytest.raises(ConfigError, match="nested too deeply"):
+        garage_config.parse_machine_config("[" * 100_000)
+
+
+def test_an_update_writes_through_a_symlinked_config(tmp_path):
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    target = write(dotfiles, machine())
+    link = tmp_path / "garage.json"
+    link.symlink_to(target)
+    garage_config.set_repo(link, "octo/app", [["self-hosted", "linux"]])
+    assert link.is_symlink()
+    assert json.loads(target.read_text())["repos"] == {
+        "octo/app": {"labels": [["self-hosted", "linux"]]}}
+    assert [p.name for p in dotfiles.iterdir()] == ["garage.json"]
+
+
+def test_an_update_keeps_a_concurrent_update_out_until_it_is_done(tmp_path):
+    path = write(tmp_path, machine())
+    seen = []
+
+    def mutate(raw):
+        fd = os.open(tmp_path, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            seen.append("free")
+        except BlockingIOError:
+            seen.append("held")
+        finally:
+            os.close(fd)
+
+    garage_config.update_machine_config(path, mutate)
+    assert seen == ["held"]
+
+
+def test_a_failed_replace_leaves_the_config_and_no_temp_file(tmp_path, monkeypatch):
+    path = write(tmp_path, machine())
+    before = path.read_text()
+
+    def disk_full(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(garage_config.os, "replace", disk_full)
+    with pytest.raises(OSError):
+        garage_config.set_repo(path, "octo/app", [["self-hosted"]])
+    assert path.read_text() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["garage.json"]
+
+
+@pytest.mark.parametrize("bad", ["\x00", "\ud800", "\udfff"],
+                         ids=["nul", "high-surrogate", "low-surrogate"])
+@pytest.mark.parametrize("make, key", [
+    (lambda bad: {"env": {"TZ": f"UTC{bad}rm -rf /"}}, "runner.env.TZ"),
+    (lambda bad: {"setup": f"apt-get update{bad}"}, "runner.setup"),
+    (lambda bad: {"env": {f"T{bad}Z": "UTC"}}, "not a plain variable name"),
+], ids=["env-value", "setup", "env-name"])
+def test_text_popen_cannot_pass_is_refused_naming_the_key_never_the_value(make, key, bad):
+    # json.dumps writes a lone surrogate as an escape, which json.loads reads back alone.
+    with pytest.raises(ConfigError) as err:
+        garage_config.parse_runner_section(json.dumps({"runner": make(bad)}))
+    assert key in str(err.value)
+    assert "rm -rf" not in str(err.value) and "apt-get" not in str(err.value)
+
+
+@pytest.mark.parametrize("text, reason", [
+    ("[" * 100_000, "nested too deeply"),
+    pytest.param('{"runner": {"env": {"N": ' + "1" * 5000 + "}}}", "not valid JSON",
+                 marks=pytest.mark.skipif(not hasattr(sys, "set_int_max_str_digits"),
+                                          reason="no integer-digits limit before Python 3.11")),
+], ids=["nested", "a-5000-digit-number"])
+def test_a_repo_config_json_cannot_hold_is_a_config_error(text, reason):
+    with pytest.raises(ConfigError, match=reason):
+        garage_config.parse_runner_section(text)
