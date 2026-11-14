@@ -35,6 +35,12 @@ REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 ID_RE = re.compile(r"[0-9a-f]{8}\Z")
 ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 RESERVED_PREFIXES = ("ACTIONS_RUNNER_", "PITCALL_")
+#: Names the recipe's host side reads. The service hands each repo `env` value to the recipe
+#: under its own name, so a repo setting one of these would steer the host-side `docker` or
+#: `lxc` call instead of its job.
+HOST_NAMES = frozenset({"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD", "OLDPWD",
+                        "IFS", "ENV", "CDPATH", "LANG", "LANGUAGE", "SNAP"})
+HOST_PREFIXES = ("LC_", "LD_", "DOCKER_", "LXD_", "LXC_", "XDG_", "SNAP_")
 
 
 def _positive_int(value) -> bool:
@@ -161,6 +167,10 @@ def parse_runner_section(text: str | None) -> RunnerSection:
         if name.startswith(RESERVED_PREFIXES):
             raise ConfigError(f"runner.env: {name} starts with a reserved prefix "
                               "(ACTIONS_RUNNER_ or PITCALL_)")
+        if name in HOST_NAMES or name.startswith(HOST_PREFIXES):
+            raise ConfigError(f"runner.env: {name} is read by the recipe's host side "
+                              "(the garage hands env values to the recipe under their own "
+                              "names); set it in the job's workflow instead")
         if not isinstance(value, str):
             raise ConfigError(f"runner.env.{name}: must be a string")
     setup = section.get("setup")
