@@ -13,6 +13,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import garage_config
@@ -28,7 +29,11 @@ PENDING = ("starting", "setup", "waiting")
 FREE = ("idle", "stopped")
 REPO_FIELDS = ("status", "reason", "queued", "labels", "retry_at")
 APPLIED_AT_START = ("id", "runners", "recipe", "token_file")
-PARK_SECONDS = 50  # with shutdown's default 240, inside the unit's 5-minute stop timeout
+SHUTDOWN_SECONDS = 240  # shutdown's grace for jobs to end, counted from the stop signal
+PARK_SECONDS = 50  # with SHUTDOWN_SECONDS, inside the unit's 5-minute stop timeout
+#: Reconcile waits this long for the runners' cleanup and stop: each command's own timeout, plus
+#: the 10 s Recipe.run waits after killing one.
+RECONCILE_SECONDS = 2 * (garage_recipe.TIMEOUT_SECONDS + 10)
 
 
 def _stderr(message: str) -> None:
@@ -142,6 +147,8 @@ class Garage:
             status = self.repo_status.get(repo)
             if status is None or (status["status"] == failing and status["retry_at"] > now):
                 return
+            if status["status"] != failing:
+                status["failures"] = 0  # a new kind of failure starts its own backoff
             status["failures"] += 1
             status.update(status=failing, reason=reason, cleared_by=cleared_by,
                           retry_at=now + garage_decide.backoff_seconds(status["failures"]))
@@ -156,10 +163,14 @@ class Garage:
                 status = self.repo_status[repo]
                 if status["status"] == "blocked" and now < status["retry_at"]:
                     continue
+            invalid = None
             try:
                 branch = self.api.repo_info(repo)["default_branch"]
-                text = self.api.file_text(repo, ".pitcall/config.json", branch)
                 jobs = self.api.active_jobs(repo)
+                section = garage_config.parse_runner_section(
+                    self.api.file_text(repo, ".pitcall/config.json", branch))
+            except (garage_github.ContentError, garage_config.ConfigError) as exc:
+                invalid = str(exc)  # the repo's own content: its own config invalid, below
             except garage_github.RateLimited as exc:
                 self.paused_until = exc.retry_at
                 self.log("rate limited by GitHub: polling paused until "
@@ -168,23 +179,22 @@ class Garage:
             except garage_github.ApiError as exc:
                 self._back_off(repo, "blocked", _reason(exc), "poll")
                 continue
-            except OSError as exc:
+            except OSError as exc:  # TransportError too: a dropped connection or a cut-off reply
                 self.log(f"GitHub unreachable, polling again next time: {exc}")
                 break
-            except Exception as exc:  # a cut-off or malformed reply: its text could quote the body
-                self.log(f"GitHub reply unreadable ({type(exc).__name__}), polling again next time")
-                break
+            except Exception as exc:  # unforeseen: by type alone, and only this repo waits
+                self._back_off(repo, "blocked", f"GitHub reply unreadable ({type(exc).__name__})",
+                               "poll")
+                continue
             for found in jobs:
                 if found.get("status") == "in_progress" and found.get("runner_name"):
                     running[found["runner_name"]] = found.get("name")
             matching = garage_decide.wanted(jobs, entry["labels"])
-            try:
-                section = garage_config.parse_runner_section(text)
-            except garage_config.ConfigError as exc:
+            if invalid is not None:
                 with self._lock:
                     if status["status"] != "config invalid":
-                        self.log(f"{repo}: config invalid — {exc}")
-                    status.update(status="config invalid", reason=str(exc), queued=len(matching),
+                        self.log(f"{repo}: config invalid — {invalid}")
+                    status.update(status="config invalid", reason=invalid, queued=len(matching),
                                   cleared_by="poll")
                 continue
             self.sections[repo] = section
@@ -294,24 +304,42 @@ class Garage:
             with slot.lock:
                 slot.state, slot.since, slot.retry_at = "broken", now, now
                 slot.needs_cleanup, slot.error = True, "not cleaned since the garage started"
-            self.worker.retry(slot, now)
+            self._start(lambda s=slot: self.worker.retry(s, now))  # side by side, not in turn
+        self._join(RECONCILE_SECONDS)  # every runner clean before a registration goes
         prefix = f"pitcall-{self.cfg['id']}-"
         for repo in sorted(self.cfg["repos"]):
             try:
-                for found in self.api.runners(repo):
-                    if found.get("name", "").startswith(prefix):
-                        if self.api.delete_runner(repo, found["id"]):
-                            self.log(f"reconcile: deleted the stale registration {found['name']} "
-                                     f"in {repo}")
-                        else:
-                            self.log(f"reconcile: {repo}: GitHub kept the stale registration "
-                                     f"{found['name']}: it is busy")
+                self._delete_stale(repo, prefix)
+            except garage_github.RateLimited as exc:
+                self.paused_until = exc.retry_at
+                self.log("reconcile: rate limited by GitHub; the other stale registrations wait "
+                         "for the next start")
+                return
             except (garage_github.ApiError, OSError) as exc:
                 self.log(f"reconcile: {repo}: {exc}")
             except Exception as exc:  # a cut-off or malformed reply: its text could quote the body
                 self.log(f"reconcile: {repo}: GitHub reply unreadable ({type(exc).__name__})")
 
-    def shutdown(self, grace_seconds: float = 240) -> None:
+    def _delete_stale(self, repo: str, prefix: str) -> None:
+        """Delete this garage's registrations in one repo, each on its own: one that fails does
+        not keep the others. A rate limit ends the pass."""
+        for found in self.api.runners(repo):
+            if not found.get("name", "").startswith(prefix):
+                continue
+            try:
+                deleted = self.api.delete_runner(repo, found["id"])
+            except garage_github.RateLimited:
+                raise
+            except (garage_github.ApiError, OSError) as exc:
+                self.log(f"reconcile: {repo}: cannot delete {found['name']}: {exc}")
+                continue
+            if deleted:
+                self.log(f"reconcile: deleted the stale registration {found['name']} in {repo}")
+            else:
+                self.log(f"reconcile: {repo}: GitHub kept the stale registration "
+                         f"{found['name']}: it is busy")
+
+    def shutdown(self, grace_seconds: float = SHUTDOWN_SECONDS) -> None:
         for slot in self.slots.values():
             with slot.lock:
                 state, repo, job = slot.state, slot.repo, slot.job
@@ -353,6 +381,48 @@ class Garage:
         garage_state.write_state(self.state_path, self.state())
 
 
+class Stop:
+    """The stop signal's handler. It notes when the signal came: the service manager's stop
+    timeout runs from then, not from when the tick it interrupted returns."""
+
+    def __init__(self, monotonic=time.monotonic):
+        self.event = threading.Event()
+        self.at: float | None = None
+        self._monotonic = monotonic
+
+    def __call__(self, *_signal) -> None:
+        if self.at is None:
+            self.at = self._monotonic()
+        self.event.set()
+
+    def left(self, budget: float) -> float:
+        """What remains of `budget` seconds, counted from the signal."""
+        if self.at is None:
+            return budget
+        return max(0.0, budget - (self._monotonic() - self.at))
+
+
+def _where(exc: BaseException) -> str:
+    """` at <file>:<line>` of the innermost frame: where it failed, with none of its text."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    return f" at {Path(frames[-1].filename).name}:{frames[-1].lineno}" if frames else ""
+
+
+def serve(garage: Garage, stop: Stop) -> None:
+    """Reconcile, tick until stopped, then shut down within what the stop timeout has left."""
+    garage.reconcile()
+    garage.write_state()
+    while not stop.event.is_set():
+        try:
+            garage.tick()
+        except Exception as exc:  # a restart reconciles, which ends every running job
+            # By type and place alone: an unforeseen exception's text could quote a reply body
+            # or a secret.
+            garage.log(f"tick failed, carrying on: {type(exc).__name__}{_where(exc)}")
+        stop.event.wait(garage.cfg["poll_seconds"])
+    garage.shutdown(stop.left(SHUTDOWN_SECONDS))
+
+
 def main(argv=None) -> int:
     """The unit's ExecStart. `argv` is accepted for symmetry with the CLI and ignored."""
     if os.geteuid() == 0:
@@ -379,20 +449,11 @@ def main(argv=None) -> int:
     garage = Garage(config_path, cfg, garage_github.GitHub(token),
                     garage_recipe.Recipe(cfg["recipe"]), garage_paths.state_file_path(),
                     version=version)
-    stop = threading.Event()
+    stop = Stop()
     for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, lambda *_: stop.set())
+        signal.signal(signum, stop)
     garage.log(f"started {version}: {len(garage.slots)} runners, {len(cfg['repos'])} repos")
-    garage.reconcile()
-    garage.write_state()
-    while not stop.is_set():
-        try:
-            garage.tick()
-        except Exception as exc:  # a restart reconciles, which ends every running job
-            # By type alone: an unforeseen exception's text could quote a reply body or a secret.
-            garage.log(f"tick failed, carrying on: {type(exc).__name__}")
-        stop.wait(garage.cfg["poll_seconds"])
-    garage.shutdown()
+    serve(garage, stop)
     return 0
 
 

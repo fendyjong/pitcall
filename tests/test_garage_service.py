@@ -56,6 +56,8 @@ class FakeApi:
     def _call(self, method, repo, *args):
         self.events.append(("api", method, repo, *args))
         error = self.errors.get((method, repo))
+        if isinstance(error, list):  # one per call, in turn; None lets that call through
+            error = error.pop(0) if error else None
         if error is not None:
             raise error
 
@@ -403,8 +405,9 @@ def test_an_unreachable_github_is_logged_and_tried_again_next_tick(world):
 
 def test_a_garbled_github_reply_ends_the_poll_without_blocking_or_quoting_it(world):
     w = world({A: [LINUX], B: [LINUX]})
-    error = http.client.IncompleteRead(b"")
-    w.api.errors[("active_jobs", A)] = error
+    # What garage_github.request raises for a reply http.client could not read (an IncompleteRead).
+    w.api.errors[("active_jobs", A)] = garage_github.TransportError(
+        f"IncompleteRead on /repos/{A}/actions/runs")
     w.garage.tick()
     assert w.garage.repo_status[A]["status"] == "ok" and w.garage.paused_until is None
     assert api_calls(w, "repo_info", B) == []  # the rest of the poll waits for the next tick
@@ -658,3 +661,145 @@ def test_the_service_refuses_a_token_file_others_can_read(monkeypatch, tmp_path,
     (tmp_path / "pitcall" / "garage.json").write_text(machine_text({}, token_file=str(token)))
     assert garage_service.main([]) == 1
     assert "chmod 600" in capsys.readouterr().err
+
+
+# --- sweep (#59): per-repo content, reconcile, backoff, the loop -------------------------------
+
+
+def served(w):
+    return [e[3] for e in w.events if e[0] == "recipe" and e[1] == "exec job"]
+
+
+@pytest.mark.parametrize("bad", [
+    garage_github.ContentError(".pitcall/config.json on main is not UTF-8"),
+    "[" * 100_000,
+    json.dumps({"runner": {"env": {"TZ": "UTC\x00"}}}),
+], ids=["not-utf8", "nested", "nul"])
+def test_a_repo_whose_config_cannot_be_used_is_config_invalid_and_the_next_repo_is_served(
+        world, bad):
+    w = world({A: [LINUX], B: [LINUX]}, runners=1)
+    if isinstance(bad, Exception):
+        w.api.errors[("file_text", A)] = bad
+    else:
+        w.api.configs[A] = bad
+    w.api.jobs[A] = [job(job_id=1)]
+    w.api.jobs[B] = [job(job_id=2)]
+    w.garage.tick()
+    status = w.garage.repo_status[A]
+    assert status["status"] == "config invalid" and status["reason"] and status["queued"] == 1
+    assert served(w) == [B]
+    assert not any("tick failed" in line for line in w.logs)
+
+
+def test_an_unforeseen_error_for_one_repo_blocks_only_it_and_is_named_by_type(world):
+    w = world({A: [LINUX], B: [LINUX]}, runners=1)
+    w.api.errors[("repo_info", A)] = KeyError("reply-text-that-must-not-leak")
+    w.api.jobs[B] = [job(job_id=2)]
+    w.garage.tick()
+    status = w.garage.repo_status[A]
+    assert status["status"] == "blocked"
+    assert status["reason"] == "GitHub reply unreadable (KeyError)"
+    assert served(w) == [B]
+    assert not any("must-not-leak" in line for line in w.logs)
+
+
+def test_a_new_kind_of_failure_starts_its_own_backoff(world):
+    w = world({A: [LINUX]})
+    status = w.garage.repo_status[A]
+    status.update(status="setup failing", reason="exit 1", failures=3, retry_at=T0 - 1,
+                  cleared_by="job")
+    w.api.errors[("repo_info", A)] = garage_github.ApiError(403, f"/repos/{A}")
+    w.garage.tick()
+    assert status["status"] == "blocked" and status["failures"] == 1
+    assert status["retry_at"] == T0 + 60
+
+
+def test_reconcile_deletes_every_stale_registration_even_after_one_delete_fails(world):
+    w = world({A: [LINUX]}, runners=1)
+    w.api.registered = {n: {"id": n, "name": f"pitcall-{ID}-r1-{n}", "busy": False, "repo": A}
+                        for n in (1, 2)}
+    w.api.errors[("delete_runner", A)] = [garage_github.ApiError(500, f"/repos/{A}/runners/1"),
+                                          None]
+    w.garage.reconcile()
+    assert sorted(w.api.registered) == [1]
+    assert any("GitHub 500" in line for line in w.logs)
+
+
+def test_a_rate_limit_during_reconcile_pauses_polling_and_ends_the_reconcile(world):
+    w = world({A: [LINUX], B: [LINUX]}, runners=1)
+    w.api.errors[("runners", A)] = garage_github.RateLimited(
+        403, f"/repos/{A}/actions/runners", T0 + 300)
+    w.garage.reconcile()
+    assert w.garage.paused_until == T0 + 300
+    assert api_calls(w, "runners", B) == []
+
+
+def test_reconcile_cleans_the_runners_side_by_side(world):
+    later = Later()
+    w = world({A: [LINUX]}, runners=3, spawn=later)
+    w.garage.reconcile()
+    assert len(later.pending) == 3  # one retry per runner, each handed to its own thread
+
+
+def test_reconcile_deletes_registrations_only_after_every_runner_is_clean(world):
+    w = world({A: [LINUX]}, runners=3, spawn=None)  # real threads
+    w.api.registered = {1: {"id": 1, "name": f"pitcall-{ID}-r1-4", "busy": False, "repo": A}}
+    w.garage.reconcile()
+    first_delete = next(i for i, e in enumerate(w.events) if e[:2] == ("api", "delete_runner"))
+    stopped = sorted(e[2] for e in w.events[:first_delete] if e[:2] == ("recipe", "stop"))
+    assert stopped == ["r1", "r2", "r3"]
+
+
+class OnJoin:
+    """A spawned thread whose work runs only when it is joined: what does not wait never sees it."""
+
+    def __init__(self, fn):
+        self.fn = fn
+
+    def join(self, timeout=None):
+        fn, self.fn = self.fn, None
+        if fn:
+            fn()
+
+    def is_alive(self):
+        return False
+
+
+def test_reconcile_waits_for_every_runner_before_it_deletes_a_registration(world):
+    w = world({A: [LINUX]}, runners=3, spawn=OnJoin)  # real threads finish too fast to tell
+    w.api.registered = {1: {"id": 1, "name": f"pitcall-{ID}-r1-4", "busy": False, "repo": A}}
+    w.garage.reconcile()
+    first_delete = next(i for i, e in enumerate(w.events) if e[:2] == ("api", "delete_runner"))
+    stopped = sorted(e[2] for e in w.events[:first_delete] if e[:2] == ("recipe", "stop"))
+    assert stopped == ["r1", "r2", "r3"]
+
+
+def test_a_failed_tick_is_logged_by_type_and_place_and_never_by_its_text(world):
+    w = world({A: [LINUX]})
+    stop = garage_service.Stop()
+
+    def broken_tick():
+        stop()
+        raise KeyError("reply-text-that-must-not-leak")
+
+    w.garage.tick = broken_tick
+    garage_service.serve(w.garage, stop)
+    line = next(line for line in w.logs if "tick failed" in line)
+    assert line.startswith("tick failed, carrying on: KeyError at test_garage_service.py:")
+    assert "must-not-leak" not in line
+
+
+def test_a_stop_during_a_long_tick_leaves_shutdown_only_the_rest_of_its_budget(world):
+    w = world({A: [LINUX]})
+    mono = Clock(0.0)
+    stop = garage_service.Stop(monotonic=mono)
+    grace = []
+    w.garage.shutdown = grace.append
+
+    def long_tick():
+        stop()  # the stop signal arrives during the tick
+        mono.t += 100  # and the tick runs on for 100 s: a recipe `stop`, a slow reply
+
+    w.garage.tick = long_tick
+    garage_service.serve(w.garage, stop)
+    assert grace == [garage_service.SHUTDOWN_SECONDS - 100]
