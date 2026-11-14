@@ -10,6 +10,8 @@ OSError, and one escaping a worker thread would leave its slot stuck.
 
 from __future__ import annotations
 
+import os
+import signal
 import sys
 import threading
 import time
@@ -70,9 +72,10 @@ class Outcome:
 
 
 class Worker:
-    def __init__(self, garage_id: str, api, recipe, clock=time.time, log=_stderr):
-        self.garage_id, self.api, self.recipe, self.clock, self.log = (
-            garage_id, api, recipe, clock, log)
+    def __init__(self, garage_id: str, api, recipe, clock=time.time, log=_stderr,
+                 killpg=os.killpg):
+        self.garage_id, self.api, self.recipe, self.clock, self.log, self.killpg = (
+            garage_id, api, recipe, clock, log, killpg)
 
     # --- slot changes, always under the slot's lock --------------------------------------------
 
@@ -157,7 +160,11 @@ class Worker:
             self._free(slot)
             api_error = exc if isinstance(exc, garage_github.ApiError) else None
             return Outcome("api error", str(exc), api_error=api_error)
-        proc = self.recipe.spawn_job(slot.name, repo, {**section.env, JIT_VARIABLE: jit})
+        try:
+            proc = self.recipe.spawn_job(slot.name, repo, {**section.env, JIT_VARIABLE: jit})
+        except OSError as exc:
+            self._delete(repo, runner_id)  # no runner process will ever use it
+            return self._broken(slot, f"exec job could not start: {exc}", **FREE_FIELDS)
         with slot.lock:
             slot.state, slot.since = "waiting", self.clock()
             slot.registration_id, slot.registration_name, slot.proc = runner_id, name, proc
@@ -165,9 +172,16 @@ class Worker:
         self.log(f"{slot.name}: registered {name} for {repo}")
         if ended:  # the garage began stopping while this registration was being made
             self._delete(repo, runner_id)
-            proc.terminate()
+            self._end_job(proc)
         code = proc.wait()
         return self._after_job(slot, repo, runner_id, code)
+
+    def _end_job(self, proc) -> None:
+        """SIGTERM the job's whole process group: spawn_job gave it its own session."""
+        try:
+            self.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass  # the job already exited
 
     def _after_job(self, slot: Slot, repo: str, runner_id: int, code: int) -> Outcome:
         with slot.lock:
@@ -217,7 +231,7 @@ class Worker:
             slot.ended_by_garage = True
             proc = slot.proc
         self.log(f"{slot.name}: no job picked up its registration for {repo} in time; ended it")
-        proc.terminate()
+        self._end_job(proc)
 
     def _mark_busy(self, slot: Slot, runner_id: int) -> None:
         with slot.lock:
@@ -261,4 +275,4 @@ class Worker:
         if state == "waiting":
             self._delete(repo, runner_id)
         if proc is not None and state in ("waiting", "busy"):
-            proc.terminate()
+            self._end_job(proc)

@@ -2,7 +2,9 @@
 fake clock. Jobs that must stay running while the test acts run on a real thread, with a fake
 process the test releases; nothing sleeps."""
 
+import itertools
 import json
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -23,6 +25,7 @@ REPO = "octo/app"
 LABELS = ["Self-Hosted", "linux"]
 SECRET = "jit-secret-value"
 NOTHING = garage_config.RunnerSection()
+PIDS = itertools.count(4000)
 
 
 class Clock:
@@ -34,10 +37,10 @@ class Clock:
 
 
 class FakeProc:
-    """`exec job`: returns at once, or blocks until the test (or terminate) releases it."""
+    """`exec job`: returns at once, or blocks until the test (or a signal) releases it."""
 
-    def __init__(self, code=0, block=False, on_exit=None, events=None):
-        self.code, self.on_exit, self.terminated, self.events = code, on_exit, False, events
+    def __init__(self, code=0, block=False, on_exit=None):
+        self.code, self.on_exit, self.terminated, self.pid = code, on_exit, False, next(PIDS)
         self.entered, self.released = threading.Event(), threading.Event()
         if not block:
             self.released.set()
@@ -50,8 +53,6 @@ class FakeProc:
         return -15 if self.terminated else self.code
 
     def terminate(self):
-        if self.events is not None:
-            self.events.append(("terminate",))
         self.terminated = True
         self.released.set()
 
@@ -97,6 +98,7 @@ class FakeApi:
 class FakeRecipe:
     def __init__(self, events, fail=(), proc=None):
         self.events, self.fail, self.proc, self.hooks, self.jobs = events, set(fail), proc, {}, []
+        self.spawn_error = None
 
     def run(self, command, runner, repo=None, args=(), extra_env=None):
         name = " ".join((command, *args))
@@ -109,6 +111,8 @@ class FakeRecipe:
     def spawn_job(self, runner, repo, variables):
         self.events.append(("recipe", "exec job", runner, repo, dict(variables)))
         self.jobs.append(dict(variables))
+        if self.spawn_error:
+            raise self.spawn_error
         return self.proc
 
 
@@ -117,9 +121,17 @@ def world():
     events, logs, clock = [], [], Clock()
     api = FakeApi(events)
 
-    def make(fail=(), proc=None):
-        recipe = FakeRecipe(events, fail, proc or FakeProc(on_exit=api.consume))
-        return garage_worker.Worker(ID, api, recipe, clock=clock, log=logs.append), recipe
+    def make(fail=(), proc=None, killpg=None):
+        proc = proc or FakeProc(on_exit=api.consume)
+
+        def signal_group(pid, sig):
+            events.append(("killpg", pid, sig))
+            proc.terminate()
+
+        recipe = FakeRecipe(events, fail, proc)
+        worker = garage_worker.Worker(ID, api, recipe, clock=clock, log=logs.append,
+                                      killpg=killpg or signal_group)
+        return worker, recipe
 
     return SimpleNamespace(events=events, logs=logs, clock=clock, api=api, make=make)
 
@@ -264,6 +276,23 @@ def test_a_job_that_exits_before_pickup_breaks_the_runner(world):
     assert world.api.registered == {}
 
 
+def test_a_job_that_cannot_be_spawned_breaks_the_runner_and_drops_its_registration(world):
+    worker, recipe = world.make()
+    recipe.spawn_error = FileNotFoundError(2, "No such file or directory", "/bin/sh")
+    slot = handed(garage_worker.Slot("r1"))
+    try:
+        outcome = worker.run_job(slot, REPO, LABELS, NOTHING)
+    except OSError:
+        pytest.fail("a job that cannot be spawned escaped run_job and left its slot stuck")
+    assert outcome.kind == "broken"
+    assert slot.state == "broken" and "exec job could not start" in slot.error
+    assert "/bin/sh" in slot.error
+    assert slot.failures == 1 and slot.retry_at == world.clock.t + 60
+    assert slot.repo is None and slot.registration_id is None
+    assert any(e[0] == "delete_runner" for e in world.events) and world.api.registered == {}
+    assert not any(SECRET in line for line in world.logs)
+
+
 def test_a_runner_that_dies_mid_job_is_cleaned_and_freed_and_the_job_not_rerun(world):
     proc = FakeProc(block=True)
     worker, _ = world.make(proc=proc)
@@ -327,7 +356,7 @@ def test_a_retry_runs_once_even_when_asked_twice(world):
 
 
 def test_an_unpicked_registration_is_deleted_at_the_deadline_then_the_job_ends(world):
-    proc = FakeProc(block=True, events=world.events)
+    proc = FakeProc(block=True)
     worker, _ = world.make(proc=proc)
     slot = handed(garage_worker.Slot("r1"))
     thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
@@ -339,9 +368,10 @@ def test_an_unpicked_registration_is_deleted_at_the_deadline_then_the_job_ends(w
     worker.check_pickup(slot, since + 300, 300)
     outcome = joined(thread, box)
     assert proc.terminated and outcome.kind == "ended"
+    assert ("killpg", proc.pid, signal.SIGTERM) in world.events  # the whole job, not its shell
     order = names(world.events)
-    # cleanup runs on the worker thread and can trail a late delete; terminate pins the order.
-    assert order.index("delete_runner") < order.index("terminate") < order.index("cleanup")
+    # cleanup runs on the worker thread and can trail a late delete; killpg pins the order.
+    assert order.index("delete_runner") < order.index("killpg") < order.index("cleanup")
     assert slot.state == "idle" and world.api.registered == {}
     assert slot.failures == 0 and not slot.ended_by_garage
 
@@ -404,9 +434,29 @@ def test_ending_a_waiting_runner_deletes_its_registration_and_ends_its_job(world
     rid = slot.registration_id
     worker.end(slot)
     assert joined(thread, box).kind == "ended"
-    assert proc.terminated
+    assert ("killpg", proc.pid, signal.SIGTERM) in world.events
     assert ("delete_runner", REPO, rid) in world.events
     assert world.api.registered == {}
+
+
+def test_ending_a_job_that_already_exited_is_not_an_error(world):
+    proc, signalled = FakeProc(block=True), []
+
+    def already_gone(pid, sig):
+        signalled.append((pid, sig))
+        proc.finish(0)  # the job exited on its own a moment before the signal
+        raise ProcessLookupError(pid)
+
+    worker, _ = world.make(proc=proc, killpg=already_gone)
+    slot = handed(garage_worker.Slot("r1"))
+    thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert proc.entered.wait(5)
+    try:
+        worker.end(slot)
+    except ProcessLookupError:
+        pytest.fail("a job group that is already gone must count as ended")
+    assert signalled == [(proc.pid, signal.SIGTERM)]
+    assert joined(thread, box).kind == "ended"
 
 
 def test_ending_during_setup_registers_nothing(world):
