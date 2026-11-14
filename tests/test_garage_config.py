@@ -174,3 +174,30 @@ def test_an_env_value_never_appears_in_the_reason():
 def test_a_repo_config_that_is_not_json_is_refused():
     with pytest.raises(ConfigError, match="not valid JSON"):
         garage_config.parse_runner_section("{")
+
+
+@pytest.mark.parametrize("name", ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD",
+                                  "OLDPWD", "IFS", "ENV", "CDPATH", "LANG", "LANGUAGE", "SNAP",
+                                  "LC_ALL", "LD_PRELOAD", "DOCKER_HOST", "LXD_DIR", "LXC_CONF",
+                                  "XDG_RUNTIME_DIR", "SNAP_NAME"])
+def test_an_env_name_the_recipe_host_side_reads_is_refused(name):
+    text = json.dumps({"runner": {"env": {name: "x"}}})
+    with pytest.raises(garage_config.ConfigError) as err:
+        garage_config.parse_runner_section(text)
+    assert name in str(err.value)
+    assert "host" in str(err.value)
+
+
+@pytest.mark.parametrize("name", ["TZ", "PATHS", "MY_PATH", "HOMEBREW_NO_ANALYTICS", "CI", "LCX",
+                                  "DOCKERFILE", "NODE_ENV"])
+def test_ordinary_env_names_still_pass(name):
+    assert garage_config.parse_runner_section(
+        json.dumps({"runner": {"env": {name: "x"}}})).env == {name: "x"}
+
+
+def test_the_host_name_lists_are_pinned():
+    assert garage_config.HOST_NAMES == frozenset({
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD", "OLDPWD", "IFS", "ENV",
+        "CDPATH", "LANG", "LANGUAGE", "SNAP"})
+    assert garage_config.HOST_PREFIXES == ("LC_", "LD_", "DOCKER_", "LXD_", "LXC_", "XDG_",
+                                           "SNAP_")
