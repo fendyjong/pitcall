@@ -65,16 +65,21 @@ def coverage_message(repo, errors):
 
 
 def discover(api, repo, ref):
-    """Label sets that include self-hosted, and unreadable runs-on lines, on `ref`."""
-    files = {}
+    """Label sets that include self-hosted, and unreadable runs-on lines and files, on `ref`."""
+    files, undecodable = {}, []
     for name in sorted(api.list_dir(repo, WORKFLOWS, ref) or []):
         if not name.endswith((".yml", ".yaml")):
             continue
         path = f"{WORKFLOWS}/{name}"
-        text = api.file_text(repo, path, ref)
+        try:
+            text = api.file_text(repo, path, ref)
+        except garage_github.ContentError:
+            undecodable.append(f"{path}: not UTF-8")
+            continue
         if text is not None:
             files[path] = text
-    return garage_runs_on.self_hosted_sets(files)
+    sets, unreadable = garage_runs_on.self_hosted_sets(files)
+    return sets, unreadable + undecodable
 
 
 def run_join(api, repo, config_path, labels_arg, allow_public, yes, out=print):
@@ -131,8 +136,8 @@ def _run_join(api, repo, config_path, labels_arg, allow_public, yes, out):
     if not sets:
         out("  (none)")
     if unreadable:
-        out("runs-on values that could not be read (an expression or a runner group); "
-            "name their label sets with --labels to serve them:")
+        out("runs-on values that could not be read (an expression, a runner group, or a file "
+            "that is not UTF-8); name their label sets with --labels to serve them:")
         for where in unreadable:
             out(f"  - {where}")
     out(TRUST_LINE)
@@ -164,7 +169,8 @@ def run_leave(repo, config_path, out=print):
         out(f"garage leave: cannot update {config_path}: {exc}")
         return 1
     if removed:
-        out(f"Left {repo}. A job already running for it finishes; nothing new is registered for it.")
+        out(f"Left {repo}. A job already running for it finishes; "
+            "nothing new is registered for it.")
     else:
         out(f"{repo} was not joined.")
     return 0
