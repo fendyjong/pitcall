@@ -557,3 +557,38 @@ def test_to_state_is_the_state_files_runner_entry(world):
     entry = slot.to_state()
     assert set(entry) == {"state", "repo", "labels", "registration", "job", "error", "retry_at", "since"}
     assert entry["state"] in garage_state.RUNNER_STATES
+
+
+# --- sweep (#59) -------------------------------------------------------------------------------
+
+
+def test_a_pickup_check_never_marks_a_runner_the_garage_is_ending_busy(world):
+    proc = FakeProc(block=True)
+    worker, _ = world.make(proc=proc, killpg=lambda pid, sig: world.events.append(("killpg", pid)))
+    slot = handed(garage_worker.Slot("r1"))
+    thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert proc.entered.wait(5)
+    worker.end(slot)  # deletes the registration and signals the job, which has not exited yet
+    worker.check_pickup(slot, slot.since + 1, 300)  # GitHub no longer lists the registration
+    assert slot.state == "waiting" and not slot.seen_busy
+    proc.finish(0)
+    assert joined(thread, box).kind == "ended"
+
+
+def test_a_retry_whose_command_cannot_start_backs_off_instead_of_stranding_the_runner(world):
+    worker, recipe = world.make(fail={"start"})
+    slot = handed(garage_worker.Slot("r1"))
+    worker.run_job(slot, REPO, LABELS, NOTHING)
+    recipe.fail.clear()
+    world.clock.t += 60
+
+    def fork_fails():
+        raise BlockingIOError(11, "Resource temporarily unavailable")
+
+    recipe.hooks["cleanup"] = fork_fails
+    assert calmly(worker.retry, slot, world.clock.t) is False
+    assert slot.state == "broken" and slot.needs_cleanup and "cleanup could not run" in slot.error
+    assert slot.failures == 2 and slot.retry_at == world.clock.t + 120
+    del recipe.hooks["cleanup"]
+    world.clock.t += 120
+    assert worker.retry(slot, world.clock.t) is True and slot.state == "stopped"
