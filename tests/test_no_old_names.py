@@ -12,9 +12,6 @@ What may still spell an old name:
 - a BLOCK carrying the marker: the run of non-blank lines around it. A block,
   not a whole file: one marker exempting a file would hide every straggler in
   exactly the files most likely to need a compatibility branch.
-- a file that exists only as an alias (`ALIAS_FILES`, `ALIAS_DIRS`), deleted
-  whole in 0.17.0. Each must carry the marker, so the list cannot exempt a file
-  that is not one.
 - the README's "Upgrading to ..." sections: history, left as written.
 - `.pitcall/config.json`: the installed plugin that drives this repository's
   own runs reads `bringup` until it is upgraded, and JSON has no comments to
@@ -56,27 +53,11 @@ OLD_NAMES = re.compile(
 #: they can only mean the renamed command.
 OLD_COMMAND_WORDS = re.compile(r"`(claim|block|ship|merge|cleanup|init)`")
 
-#: Files that exist only as 0.16.0 aliases and are deleted whole in 0.17.0.
-ALIAS_FILES = {
-    "commands/init.md",
-    "scripts/alias.py",
-    "scripts/block.py",
-    "scripts/claim.py",
-    "scripts/lane.py",
-    "scripts/solution_ready.py",
-    "tests/test_aliases.py",
-}
-ALIAS_DIRS = ("skills/wave-driven-development/",)
-
 #: Read by the installed plugin that drives this repository's own runs.
 ALLOWED_FILES = {".pitcall/config.json"}
 
 UPGRADING = re.compile(r"^(#{1,6}) Upgrading to ")
 HEADING = re.compile(r"^(#{1,6}) ")
-
-
-def is_alias(rel):
-    return rel in ALIAS_FILES or rel.startswith(ALIAS_DIRS)
 
 
 def upgrading_lines(lines):
@@ -96,7 +77,7 @@ def upgrading_lines(lines):
 
 def hits(rel, text):
     """`<rel>:<line>: <name>` for every old name outside an exempt block."""
-    if rel == SELF or rel in ALLOWED_FILES or is_alias(rel):
+    if rel == SELF or rel in ALLOWED_FILES:
         return []
     lines = text.split("\n")
     history = upgrading_lines(lines) if rel == "README.md" else set()
@@ -125,7 +106,7 @@ def block_hits(rel, lines, block):
 
 
 def is_agent_doc(rel):
-    return rel.endswith(".md") and rel.startswith(("skills/", "commands/")) and not is_alias(rel)
+    return rel.endswith(".md") and rel.startswith(("skills/", "commands/"))
 
 
 def tracked():
@@ -176,9 +157,7 @@ def test_new_names_and_kept_names_are_not_hits():
     assert hits("docs/x.md", text) == []
 
 
-def test_alias_files_and_the_allowed_config_are_skipped():
-    assert hits("scripts/claim.py", "claim.py\n") == []
-    assert hits("skills/wave-driven-development/scripts/wdd", "wdd\n") == []
+def test_the_allowed_config_is_skipped():
     assert hits(".pitcall/config.json", '{"bringup": null}\n') == []
 
 
@@ -190,13 +169,6 @@ def test_the_scan_reads_the_repository():
 def test_no_old_name_outside_a_marked_block():
     found = [hit for rel in tracked() for hit in hits(rel, blob(rel))]
     assert not found, "old names outside a marked block:\n" + "\n".join(found)
-
-
-def test_every_alias_file_says_it_is_one():
-    aliases = [rel for rel in tracked() if is_alias(rel)]
-    assert aliases, "no alias file is tracked -- the list names nothing that exists"
-    unmarked = [rel for rel in aliases if MARKER not in blob(rel)]
-    assert not unmarked, f"listed as aliases but carrying no {MARKER}: {unmarked}"
 
 
 def test_an_old_name_inside_an_identifier_is_found():

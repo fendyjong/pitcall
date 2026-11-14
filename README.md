@@ -18,14 +18,14 @@ until 0.17.0, printing one line that names its replacement.
 
 | Old | New |
 |---|---|
-| skill `pitcall:wave-driven-development` | skill `pitcall:race` |
-| `wdd check` / `ship` / `merge` / `cleanup` | `race check` / `grid` / `finish` / `pack-down` |
+| skill wave-driven-development | skill `pitcall:race` |
+| wdd check / ship / merge / cleanup | `race check` / `grid` / `finish` / `pack-down` |
 | `plan-tasks --validate` | `qualifying` |
-| `wave-worktree`, `wdd-ledger`, `wdd-workspace` | `lap-worktree`, `race-ledger`, `race-workspace` |
-| `/pitcall:init` | `/pitcall:setup` |
-| `scripts/claim.py`, `scripts/block.py` | `scripts/enter.py`, `scripts/red_flag.py` |
-| `scripts/lane.py run` / `status` / `drop` | `scripts/pit.py lane` / `status` / `drop` |
-| `scripts/solution_ready.py`, label `solution-ready` | `scripts/green_flag.py`, label `green-flag` |
+| wave-worktree, wdd-ledger, wdd-workspace | `lap-worktree`, `race-ledger`, `race-workspace` |
+| the init command | `/pitcall:setup` |
+| scripts/claim.py, scripts/block.py | `scripts/enter.py`, `scripts/red_flag.py` |
+| scripts/lane.py run / status / drop | `scripts/pit.py lane` / `status` / `drop` |
+| scripts/solution_ready.py, label `solution-ready` | `scripts/green_flag.py`, label `green-flag` |
 | lane receipt, `.pitcall/receipts/` | pit pass, `.pitcall/pit-passes/` |
 | config `bringup` / `teardown` | config `out_lap` / `in_lap` |
 | plan table `## Waves` | plan table `## Laps` |
@@ -33,16 +33,16 @@ until 0.17.0, printing one line that names its replacement.
 What you change yourself — pitcall edits nobody's settings:
 
 - **CLAUDE.md, AGENTS.md and memories** that name old commands, paths or the skill: update them by the table. They keep working until 0.17.0.
-- **Allow rules.** A rule matching an old path or command needs a twin for the new one, or auto mode prompts for (or blocks) the new spelling: a rule for `${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd merge *` needs a `${CLAUDE_PLUGIN_ROOT}/skills/race/scripts/race finish *` twin, a rule for `${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run *` a `${CLAUDE_PLUGIN_ROOT}/scripts/pit.py lane *` twin, `claim.py` an `enter.py` twin, `block.py` a `red_flag.py` twin. Keep the old rules until 0.17.0, since old instructions still call the old paths.
+- **Allow rules.** A rule matching an old path or command needs a twin for the new one, or auto mode prompts for (or blocks) the new spelling: a rule for ${CLAUDE_PLUGIN_ROOT}/skills/wave-driven-development/scripts/wdd merge * needs a `${CLAUDE_PLUGIN_ROOT}/skills/race/scripts/race finish *` twin, a rule for ${CLAUDE_PLUGIN_ROOT}/scripts/lane.py run * a `${CLAUDE_PLUGIN_ROOT}/scripts/pit.py lane *` twin, claim.py an `enter.py` twin, block.py a `red_flag.py` twin. Keep the old rules until 0.17.0, since old instructions still call the old paths.
 - **Config:** rename `bringup` to `out_lap` and `teardown` to `in_lap`, or run `/pitcall:setup --force`.
 - **Repos that use the `solution-ready` label:** create `green-flag` and move the labelled issues across. The old label works until 0.17.0.
-- **Plans** with a `## Waves` table and **runs in flight** keep working. One case does not: a session still on 0.15.0 cannot see a pit pass written by 0.16.0, so its `wdd merge` refuses, which is safe. Finish a run on the version it started on, or re-run the pit lane on the new one.
+- **Plans** with a `## Waves` table and **runs in flight** keep working. One case does not: a session still on 0.15.0 cannot see a pit pass written by 0.16.0, so its wdd merge refuses, which is safe. Finish a run on the version it started on, or re-run the pit lane on the new one.
 - **0.17.0 removes** every alias, the old config keys, `## Waves`, the old ledger lines, the `.pitcall/receipts/` and `.pitcall/wdd/` fallbacks and the old label.
 
 ### Upgrading to 0.10.0
 
 WDD runs the validation lane itself. Through 0.9.0 the skill named the lane run as
-the human's, and listed no step for it in Phase 3 — so `wdd merge`, which refuses
+the human's, and listed no step for it in Phase 3 — so wdd merge, which refuses
 without a receipt, could never reach one on its own. The spec is now the only human
 gate: from an approved spec the skill plans, executes, runs `lane run`, and merges.
 
