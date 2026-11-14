@@ -19,14 +19,17 @@ from pathlib import Path
 RUNNER_STATES = ("stopped", "idle", "starting", "setup", "waiting", "busy", "cleaning", "broken")
 REPO_STATUSES = ("ok", "blocked", "setup failing", "config invalid")
 
-# [0-9] rather than the digit escape: the private-content gate flags that escape followed by a count.
-_EXPIRY = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}) (UTC|[+-][0-9]{4})\Z")
+# [0-9] rather than the digit escape: the private-content gate flags that escape followed by a
+# count.
+_EXPIRY = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2})"
+                     r" (UTC|[+-][0-9]{4})\Z")
 
 
 def write_state(path: Path, state: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".garage-state-", suffix=".json")  # mode 0600
+    # mkstemp creates the file with mode 0600.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".garage-state-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(state, fh, indent=2)
@@ -98,6 +101,10 @@ def _repo_line(repo: str, e: dict, now: float) -> str:
     return f"{repo}: {text}"
 
 
+def _as_dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def render_status(service: str, token: str, state: dict | None, now: float) -> str:
     lines = [f"service: {service}"]
     days = days_left(state.get("token_expiration") if state else None, now)
@@ -109,23 +116,33 @@ def render_status(service: str, token: str, state: dict | None, now: float) -> s
         lines.append(f"token: {token} — expires in {days} days")
     if days is not None and days <= 7:
         when = "has expired" if days < 0 else f"expires in {days} days"
-        lines.append(f"WARNING: the garage token {when}: create a new one and replace the token file to renew it")
+        # The service reads the token only when it starts, so a new one needs a `garage start`.
+        lines.append(f"WARNING: the garage token {when}: create a new one, put it in the token "
+                     "file, then run garage start")
     if state is None:
         lines.append("runners: unknown (the service has not written its state)")
         return "\n".join(lines) + "\n"
     if state.get("config_error"):
-        lines.append(f"config: {state['config_error']} (the service carries on with the last config it read)")
+        lines.append(f"config: {state['config_error']} "
+                     "(the service carries on with the last config it read)")
     paused = state.get("paused_until")
     if paused and paused > now:
-        lines.append(f"paused: rate limited until {time.strftime('%H:%M:%S', time.localtime(paused))}")
-    runners = state.get("runners") or {}
+        until = time.strftime("%H:%M:%S", time.localtime(paused))
+        lines.append(f"paused: rate limited until {until}")
+    # A hand-edited or foreign state file can hold anything: an entry that is not an object is
+    # named, not read.
+    runners = _as_dict(state.get("runners"))
     if not runners:
         lines.append("runners: none")
     for name in sorted(runners, key=_runner_order):
-        lines.append(_runner_line(name, runners[name], now))
-    repos = state.get("repos") or {}
+        entry = runners[name]
+        lines.append(_runner_line(name, entry, now) if isinstance(entry, dict)
+                     else f"{name}: unreadable")
+    repos = _as_dict(state.get("repos"))
     if not repos:
         lines.append("repos: none joined")
     for repo in sorted(repos):
-        lines.append(_repo_line(repo, repos[repo], now))
+        entry = repos[repo]
+        lines.append(_repo_line(repo, entry, now) if isinstance(entry, dict)
+                     else f"{repo}: unreadable")
     return "\n".join(lines) + "\n"

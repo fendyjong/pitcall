@@ -13,7 +13,10 @@ from __future__ import annotations
 import re
 
 KEY = re.compile(r"^(?P<indent>[ \t]*)runs-on[ \t]*:(?P<rest>.*)$")
-ITEM = re.compile(r"^(?P<indent>[ \t]*)-[ \t]+(?P<value>.*)$")
+# A bare `-` is an item too: an empty one, which makes the list unreadable rather than ending it.
+ITEM = re.compile(r"^(?P<indent>[ \t]*)-(?:[ \t]+(?P<value>.*))?$")
+# `key: value` or `key:` -- a mapping, such as a runner group, not a label.
+MAPPING = re.compile(r":(?:[ \t]|$)")
 
 
 def _strip_comment(text: str) -> str:
@@ -38,7 +41,8 @@ def _scalar(text: str) -> str | None:
             inner = inner.replace("''", "'")
         value = inner
     else:
-        if any(ch in text for ch in "[]{},&*!|>") or text.startswith(("'", '"')):
+        if (any(ch in text for ch in "[]{},&*!|>") or text.startswith(("'", '"'))
+                or MAPPING.search(text)):
             return None
         value = text
     if not value.strip() or "${{" in value:
@@ -83,7 +87,7 @@ def _block(lines: list[str], start: int, key_indent: int) -> tuple[str, ...] | N
             continue
         item = ITEM.match(body)
         if item and len(item.group("indent")) >= key_indent:
-            value = _scalar(item.group("value"))
+            value = _scalar(item.group("value") or "")
             if value is None:
                 return None
             items.append(value)

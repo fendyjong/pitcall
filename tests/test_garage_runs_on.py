@@ -87,3 +87,15 @@ def test_self_hosted_sets_dedupes_ignoring_case_and_order():
 
 def test_no_self_hosted_job_means_no_sets():
     assert self_hosted_sets({"w.yml": "  runs-on: ubuntu-latest\n"}) == ([], [])
+
+
+def test_a_mapping_where_a_label_belongs_is_unreadable():
+    assert scan("    runs-on:\n      - group: big-runners\n") == [(1, None)]
+    assert scan("    runs-on: [self-hosted, group: big-runners]\n") == [(1, None)]
+    assert scan("    runs-on:\n      - labels:\n") == [(1, None)]
+    assert scan("    runs-on: 'self-hosted: quoted'\n") == [(1, ("self-hosted: quoted",))]
+
+
+def test_a_bare_dash_in_a_block_list_makes_it_unreadable():
+    assert scan("runs-on:\n- self-hosted\n-\n- linux\n") == [(1, None)]
+    assert scan("    runs-on:\n      - self-hosted\n      -   # nothing\n") == [(1, None)]

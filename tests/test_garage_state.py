@@ -1,6 +1,5 @@
 """The garage's state file and `status` rendering (Task 8)."""
 
-import json
 import stat
 import sys
 import time
@@ -108,3 +107,17 @@ def test_status_without_a_state_file():
     assert out.splitlines() == ["service: not installed", "token: missing: no token file",
                                 "runners: unknown (the service has not written its state)"]
 
+
+
+def test_an_entry_that_is_not_an_object_is_shown_as_unreadable():
+    out = render_status("running", "t", state(runners={"r1": "x"}, repos={"octo/app": 3}), NOW)
+    assert "r1: unreadable" in out.splitlines()
+    assert "octo/app: unreadable" in out.splitlines()
+    out = render_status("running", "t", state(runners=["r1"], repos="octo/app"), NOW)
+    assert "runners: none" in out and "repos: none joined" in out
+
+
+def test_the_expiry_warning_says_a_new_token_needs_a_garage_start():
+    out = render_status("running", "t", state(token_expiration="2026-11-20 12:00:00 UTC"), NOW)
+    assert ("WARNING: the garage token expires in 6 days: create a new one, put it in the token "
+            "file, then run garage start") in out.splitlines()
