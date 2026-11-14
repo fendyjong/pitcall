@@ -4,8 +4,9 @@ The service owns the loop and the threads; this module owns what happens to one 
 change to a Slot happens under its lock, and recipe and GitHub calls happen outside it, so the
 service's loop never waits behind a container start or a job.
 
-GitHub calls catch OSError as well as ApiError: a network failure surfaces from urllib as an
-OSError, and one escaping a worker thread would leave its slot stuck.
+An exception escaping a worker thread would leave its slot stuck, so GitHub calls catch every
+exception (urllib raises OSError for a network failure; a cut-off or malformed reply raises
+http.client or json errors), and run_job breaks its slot on anything else it did not foresee.
 """
 
 from __future__ import annotations
@@ -30,6 +31,12 @@ FREE_FIELDS = {"repo": None, "labels": None, "registration_id": None, "registrat
 
 def _stderr(message: str) -> None:
     print(f"garage: {message}", file=sys.stderr, flush=True)
+
+
+def _reason(exc: Exception) -> str:
+    """An ApiError or OSError names the request or connection that failed; anything else is named
+    by its type alone, since its text could quote a reply body, an env value or a token."""
+    return str(exc) if isinstance(exc, (garage_github.ApiError, OSError)) else type(exc).__name__
 
 
 def _last_line(output: str) -> str:
@@ -114,16 +121,16 @@ class Worker:
         """True: GitHub still lists the registration. False: it does not. None: it could not say."""
         try:
             return self.api.runner(repo, runner_id) is not None
-        except (garage_github.ApiError, OSError) as exc:
-            self.log(f"{repo}: cannot look up registration {runner_id}: {exc}")
+        except Exception as exc:
+            self.log(f"{repo}: cannot look up registration {runner_id}: {_reason(exc)}")
             return None
 
     def _delete(self, repo: str, runner_id: int) -> bool | None:
         """True: gone. False: GitHub refused, the runner is busy. None: the call failed."""
         try:
             deleted = self.api.delete_runner(repo, runner_id)
-        except (garage_github.ApiError, OSError) as exc:
-            self.log(f"{repo}: cannot delete registration {runner_id}: {exc}")
+        except Exception as exc:
+            self.log(f"{repo}: cannot delete registration {runner_id}: {_reason(exc)}")
             return None
         if not deleted:
             self.log(f"{repo}: GitHub kept registration {runner_id}: it is busy")
@@ -132,6 +139,17 @@ class Worker:
     # --- the lifecycle --------------------------------------------------------------------------
 
     def run_job(self, slot: Slot, repo: str, labels: list[str], section) -> Outcome:
+        try:
+            return self._run_job(slot, repo, labels, section)
+        except Exception as exc:  # unforeseen: break the slot for a clean retry, never strand it
+            with slot.lock:
+                runner_id = slot.registration_id
+            if runner_id is not None:
+                self._delete(repo, runner_id)
+            return self._broken(slot, f"unexpected {type(exc).__name__}", needs_cleanup=True,
+                                **FREE_FIELDS)
+
+    def _run_job(self, slot: Slot, repo: str, labels: list[str], section) -> Outcome:
         if not slot.container_running:
             self._update(slot, state="starting")
             result = self.recipe.run("start", slot.name, repo)
@@ -160,6 +178,7 @@ class Worker:
             self._free(slot)
             api_error = exc if isinstance(exc, garage_github.ApiError) else None
             return Outcome("api error", str(exc), api_error=api_error)
+        self._update(slot, registration_id=runner_id, registration_name=name)  # backstop deletes it
         try:
             proc = self.recipe.spawn_job(slot.name, repo, {**section.env, JIT_VARIABLE: jit})
         except OSError as exc:
@@ -167,7 +186,7 @@ class Worker:
             return self._broken(slot, f"exec job could not start: {exc}", **FREE_FIELDS)
         with slot.lock:
             slot.state, slot.since = "waiting", self.clock()
-            slot.registration_id, slot.registration_name, slot.proc = runner_id, name, proc
+            slot.proc = proc
             ended = slot.ended_by_garage
         self.log(f"{slot.name}: registered {name} for {repo}")
         if ended:  # the garage began stopping while this registration was being made
@@ -211,8 +230,8 @@ class Worker:
             repo, runner_id, since = slot.repo, slot.registration_id, slot.since
         try:
             info = self.api.runner(repo, runner_id)
-        except (garage_github.ApiError, OSError) as exc:
-            self.log(f"{repo}: cannot check registration {runner_id}: {exc}")
+        except Exception as exc:  # the slot stays as it is: the next poll checks again
+            self.log(f"{repo}: cannot check registration {runner_id}: {_reason(exc)}")
             return
         if info is None or info.get("busy"):  # None: a one-job runner is gone once a job took it
             self._mark_busy(slot, runner_id)

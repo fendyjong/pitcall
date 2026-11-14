@@ -2,6 +2,7 @@
 fake clock. Jobs that must stay running while the test acts run on a real thread, with a fake
 process the test releases; nothing sleeps."""
 
+import http.client
 import itertools
 import json
 import signal
@@ -64,7 +65,7 @@ class FakeProc:
 class FakeApi:
     def __init__(self, events):
         self.events, self.registered, self.next_id = events, {}, 100
-        self.jit_error = None
+        self.jit_error = self.runner_error = self.delete_error = None
         self.busy_on_delete = False
 
     def jit_config(self, repo, name, labels):
@@ -77,11 +78,15 @@ class FakeApi:
 
     def runner(self, repo, runner_id):
         self.events.append(("runner", repo, runner_id))
+        if self.runner_error:
+            raise self.runner_error
         found = self.registered.get(runner_id)
         return dict(found) if found else None
 
     def delete_runner(self, repo, runner_id):
         self.events.append(("delete_runner", repo, runner_id))
+        if self.delete_error:
+            raise self.delete_error
         found = self.registered.get(runner_id)
         if found and self.busy_on_delete:  # a job arrives in the same moment
             found["busy"] = True
@@ -161,6 +166,19 @@ def joined(thread, box):
     thread.join(5)
     assert not thread.is_alive(), "the worker never finished"
     return box["outcome"]
+
+
+def calmly(fn, *args):
+    """Call a worker method that must never raise: an escape fails the test on its own terms."""
+    try:
+        return fn(*args)
+    except Exception as exc:
+        pytest.fail(f"{fn.__name__} let {type(exc).__name__} escape")
+
+
+def quoted(exc, world, slot):
+    """Whether the worker logged or recorded the exception's own text (a reply, a secret)."""
+    return any(str(exc) in text for text in [*world.logs, slot.error or ""])
 
 
 # --- a job, start to finish ----------------------------------------------------------------------
@@ -350,6 +368,71 @@ def test_a_retry_runs_once_even_when_asked_twice(world):
     recipe.hooks["cleanup"] = lambda: inner.append(worker.retry(slot, world.clock.t))
     assert worker.retry(slot, world.clock.t) is True
     assert inner == [False]
+
+
+# --- what GitHub's client or Popen raise beyond ApiError and OSError -----------------------------
+
+
+def test_a_malformed_registration_reply_breaks_the_runner_for_a_clean_retry(world):
+    worker, _ = world.make()
+    world.api.jit_error = error = json.JSONDecodeError("reply-text-that-must-not-leak", "{", 0)
+    slot = handed(garage_worker.Slot("r1"))
+    outcome = calmly(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert outcome.kind == "broken"
+    assert slot.state == "broken" and slot.needs_cleanup and "JSONDecodeError" in slot.error
+    assert slot.failures == 1 and slot.retry_at == world.clock.t + 60 and slot.repo is None
+    assert world.api.registered == {} and "exec job" not in steps(world.events)
+    assert not quoted(error, world, slot)
+
+
+def test_a_cut_off_lookup_after_the_job_still_runs_cleanup(world):
+    worker, _ = world.make(proc=FakeProc())  # the registration is still listed after the job
+    world.api.runner_error = error = http.client.IncompleteRead(b"partial-reply-that-must-not-leak")
+    slot = handed(garage_worker.Slot("r1"))
+    calmly(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert steps(world.events) == ["start", "exec job", "cleanup"]
+    assert world.api.registered == {}  # it could not say, so the registration was deleted anyway
+    assert slot.state == "idle" and not slot.needs_cleanup
+    assert any("IncompleteRead" in line for line in world.logs) and not quoted(error, world, slot)
+
+
+def test_a_pickup_check_that_cannot_read_the_reply_leaves_the_runner_waiting(world):
+    proc = FakeProc(block=True, on_exit=world.api.consume)
+    worker, _ = world.make(proc=proc)
+    slot = handed(garage_worker.Slot("r1"))
+    thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert proc.entered.wait(5)
+    world.api.runner_error = error = http.client.BadStatusLine("status-line-that-must-not-leak")
+    calmly(worker.check_pickup, slot, slot.since + 300, 300)
+    assert slot.state == "waiting" and not proc.terminated  # checked again on the next poll
+    assert any("BadStatusLine" in line for line in world.logs) and not quoted(error, world, slot)
+    world.api.runner_error = None
+    proc.finish(0)
+    assert joined(thread, box).kind == "done"
+
+
+def test_ending_signals_the_job_even_when_its_registration_cannot_be_deleted(world):
+    proc = FakeProc(block=True)
+    worker, _ = world.make(proc=proc)
+    slot = handed(garage_worker.Slot("r1"))
+    thread, box = in_thread(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert proc.entered.wait(5)
+    world.api.delete_error = error = json.JSONDecodeError("reply-text-that-must-not-leak", "{", 0)
+    calmly(worker.end, slot)
+    assert ("killpg", proc.pid, signal.SIGTERM) in world.events
+    assert joined(thread, box).kind == "ended"
+    assert any("JSONDecodeError" in line for line in world.logs) and not quoted(error, world, slot)
+
+
+def test_a_job_whose_environment_popen_rejects_breaks_the_runner_and_drops_its_registration(world):
+    worker, recipe = world.make()
+    recipe.spawn_error = error = ValueError("embedded null byte")
+    slot = handed(garage_worker.Slot("r1"))
+    outcome = calmly(worker.run_job, slot, REPO, LABELS, NOTHING)
+    assert outcome.kind == "broken"
+    assert slot.state == "broken" and slot.needs_cleanup and "ValueError" in slot.error
+    assert slot.registration_id is None and world.api.registered == {}
+    assert not quoted(error, world, slot)
 
 
 # --- the pickup deadline -------------------------------------------------------------------------
