@@ -41,6 +41,7 @@ class ConfigNotFound(RuntimeError):
 #: to invent one.
 REQUIRED_KEYS = ("out_lap", "validate", "default_branch", "required_check")
 
+
 def _git(*args: str) -> str:
     """Run git and return stripped stdout, or "" when the command failed.
 

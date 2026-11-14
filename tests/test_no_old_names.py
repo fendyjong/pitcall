@@ -211,9 +211,9 @@ def test_the_cli_refuses_a_missing_path(capsys):
 
 def test_agent_docs_name_the_new_commands():
     """Skill and command documents are instructions an agent follows, so an old
-    command name there runs the alias, or a command that no longer exists. These
-    words are ordinary English too, so the scanner above cannot look for them;
-    in a backticked command position they can only mean the renamed command."""
+    command name there names a command that no longer exists. These words are
+    ordinary English too, so the scanner above cannot look for them; in a
+    backticked command position they can only mean the renamed command."""
     found = [f"{rel}:{n}: {m.group(0)}"
              for rel in tracked() if is_agent_doc(rel)
              for n, line in enumerate(blob(rel).split("\n"), 1)

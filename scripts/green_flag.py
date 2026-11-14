@@ -49,6 +49,7 @@ import tracker  # noqa: E402
 #: Applied by a maintainer. Authorizes; never asserts correctness.
 LABEL = "green-flag"
 
+
 def authorized_by_label(labels) -> bool:
     return LABEL in labels
 
