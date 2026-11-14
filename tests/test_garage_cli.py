@@ -453,3 +453,29 @@ def test_stop_reads_a_state_file_whose_runners_are_not_objects(home, capsys, run
     assert garage(env, "stop", run=FakeRun(active=True)) == 0
     named = isinstance(runners, dict)
     assert ("r2: octo/app build" in capsys.readouterr().out) is named
+
+
+def test_a_start_whose_unit_cannot_be_written_puts_the_code_back(home, capsys, monkeypatch):
+    env, token = home
+    write_config(env, token)
+    assert garage(env, "start") == 0
+    (installed(env) / "VERSION").write_text("0.16.0\n")  # stands in for the code that last ran
+
+    def no_unit(*args, **kwargs):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(cli, "write_unit", no_unit)
+    capsys.readouterr()
+    assert garage(env, "start") == 1
+    assert "cannot write" in capsys.readouterr().err
+    assert (installed(env) / "VERSION").read_text() == "0.16.0\n"
+    assert sorted(p.name for p in installed(env).parent.iterdir()) == ["garage"]
+
+
+def test_stop_on_a_stopped_service_says_it_stays_stopped(home, capsys):
+    env, token = home
+    write_config(env, token)
+    assert garage(env, "start") == 0
+    capsys.readouterr()
+    assert garage(env, "stop", run=FakeRun(active=False)) == 0
+    assert "already stopped; the service is disabled" in capsys.readouterr().out
