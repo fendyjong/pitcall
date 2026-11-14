@@ -44,10 +44,6 @@ legacy `pitcall.config.json` — Step 8 needs both facts, because overwriting th
 in place is not an option: only `.pitcall/config.json` is ever written, so a legacy config
 found here is migrated, not overwritten.
 
-<!-- deprecated(0.16.0) -->
-A config that still has `bringup` or `teardown` is written back with those values under
-`out_lap` and `in_lap`, and the old keys are dropped.
-
 ---
 
 # Step 2 — Read the reference once

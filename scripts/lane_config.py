@@ -41,11 +41,6 @@ class ConfigNotFound(RuntimeError):
 #: to invent one.
 REQUIRED_KEYS = ("out_lap", "validate", "default_branch", "required_check")
 
-# deprecated(0.16.0): the 0.15.0 names of two keys, read as their new names
-# until 0.17.0. Every caller of load_config() sees only the new keys.
-RENAMED_KEYS = {"bringup": "out_lap", "teardown": "in_lap"}
-
-
 def _git(*args: str) -> str:
     """Run git and return stripped stdout, or "" when the command failed.
 
@@ -260,22 +255,6 @@ def config_path(checkout: Path | str | None = None) -> Path:
     return _resolve_config_in(_checkout_root(checkout))
 
 
-def _rename_old_keys(cfg: dict) -> None:
-    # deprecated(0.16.0): an old key alone is read as the new one; both set, the
-    # new one wins. Either way the old key is gone before anything reads cfg.
-    for old, new in RENAMED_KEYS.items():
-        if old not in cfg:
-            continue
-        value = cfg.pop(old)
-        if new in cfg:
-            sys.stderr.write(f"pitcall: config key '{old}' is deprecated and ignored, "
-                             f"because '{new}' is also set; delete it\n")
-        else:
-            sys.stderr.write(f"pitcall: config key '{old}' is deprecated; "
-                             f"rename it to '{new}'\n")
-            cfg[new] = value
-
-
 def load_config(checkout: Path | str | None = None) -> dict:
     """Read the project's config, refusing an incomplete one.
 
@@ -317,7 +296,6 @@ def load_config(checkout: Path | str | None = None) -> dict:
         raise RuntimeError(
             f"{path}: the config must be a JSON object, not {type(cfg).__name__}"
         )
-    _rename_old_keys(cfg)
     missing = [k for k in REQUIRED_KEYS if k not in cfg]
     if missing:
         # Every missing key at once: one per run means one edit, one re-run and
