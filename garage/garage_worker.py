@@ -225,7 +225,7 @@ class Worker:
 
     def check_pickup(self, slot: Slot, now: float, deadline_seconds: float) -> None:
         with slot.lock:
-            if slot.state != "waiting":
+            if slot.state != "waiting" or slot.ended_by_garage:  # its registration is being deleted
                 return
             repo, runner_id, since = slot.repo, slot.registration_id, slot.since
         try:
@@ -254,13 +254,15 @@ class Worker:
 
     def _mark_busy(self, slot: Slot, runner_id: int) -> None:
         with slot.lock:
-            if slot.state == "waiting" and slot.registration_id == runner_id:
+            if (slot.state == "waiting" and slot.registration_id == runner_id
+                    and not slot.ended_by_garage):
                 slot.state, slot.since, slot.seen_busy = "busy", self.clock(), True
 
     def stop_idle(self, slot: Slot, now: float, idle_seconds: float) -> bool:
         """Called on the service's loop thread, the only thread that hands slots out."""
         with slot.lock:
-            if slot.state != "idle" or not slot.container_running or now - slot.since < idle_seconds:
+            if (slot.state != "idle" or not slot.container_running
+                    or now - slot.since < idle_seconds):
                 return False
         result = self.recipe.run("stop", slot.name)
         if result.returncode != 0:
@@ -270,13 +272,18 @@ class Worker:
         return True
 
     def retry(self, slot: Slot, now: float) -> bool:
-        """Clean and stop a broken runner once its backoff has passed, so it restarts known-clean."""
+        """Clean and stop a broken runner once its backoff is over, so it restarts known-clean."""
         with slot.lock:
             if slot.state != "broken" or slot.retry_at is None or now < slot.retry_at:
                 return False
             slot.retry_at = None  # claimed: the loop does not start a second retry of this slot
         for command in ("cleanup", "stop"):
-            result = self.recipe.run(command, slot.name)
+            try:
+                result = self.recipe.run(command, slot.name)
+            except Exception as exc:  # fork's EAGAIN and the like: back off again, never strand it
+                self._broken(slot, f"{command} could not run: {_reason(exc)}",
+                             needs_cleanup=command == "cleanup")
+                return False
             if result.returncode != 0:
                 self._broken(
                     slot, f"{command} exited {result.returncode}: {_last_line(result.output)}",
