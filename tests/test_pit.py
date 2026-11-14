@@ -1291,18 +1291,3 @@ def test_a_worktree_whose_status_cannot_be_read_leaves_no_pit_pass(
     out = capsys.readouterr().out
     assert "could not read" in out.lower(), \
         "say the tree could not be READ, not that it was dirty — they are different facts"
-
-
-# deprecated(0.16.0): the `lane.py` alias resolves the same lock as `pit.py` until 0.17.0.
-def test_the_old_lane_alias_sees_the_same_lock(tmp_path, monkeypatch):
-    project = _repo_with_config(tmp_path / "project")
-    monkeypatch.chdir(project)
-    held = pit.acquire("sess-a", str(project))
-    assert held is not None
-    try:
-        r = subprocess.run([sys.executable, str(ROOT / "scripts" / "lane.py"), "status"],
-                           cwd=project, capture_output=True, text=True)
-    finally:
-        held.release()
-    assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout)["holder"]["session"] == "sess-a"
