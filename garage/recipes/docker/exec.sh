@@ -4,18 +4,20 @@
 # each value from this process's environment, never from the command line.
 set -eu
 : "${PITCALL_RUNNER:?PITCALL_RUNNER is not set}"
-name="pitcall-garage-$PITCALL_RUNNER"
+# This script's own variables start PITCALL_, a prefix no repo env name may use: `-e NAME` reads
+# the value from this shell's environment, where a variable of ours would have overwritten it.
+PITCALL_CONTAINER="pitcall-garage-$PITCALL_RUNNER"
 
 case "${1:-}" in
   setup)
-    exec docker exec -u 0 -e PITCALL_SETUP "$name" sh -c 'eval "$PITCALL_SETUP"'
+    exec docker exec -u 0 -e PITCALL_SETUP "$PITCALL_CONTAINER" sh -c 'eval "$PITCALL_SETUP"'
     ;;
   job)
     set --
-    for var in ${PITCALL_ENV_NAMES:-}; do
-      set -- "$@" -e "$var"
+    for PITCALL_VAR in ${PITCALL_ENV_NAMES:-}; do
+      set -- "$@" -e "$PITCALL_VAR"
     done
-    exec docker exec -u runner -w /home/runner/actions-runner "$@" "$name" ./run.sh
+    exec docker exec -u runner -w /home/runner/actions-runner "$@" "$PITCALL_CONTAINER" ./run.sh
     ;;
   *)
     echo "usage: exec.sh setup|job" >&2

@@ -38,5 +38,6 @@ environment before any step runs.
 - A Docker daemon inside a Docker container needs a privileged container, so every runner's
   container runs `--privileged`. **A job in it can become root on the host.** Join only repos you
   trust like your own code. The LXD recipe's containers are unprivileged.
-- Runners keep caches between jobs, so a job from one repo can read what an earlier job from
-  another repo left in them. Make your copy of `cleanup.sh` remove more if you want less sharing.
+- Runners keep caches between jobs, so a job from one repo can read, or tamper with, what an
+  earlier job from another repo left in them. Make your copy of `cleanup.sh` remove more if you
+  want less sharing.

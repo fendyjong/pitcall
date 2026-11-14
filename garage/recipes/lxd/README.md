@@ -38,5 +38,6 @@ its environment before any step runs.
   user, so that user needs it.
 - The containers are unprivileged: root inside one is not root on the host. Docker runs inside
   through `security.nesting`.
-- Runners keep caches between jobs, so a job from one repo can read what an earlier job from
-  another repo left in them. Make your copy of `cleanup.sh` remove more if you want less sharing.
+- Runners keep caches between jobs, so a job from one repo can read, or tamper with, what an
+  earlier job from another repo left in them. Make your copy of `cleanup.sh` remove more if you
+  want less sharing.
