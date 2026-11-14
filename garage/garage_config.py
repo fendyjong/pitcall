@@ -39,13 +39,20 @@ ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 RESERVED_PREFIXES = ("ACTIONS_RUNNER_", "PITCALL_")
 #: Names the recipe's host side reads. The service hands each repo `env` value to the recipe
 #: under its own name, so a repo setting one of these would steer the host-side `docker` or
-#: `lxc` call instead of its job.
+#: `lxc` call instead of its job. /bin/sh itself resets PPID and OPTIND at startup, and obeys
+#: SHELLOPTS, BASHOPTS and BASH_ENV (SHELLOPTS=xtrace would trace the JIT config into the log).
 HOST_NAMES = frozenset({"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD", "OLDPWD",
-                        "IFS", "ENV", "CDPATH", "LANG", "LANGUAGE", "SNAP"})
+                        "IFS", "ENV", "CDPATH", "LANG", "LANGUAGE", "SNAP",
+                        "PPID", "OPTIND", "SHELLOPTS", "BASHOPTS", "BASH_ENV"})
 HOST_PREFIXES = ("LC_", "LD_", "DOCKER_", "LXD_", "LXC_", "XDG_", "SNAP_")
 #: What no process environment or command line can carry, so Popen refuses it: a NUL, or a lone
 #: surrogate (JSON's "\ud800" reads back as one).
 UNPASSABLE = re.compile("[\x00\ud800-\udfff]")
+#: UTF-8 sizes that keep every string the recipe is handed under Linux's limit of 131072 bytes for
+#: a single one (MAX_ARG_STRLEN), and the whole environment under macOS's 1 MiB.
+MAX_VALUE_BYTES = 65536  # one env value; or setup, as setup_script quotes it into PITCALL_SETUP
+MAX_NAMES_BYTES = 32768  # the env names space-joined, as PITCALL_ENV_NAMES carries them
+MAX_TOTAL_BYTES = 262144  # env names, values and setup together
 
 
 def _positive_int(value) -> bool:
@@ -183,6 +190,10 @@ def parse_runner_section(text: str | None) -> RunnerSection:
     env = section.get("env", {})
     if not isinstance(env, dict):
         raise ConfigError("runner.env: must be an object of string values")
+    # Before any check that quotes a name. A name that passes ENV_NAME_RE is ASCII: len is bytes.
+    if len(" ".join(env)) > MAX_NAMES_BYTES:
+        raise ConfigError(f"runner.env: the names together, space-separated, must be at most "
+                          f"{MAX_NAMES_BYTES} bytes (the garage passes them in one variable)")
     for name, value in env.items():
         if not ENV_NAME_RE.match(name):
             raise ConfigError(f"runner.env: {name!r} is not a plain variable name "
@@ -198,9 +209,19 @@ def parse_runner_section(text: str | None) -> RunnerSection:
             raise ConfigError(f"runner.env.{name}: must be a string")
         if UNPASSABLE.search(value):  # else every runner handed to the repo would break
             raise ConfigError(f"runner.env.{name}: must not hold a NUL or a lone surrogate")
+        if len(value.encode("utf-8")) > MAX_VALUE_BYTES:
+            raise ConfigError(f"runner.env.{name}: must be at most {MAX_VALUE_BYTES} bytes")
     setup = section.get("setup")
     if setup is not None and (not isinstance(setup, str) or not setup.strip()):
         raise ConfigError("runner.setup: must be a non-empty command")
     if setup is not None and UNPASSABLE.search(setup):
         raise ConfigError("runner.setup: must not hold a NUL or a lone surrogate")
+    # setup_script single-quotes setup, which makes each ' five bytes.
+    if setup is not None and len(setup.encode("utf-8")) + 4 * setup.count("'") > MAX_VALUE_BYTES:
+        raise ConfigError(f"runner.setup: must be at most {MAX_VALUE_BYTES} bytes, "
+                          "each ' counting as 5")
+    total = sum(len(name) + len(value.encode("utf-8")) for name, value in env.items())
+    if total + len((setup or "").encode("utf-8")) > MAX_TOTAL_BYTES:
+        raise ConfigError(f"runner: env names, values and setup together must be at most "
+                          f"{MAX_TOTAL_BYTES} bytes")
     return RunnerSection(env=dict(env), setup=setup)

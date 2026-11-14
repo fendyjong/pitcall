@@ -674,7 +674,8 @@ def served(w):
     garage_github.ContentError(".pitcall/config.json on main is not UTF-8"),
     "[" * 100_000,
     json.dumps({"runner": {"env": {"TZ": "UTC\x00"}}}),
-], ids=["not-utf8", "nested", "nul"])
+    json.dumps({"runner": {"env": {"TZ": "x" * 140_000}}}),
+], ids=["not-utf8", "nested", "nul", "140000-byte-value"])
 def test_a_repo_whose_config_cannot_be_used_is_config_invalid_and_the_next_repo_is_served(
         world, bad):
     w = world({A: [LINUX], B: [LINUX]}, runners=1)

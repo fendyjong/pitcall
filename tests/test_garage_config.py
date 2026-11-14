@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "garage"))
 import garage_config  # noqa: E402
 import garage_paths  # noqa: E402
+import garage_recipe  # noqa: E402
 from garage_config import ConfigError, RunnerSection  # noqa: E402
 
 HOME = {"HOME": "/home/op"}
@@ -181,7 +182,8 @@ def test_a_repo_config_that_is_not_json_is_refused():
 @pytest.mark.parametrize("name", ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD",
                                   "OLDPWD", "IFS", "ENV", "CDPATH", "LANG", "LANGUAGE", "SNAP",
                                   "LC_ALL", "LD_PRELOAD", "DOCKER_HOST", "LXD_DIR", "LXC_CONF",
-                                  "XDG_RUNTIME_DIR", "SNAP_NAME"])
+                                  "XDG_RUNTIME_DIR", "SNAP_NAME", "PPID", "OPTIND", "SHELLOPTS",
+                                  "BASHOPTS", "BASH_ENV"])
 def test_an_env_name_the_recipe_host_side_reads_is_refused(name):
     text = json.dumps({"runner": {"env": {name: "x"}}})
     with pytest.raises(garage_config.ConfigError) as err:
@@ -200,7 +202,8 @@ def test_ordinary_env_names_still_pass(name):
 def test_the_host_name_lists_are_pinned():
     assert garage_config.HOST_NAMES == frozenset({
         "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD", "OLDPWD", "IFS", "ENV",
-        "CDPATH", "LANG", "LANGUAGE", "SNAP"})
+        "CDPATH", "LANG", "LANGUAGE", "SNAP", "PPID", "OPTIND", "SHELLOPTS", "BASHOPTS",
+        "BASH_ENV"})
     assert garage_config.HOST_PREFIXES == ("LC_", "LD_", "DOCKER_", "LXD_", "LXC_", "XDG_",
                                            "SNAP_")
 
@@ -317,3 +320,53 @@ def test_text_popen_cannot_pass_is_refused_naming_the_key_never_the_value(make, 
 def test_a_repo_config_json_cannot_hold_is_a_config_error(text, reason):
     with pytest.raises(ConfigError, match=reason):
         garage_config.parse_runner_section(text)
+
+
+# --- review #2 (#59): what the host side cannot pass to a job ---------------------------------
+
+
+@pytest.mark.parametrize("runner, key", [
+    ({"env": {"TZ": "x" * 65537}}, "runner.env.TZ"),
+    ({"env": {"TZ": "\u00e9" * 32769}}, "runner.env.TZ"),  # 32769 characters, 65538 bytes
+    ({"setup": "x" * 65537}, "runner.setup"),
+    ({"setup": "xx" + "'" * 13107}, "runner.setup"),  # quoted, each ' is five bytes: 65537
+    ({"env": {"N" * 32769: ""}}, "runner.env: the names"),
+    ({"env": {"A": "x" * 65536, "B": "x" * 65536, "C": "x" * 65536, "D": "x" * 65536}},
+     "runner: env names, values and setup"),
+    ({"env": {"A": "x" * 65536, "B": "x" * 65536, "C": "x" * 65536}, "setup": "x" * 65534},
+     "runner: env names, values and setup"),
+], ids=["value", "value-utf8", "setup", "setup-quotes", "names", "total", "total-with-setup"])
+def test_a_section_over_a_size_limit_is_refused_naming_the_key_never_the_text(runner, key):
+    with pytest.raises(ConfigError) as err:
+        garage_config.parse_runner_section(json.dumps({"runner": runner}))
+    assert key in str(err.value) and "bytes" in str(err.value)
+    assert "xxxx" not in str(err.value) and "NNNN" not in str(err.value)
+    assert "\u00e9" not in str(err.value) and "''''" not in str(err.value)
+
+
+@pytest.mark.parametrize("runner", [
+    {"env": {"TZ": "x" * 65536}},
+    {"env": {"TZ": "\u00e9" * 32768}},
+    {"setup": "x" * 65536},
+    {"setup": "x" + "'" * 13107},  # quoted: 65536 bytes
+    {"env": {"N" * 32768: ""}},
+    {"env": {"A": "x" * 65535, "B": "x" * 65535, "C": "x" * 65535, "D": "x" * 65535}},
+], ids=["value", "value-utf8", "setup", "setup-quotes", "names", "total"])
+def test_a_section_at_a_size_limit_passes(runner):
+    section = garage_config.parse_runner_section(json.dumps({"runner": runner}))
+    assert section == RunnerSection(env=runner.get("env", {}), setup=runner.get("setup"))
+
+
+def test_the_largest_section_accepted_fits_every_string_the_recipe_is_handed():
+    # Linux refuses an environment string over 131072 bytes, its NUL counted (MAX_ARG_STRLEN).
+    name = "N" * garage_config.MAX_NAMES_BYTES
+    value = "\u00e9" * (garage_config.MAX_VALUE_BYTES // 2)
+    setup = "x" + "'" * (garage_config.MAX_VALUE_BYTES // 5)  # quoted: 65536 bytes
+    section = garage_config.parse_runner_section(
+        json.dumps({"runner": {"env": {name: value}, "setup": setup}}))
+    handed = {}
+    recipe = garage_recipe.Recipe({c: "/r/x.sh" for c in garage_config.RECIPE_COMMANDS},
+                                  base_env={}, popen=lambda argv, env, **kw: handed.update(env))
+    recipe.spawn_job("r1", "octo/app", {**section.env, "ACTIONS_RUNNER_INPUT_JITCONFIG": "jit"})
+    handed["PITCALL_SETUP"] = garage_recipe.setup_script("octo/app", section.setup)
+    assert max(len(f"{k}={v}\0".encode()) for k, v in handed.items()) <= 131072

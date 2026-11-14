@@ -236,12 +236,19 @@ A joined repo may set two things for its jobs in its own `.pitcall/config.json`:
   (letters, digits and `_`, not starting with a digit) and does not start with `ACTIONS_RUNNER_` or
   `PITCALL_`. It is also not a name the recipe's own host-side commands read, because the service
   hands each value to the recipe under its own name: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`,
-  `TMPDIR`, `PWD`, `OLDPWD`, `IFS`, `ENV`, `CDPATH`, `LANG`, `LANGUAGE`, `SNAP`, or a name starting
-  with `LC_`, `LD_`, `DOCKER_`, `LXD_`, `LXC_`, `XDG_` or `SNAP_`. Set those inside the job
-  (a workflow `env:`) instead.
+  `TMPDIR`, `PWD`, `OLDPWD`, `IFS`, `ENV`, `CDPATH`, `LANG`, `LANGUAGE`, `SNAP`, the shell's own
+  `PPID`, `OPTIND`, `SHELLOPTS`, `BASHOPTS` and `BASH_ENV`, or a name starting with `LC_`, `LD_`,
+  `DOCKER_`, `LXD_`, `LXC_`, `XDG_` or `SNAP_`. Set those inside the job (a workflow `env:`)
+  instead. Each value is at most 65536 bytes in UTF-8, and the names together, space-separated, at
+  most 32768 bytes, since the service passes them to the job in one variable.
 - `setup`: a root command run once per runner, before that runner's first job for this repo, and
   again whenever its text changes. The record of which `setup` ran lives inside the runner, so a
-  recreated container runs it again.
+  recreated container runs it again. It is at most 65536 bytes in UTF-8, each `'` counting as five,
+  since the service single-quotes it.
+
+All `env` names, values and `setup` together are at most 262144 bytes in UTF-8. These limits keep
+every variable the recipe is handed under Linux's limit of 131072 bytes for a single variable, and
+the whole environment under macOS's 1 MiB.
 
 Both are optional; a repo with no `runner` section still gets runners. Both are read from the repo's
 **default branch** through the API, never from a checkout, so a pull request cannot change a
@@ -279,7 +286,7 @@ too short for several runners, and what they cut short would be left running, pe
 | Dies mid-job | The runner or its container dies before the job finishes: it is cleaned, its registration deleted, and it is free. The job is never re-run; that is a person's decision, made on GitHub. |
 | Recipe or container failure | A non-zero exit from `start` or `cleanup`, or a runner exiting before it picked up a job, marks that runner broken in `status`, with the error, and it is retried after 1, 2, 4 … minutes, at most 30. The other runners carry on. A runner whose `cleanup` failed gets no new job until a retried `cleanup` succeeds, so no job ever starts in a dirty runner. |
 | Setup failing | `status` shows "setup failing" with the end of its output. That repo's jobs stay queued, the runner is freed (it is not broken), and setup is retried with the same backoff. |
-| Config invalid | A repo whose `.pitcall/config.json` cannot be used shows "config invalid" with the reason: a file that is not UTF-8, is not valid JSON or is nested too deeply, or a `runner` section that breaks the rules (a NUL or a lone surrogate in a value among them). It gets no runner, so its jobs stay queued, until a fixed `.pitcall/config.json` reaches its default branch. The other repos carry on. |
+| Config invalid | A repo whose `.pitcall/config.json` cannot be used shows "config invalid" with the reason: a file that is not UTF-8, is not valid JSON or is nested too deeply, or a `runner` section that breaks the rules (a NUL or a lone surrogate in a value, a value or `setup` over 65536 bytes, the names together over 32768, or names, values and `setup` together over 262144, among them). It gets no runner, so its jobs stay queued, until a fixed `.pitcall/config.json` reaches its default branch. The other repos carry on. |
 | Token or repo access | A 401, 403 or 404 for a repo marks it blocked, with the reason; the others carry on, and the repo is checked again with backoff. A missing `.pitcall/config.json` is not an access problem, just a repo with no `runner` section. |
 | GitHub errors and rate limits | The service backs off on a 5xx. On a primary rate limit it waits until the `x-ratelimit-reset` time; on a secondary one it honours `retry-after`. |
 | Crash or reboot | The service manager restarts the service, which recovers before it polls: it runs `cleanup` on every runner, then deletes every registration in the joined repos whose name starts with `pitcall-<id>-`, since no runner is live right after a start. Cleaning first ends any job the crash orphaned before its registration goes. |
