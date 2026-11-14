@@ -35,10 +35,6 @@ silently bypasses the whole route:
 gh issue view <n> --repo <owner>/<repo> --json labels --jq '.labels[].name'
 ```
 
-<!-- deprecated(0.16.0) -->
-An issue still labelled `solution-ready` is treated exactly as `green-flag` until 0.17.0, and
-is never relabelled. On such an issue the label to remove is `solution-ready`.
-
 Find the spec **by its `# Spec:` first line, never by position** — comments accumulate, so the
 newest is not the spec and neither, once anyone has replied, is the first:
 

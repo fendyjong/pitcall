@@ -1291,3 +1291,7 @@ def test_a_worktree_whose_status_cannot_be_read_leaves_no_pit_pass(
     out = capsys.readouterr().out
     assert "could not read" in out.lower(), \
         "say the tree could not be READ, not that it was dirty — they are different facts"
+
+
+def test_the_pit_lane_keeps_its_evidence_in_one_directory():
+    assert not hasattr(pit, "rec" + "eipts_dir")
