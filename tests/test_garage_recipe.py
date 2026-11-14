@@ -265,7 +265,9 @@ FAKE_TOOL = """#!/bin/sh
 printf '%s\\n' "$@" >> "$FAKE_LOG"
 printf -- '--\\n' >> "$FAKE_LOG"
 printf '%s\\n' "${ACTIONS_RUNNER_INPUT_JITCONFIG:-}" >> "$FAKE_ENV"
+[ -z "${FAKE_DUMP:-}" ] || env > "$FAKE_DUMP"
 case "$*" in
+  "container inspect -f"*) echo "${FAKE_RUNNING:-false}"; exit "${FAKE_MISSING:-0}" ;;
   "container inspect"*) exit "${FAKE_MISSING:-0}" ;;
   "info "*)
     # A real lxc translates its output unless the locale is C.
@@ -398,3 +400,85 @@ def test_both_recipes_run_the_same_script_inside_their_container(command):
     docker, lxd = (RECIPES / kind / f"{command}.sh" for kind in ("docker", "lxd"))
     assert heredoc(docker) == heredoc(lxd), (
         f"{docker.relative_to(ROOT)} and {lxd.relative_to(ROOT)} differ inside their <<'EOF' script")
+
+
+# --- sweep (#59) -------------------------------------------------------------------------------
+
+
+def test_the_lxd_job_keeps_a_values_trailing_newlines(tmp_path):
+    value = "two lines\nand a blank one\n\n"
+    env = fake_tools(tmp_path, PITCALL_REPO="octo/app", PITCALL_ENV_NAMES="NOTE", NOTE=value)
+    result = run_recipe("lxd", "exec", ["job"], env)
+    assert result.returncode == 0, result.stderr
+    exports = (tmp_path / "stdin").read_text().removesuffix("exec ./run.sh\n")
+    shown = subprocess.run(["/bin/sh", "-c", exports + 'printf "%s|" "$NOTE"'],
+                           capture_output=True, text=True).stdout
+    assert shown == value + "|"
+
+
+def test_the_docker_start_creates_a_missing_runner_with_its_own_network_and_docker(tmp_path):
+    env = fake_tools(tmp_path, FAKE_MISSING="1")
+    result = run_recipe("docker", "start", [], env)
+    assert result.returncode == 0, result.stderr
+    calls = recorded_calls(tmp_path)
+    created = ("run\n-d\n--name\npitcall-garage-r1\n--hostname\npitcall-garage-r1\n"
+               "--network\npitcall-garage-r1\n--privileged\n--init\n"
+               "-v\npitcall-garage-r1-docker:/var/lib/docker\nubuntu:24.04\nsleep\ninfinity\n")
+    assert created in calls
+    assert "start\npitcall-garage-r1\n" in calls
+    assert calls[-2:] == ["exec\n-u\n0\npitcall-garage-r1\npgrep\n-x\ndockerd\n",
+                          "exec\n-u\n0\npitcall-garage-r1\ndocker\ninfo\n"]
+    assert (tmp_path / "stdin").read_text() == heredoc(RECIPES / "docker" / "start.sh")
+
+
+def test_the_docker_start_leaves_a_running_container_running(tmp_path):
+    env = fake_tools(tmp_path, FAKE_RUNNING="true")
+    result = run_recipe("docker", "start", [], env)
+    assert result.returncode == 0, result.stderr
+    calls = recorded_calls(tmp_path)
+    assert "start\npitcall-garage-r1\n" not in calls
+    assert not any(c.startswith("run\n") for c in calls)
+
+
+@pytest.mark.parametrize("kind", ["docker", "lxd"])
+def test_cleanup_on_an_existing_runner_starts_it_then_cleans_inside_it(tmp_path, kind):
+    env = fake_tools(tmp_path, FAKE_STATUS="RUNNING", FAKE_RUNNING="true")
+    result = run_recipe(kind, "cleanup", [], env)
+    assert result.returncode == 0, result.stderr
+    # start.sh's install script first (it is idempotent), then the clean, both on stdin.
+    assert (tmp_path / "stdin").read_text() == (heredoc(RECIPES / kind / "start.sh")
+                                               + heredoc(RECIPES / kind / "cleanup.sh"))
+
+
+@pytest.mark.parametrize("kind", ["docker", "lxd"])
+def test_a_recipe_readme_says_a_later_job_can_read_or_tamper_with_what_is_left(kind):
+    text = " ".join((RECIPES / kind / "README.md").read_text().split())
+    assert ("a job from one repo can read, or tamper with, what an earlier job from another repo "
+            "left in them") in text
+
+
+#: Repo env names that are also the names the exec scripts used for their own shell variables.
+CLASHING = {"value": "repo-value", "var": "repo-var", "name": "repo-name", "TZ": "UTC"}
+
+
+def test_the_lxd_job_carries_a_repo_value_named_like_a_script_variable_intact(tmp_path):
+    env = fake_tools(tmp_path, PITCALL_REPO="octo/app", PITCALL_ENV_NAMES=" ".join(CLASHING),
+                     **CLASHING)
+    result = run_recipe("lxd", "exec", ["job"], env)
+    assert result.returncode == 0, result.stderr
+    exports = (tmp_path / "stdin").read_text().removesuffix("exec ./run.sh\n")
+    shown = subprocess.run(["/bin/sh", "-c", exports + 'printf "%s|%s|%s|%s" "$value" "$var" '
+                            '"$name" "$TZ"'], capture_output=True, text=True).stdout
+    assert shown == "repo-value|repo-var|repo-name|UTC"
+    assert "pitcall-garage-r1" in logged_argv(tmp_path)
+
+
+def test_the_docker_job_carries_a_repo_value_named_like_a_script_variable_intact(tmp_path):
+    env = fake_tools(tmp_path, PITCALL_REPO="octo/app", PITCALL_ENV_NAMES=" ".join(CLASHING),
+                     FAKE_DUMP=str(tmp_path / "dump"), **CLASHING)
+    result = run_recipe("docker", "exec", ["job"], env)
+    assert result.returncode == 0, result.stderr
+    seen = dict(line.split("=", 1) for line in (tmp_path / "dump").read_text().splitlines()
+                if "=" in line)
+    assert {key: seen.get(key) for key in CLASHING} == CLASHING  # what `docker exec -e` reads
+    assert "pitcall-garage-r1" in logged_argv(tmp_path)
