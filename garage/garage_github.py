@@ -13,6 +13,7 @@ which costs no rate limit, and the cached body is returned instead.
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import time
@@ -36,7 +37,8 @@ def check_token_file(path: Path) -> None:
         raise TokenFileError(
             f"no token file at {path}: put the token in it, then chmod 600 {path}") from None
     if st.st_uid != os.getuid():
-        raise TokenFileError(f"{path} is not owned by you; it must be yours alone: chmod 600 {path}")
+        raise TokenFileError(
+            f"{path} is not owned by you; it must be yours alone: chmod 600 {path}")
     if st.st_mode & 0o077:
         raise TokenFileError(f"{path} is readable or writable by others: chmod 600 {path}")
 
@@ -64,6 +66,30 @@ class RateLimited(ApiError):
         self.retry_at = retry_at
 
 
+class TransportError(OSError):
+    """A reply cut off or garbled on the wire (http.client's IncompleteRead, BadStatusLine). As
+    transient as a dropped connection, so it is the OSError every caller already handles. Its text
+    is the exception's type and the request path: the reply's own text could quote the body."""
+
+
+class ContentError(ValueError):
+    """A file on GitHub whose bytes are not UTF-8: the repo's own content, not a failed request."""
+
+
+class ApiOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect only to `API`, so the token never leaves it.
+
+    urllib's own handler copies every header, `Authorization` too, to wherever a redirect points.
+    Refused, the redirect surfaces as an HTTPError with its 3xx status, which `request` raises as
+    ApiError.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl)[:2] != urllib.parse.urlsplit(API)[:2]:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _number(value) -> float | None:
     try:
         return float(value)
@@ -80,7 +106,8 @@ PROBES = {
 
 
 class GitHub:
-    def __init__(self, token: str, opener=urllib.request.urlopen, clock=time.time):
+    def __init__(self, token: str, opener=urllib.request.build_opener(ApiOnlyRedirects).open,
+                 clock=time.time):
         self._token = token
         self._opener = opener
         self._clock = clock
@@ -108,20 +135,26 @@ class GitHub:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            resp = self._opener(req, timeout=30)
-        except urllib.error.HTTPError as err:
-            resp = err  # an error status is read like any other response
-        with resp:
-            status = resp.getcode()
-            got = resp.headers
-            raw = resp.read()
+            try:
+                resp = self._opener(req, timeout=30)
+            except urllib.error.HTTPError as err:
+                resp = err  # an error status is read like any other response
+            with resp:
+                status = resp.getcode()
+                got = resp.headers
+                raw = resp.read()
+        except http.client.HTTPException as exc:
+            raise TransportError(f"{type(exc).__name__} on {path}") from None
         expiration = got.get("GitHub-Authentication-Token-Expiration")
         if expiration:
             self.token_expiration = expiration
         if status == 304 and cached:
             return 200, cached[1]
         if 200 <= status < 300:
-            parsed = json.loads(raw) if raw else None
+            try:
+                parsed = json.loads(raw) if raw else None
+            except ValueError:  # JSONDecodeError, UnicodeDecodeError: not GitHub's JSON
+                raise ApiError(status, path) from None
             etag = got.get("ETag")
             if conditional and etag:
                 self._etags[url] = (etag, parsed)
@@ -158,7 +191,10 @@ class GitHub:
         body = self._contents(repo, path, ref)
         if not isinstance(body, dict) or "content" not in body:
             return None
-        return base64.b64decode(body["content"]).decode("utf-8")
+        try:
+            return base64.b64decode(body["content"]).decode("utf-8")
+        except UnicodeDecodeError:
+            raise ContentError(f"{path} on {ref} is not UTF-8") from None
 
     def list_dir(self, repo: str, path: str, ref: str) -> list[str] | None:
         body = self._contents(repo, path, ref)
@@ -177,9 +213,10 @@ class GitHub:
                 used.add(API + path)
                 _, body = self.request("GET", path, conditional=True)
                 jobs.extend((body or {}).get("jobs", []))
-        # Forget finished runs' cached job lists, or the cache grows for as long as the service runs.
+        # Forget finished runs' cached job lists, or the cache grows as long as the service runs.
         prefix = f"{API}/repos/{repo}/actions/runs/"
-        for url in [u for u in self._etags if u.startswith(prefix) and "/jobs?" in u and u not in used]:
+        stale = [u for u in self._etags if u.startswith(prefix) and "/jobs?" in u and u not in used]
+        for url in stale:
             del self._etags[url]
         return jobs
 

@@ -1,11 +1,14 @@
 """The garage's GitHub client (Task 4). No network: every response is scripted."""
 
 import base64
+import http.client
 import io
 import json
 import os
 import sys
 import urllib.error
+import urllib.request
+import urllib.response
 from email.message import Message
 from pathlib import Path
 
@@ -256,3 +259,108 @@ def test_probe_returns_the_error_instead_of_raising():
     assert opener.requests[0].full_url.endswith("/actions/runners/registration-token")
     err = gh.probe("octo/app", "admin-read")
     assert isinstance(err, ApiError) and err.status == 403
+
+
+# --- sweep (#59): redirects, and what a garbled reply raises ----------------------------------
+
+
+class Transport(urllib.request.HTTPSHandler):
+    """The HTTPS layer under a real urllib opener: answers from `routes`, recording each URL with
+    the Authorization header it carried. Nothing leaves the process."""
+
+    def __init__(self, routes):
+        super().__init__()
+        self.routes, self.seen = routes, []
+
+    def https_open(self, req):
+        self.seen.append((req.full_url, req.get_header("Authorization")))
+        status, extra = self.routes[req.full_url]
+        resp = urllib.response.addinfourl(io.BytesIO(b"{}"), headers(**extra), req.full_url,
+                                          status)
+        resp.msg = "scripted"
+        return resp
+
+
+OFF_HOST = {
+    "https://api.github.com/repos/octo/app": (302, {"Location": "https://elsewhere.example/x"}),
+    "https://elsewhere.example/x": (200, {}),
+}
+
+
+def test_a_redirect_off_api_github_com_is_refused_and_never_carries_the_token():
+    stock = Transport(OFF_HOST)  # urllib's own redirect handler copies every header across
+    GitHub(TOKEN, opener=urllib.request.build_opener(stock).open).repo_info("octo/app")
+    assert ("https://elsewhere.example/x", f"Bearer {TOKEN}") in stock.seen
+    guarded = Transport(OFF_HOST)
+    gh = GitHub(TOKEN, opener=urllib.request.build_opener(garage_github.ApiOnlyRedirects,
+                                                          guarded).open)
+    with pytest.raises(ApiError) as err:
+        gh.repo_info("octo/app")
+    assert err.value.status == 302
+    assert [url for url, _ in guarded.seen] == ["https://api.github.com/repos/octo/app"]
+
+
+def test_a_redirect_within_api_github_com_is_followed():
+    moved = Transport({
+        "https://api.github.com/repos/octo/app": (
+            301, {"Location": "https://api.github.com/repositories/7"}),
+        "https://api.github.com/repositories/7": (200, {}),
+    })
+    gh = GitHub(TOKEN, opener=urllib.request.build_opener(garage_github.ApiOnlyRedirects,
+                                                          moved).open)
+    assert gh.repo_info("octo/app") == {}
+    assert moved.seen[1] == ("https://api.github.com/repositories/7", f"Bearer {TOKEN}")
+
+
+def test_a_redirect_to_plain_http_is_refused_even_on_api_github_com():
+    req = urllib.request.Request("https://api.github.com/repos/octo/app")
+    assert garage_github.ApiOnlyRedirects().redirect_request(
+        req, None, 302, "Found", Message(), "http://api.github.com/repos/octo/app") is None
+
+
+def test_the_default_opener_refuses_redirects_off_api_github_com():
+    opener = GitHub(TOKEN)._opener.__self__
+    assert any(isinstance(h, garage_github.ApiOnlyRedirects) for h in opener.handlers)
+
+
+class CutOff(Response):
+    def read(self):
+        raise http.client.IncompleteRead(b"partial-reply-that-must-not-leak")
+
+
+def raising(exc):
+    def opener(req, timeout=None):
+        raise exc
+    return opener
+
+
+@pytest.mark.parametrize("make", [
+    lambda: GitHub(TOKEN, opener=raising(http.client.BadStatusLine("line-that-must-not-leak"))),
+    lambda: client(CutOff(200))[0],
+], ids=["bad-status-line", "incomplete-read"])
+def test_a_garbled_reply_is_a_transport_error_every_caller_catches_as_oserror(make):
+    with pytest.raises(OSError) as err:
+        make().repo_info("octo/app")
+    assert isinstance(err.value, garage_github.TransportError)
+    assert str(err.value).endswith(" on /repos/octo/app")
+    assert "must-not-leak" not in str(err.value)
+
+
+@pytest.mark.parametrize("raw", [b"<html>a proxy's error page</html>", b'{"name": "caf\xe9"}'],
+                         ids=["not-json", "not-utf8"])
+def test_a_2xx_body_that_is_not_json_is_an_api_error(raw):
+    resp = Response(200)
+    resp.raw = raw
+    gh, _ = client(resp)
+    with pytest.raises(ApiError) as err:
+        gh.repo_info("octo/app")
+    assert str(err.value) == "GitHub 200 on /repos/octo/app"
+
+
+def test_a_file_that_is_not_utf8_is_a_content_error_naming_the_file_not_its_bytes():
+    content = base64.b64encode(b'{"runner": "caf\xe9 bytes-that-must-not-leak"}').decode()
+    gh, _ = client(Response(200, {"type": "file", "content": content}))
+    with pytest.raises(ValueError) as err:
+        gh.file_text("octo/app", ".pitcall/config.json", "main")
+    assert type(err.value).__name__ == "ContentError"
+    assert str(err.value) == ".pitcall/config.json on main is not UTF-8"
