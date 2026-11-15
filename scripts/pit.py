@@ -188,14 +188,6 @@ def pit_passes_dir() -> Path:
     return d
 
 
-def receipts_dir() -> Path:
-    # deprecated(0.16.0): where 0.15.0's `lane run` filed receipts. Nothing writes
-    # here any more; `race finish` still reads it until 0.17.0.
-    d = lane_dir() / "receipts"
-    d.mkdir(exist_ok=True)
-    return d
-
-
 @contextmanager
 def _guard(d: Path):
     """Serialise every mutation of the lock and the queue.

@@ -418,21 +418,25 @@ def test_the_sweep_heading_ends_the_previous_tasks_metadata(tmp_path):
     assert "app/stray.py" not in r.stdout
 
 
-# deprecated(0.16.0): a 0.15.0 plan's `## Waves` table is judged the same until 0.17.0.
-def test_a_waves_table_still_qualifies_with_one_notice(tmp_path):
-    old = VALID.replace("## Laps", "## Waves").replace("| Lap |", "| Wave |")
-    r = run_script("qualifying", str(_plan(tmp_path, old)), cwd=tmp_path)
-    assert r.returncode == 0, r.stderr
-    assert r.stderr == "pitcall: a '## Waves' table is deprecated and goes in 0.17.0; use '## Laps'\n"
-    assert r.stdout.endswith("tasks in 2 laps — valid\n")
+def test_a_plan_whose_only_table_has_the_old_heading_is_refused(tmp_path):
+    old = "Wa" + "ve"
+    plan = VALID.replace("## Laps", "## " + old + "s").replace("| Lap |", "| " + old + " |")
+    r = run_script("qualifying", str(_plan(tmp_path, plan)), cwd=tmp_path)
+    assert r.returncode == 1
+    assert "no ## Laps table" in r.stderr
+    assert "deprecated" not in r.stderr
 
 
-# deprecated(0.16.0): a plan stating its laps under both headings is refused.
-def test_a_plan_with_both_tables_is_refused(tmp_path):
-    both = VALID + "\n## Waves\n\n| Wave | Tasks | Rationale |\n|---|---|---|\n| 1 | 1, 2, 3 | all |\n"
-    r = run_script("qualifying", str(_plan(tmp_path, both)), cwd=tmp_path)
+def test_a_plan_with_two_lap_tables_is_refused(tmp_path):
+    twice = VALID + "\n## Laps\n\n| Lap | Tasks | Rationale |\n|---|---|---|\n| 1 | 1, 2, 3 | all |\n"
+    r = run_script("qualifying", str(_plan(tmp_path, twice)), cwd=tmp_path)
     assert r.returncode == 1
     assert "2 lap tables" in r.stderr
+
+
+def test_plan_tasks_takes_no_flag(tmp_path):
+    r = run_script("plan-tasks", "--" + "validate", str(_plan(tmp_path, VALID)), cwd=tmp_path)
+    assert (r.returncode, r.stderr) == (2, "usage: plan-tasks PLAN_FILE\n")
 
 
 def test_a_laps_table_prints_no_notice(tmp_path):

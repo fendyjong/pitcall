@@ -27,10 +27,6 @@ LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
 EXTENSION_RE = re.compile(r"\.\w+$")
 LAPS_HEADING_RE = re.compile(r"^##\s+Laps\s*$")
 
-# deprecated(0.16.0): a plan written for 0.15.0 heads the table `## Waves`; read until 0.17.0.
-OLD_LAPS_HEADING_RE = re.compile(r"^##\s+Waves\s*$")
-OLD_LAPS_HEADING = "## Waves"
-
 SWEEP_HEADING_RE = re.compile(r"^##\s+Sweep\s*$")
 HEADING_RE = re.compile(r"^#{1,6}\s")
 LAP_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|\s*([0-9,\s]*?)\s*\|")
@@ -257,10 +253,6 @@ def parse_laps(text: str) -> tuple[list[tuple[int, list[int]]] | None, list[str]
     for line in unfenced_lines(text):
         if LAPS_HEADING_RE.match(line):
             headings.append("## Laps")
-            in_section = True
-            continue
-        if OLD_LAPS_HEADING_RE.match(line):
-            headings.append(OLD_LAPS_HEADING)
             in_section = True
             continue
         if HEADING_RE.match(line):
@@ -523,11 +515,6 @@ def qualify(plan: Path) -> int:
 
     rows, headings = parse_laps(text)
 
-    if OLD_LAPS_HEADING in headings:
-        # deprecated(0.16.0): a 0.15.0 plan is judged the same, with one line saying so.
-        print("pitcall: a '## Waves' table is deprecated and goes in 0.17.0; use '## Laps'",
-              file=sys.stderr)
-
     problems = []
     if len(headings) > 1:
         problems.append(
@@ -546,13 +533,6 @@ def qualify(plan: Path) -> int:
 
 def main() -> int:
     args = sys.argv[1:]
-
-    if args and args[0] == "--validate":
-        # deprecated(0.16.0): `plan-tasks --validate` is `qualifying` now; the
-        # mapping lives in the plugin's alias.py, and this forward goes in 0.17.0.
-        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
-        import alias
-        alias.old_skill_script("plan-tasks", args)
 
     if len(args) != 1:
         print("usage: plan-tasks PLAN_FILE", file=sys.stderr)

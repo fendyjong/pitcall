@@ -1648,34 +1648,19 @@ def test_the_retired_script_name_is_gone():
         assert not (skill / "scripts" / retired).exists()
 
 
-# deprecated(0.16.0): a receipt filed by 0.15.0's lane is still evidence until 0.17.0.
-def test_finish_lands_on_a_receipt_filed_before_the_rename(run, gh):
-    d = run["main"] / ".pitcall" / "receipts"
+def test_finish_takes_evidence_from_the_pit_passes_directory_only(run, gh):
+    d = run["main"] / ".pitcall" / ("rec" + "eipts")
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{gh['head']}.json").write_text(json.dumps(pit_pass_body(gh["head"], run["plan_wt"])))
     r = race(run["plan_wt"], "finish", PLAN, env=gh["env"])
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert merges(gh), "the PR was never merged"
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no pit pass" in r.stderr
+    assert merges(gh) == []
 
 
-# deprecated(0.16.0): a run begun on 0.15.0 is checked from its old scratch and lines until 0.17.0.
-def test_check_reads_a_run_begun_before_the_rename(run):
-    old = run["plan_wt"] / ".pitcall" / "wdd" / SLUG
-    old.parent.mkdir(parents=True, exist_ok=True)
-    (run["plan_wt"] / ".pitcall" / "race" / SLUG).rename(old)
-    text = (old / "progress.md").read_text().replace("# Race ledger — ", "# WDD ledger — ")
-    (old / "progress.md").write_text(re.sub(r"^Lap (\d+):", r"Wave \1:", text, flags=re.M))
+def test_check_refuses_a_ledger_in_the_old_spelling(run):
+    ledger = run["plan_wt"] / ".pitcall" / "race" / SLUG / "progress.md"
+    ledger.write_text(re.sub(r"^Lap (\d+):", "Wa" + r"ve \1:", ledger.read_text(), flags=re.M))
     r = race(run["plan_wt"], "check", PLAN)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "verification OK" in r.stdout
-
-
-# deprecated(0.16.0): pack-down removes the old scratch a run began in until 0.17.0.
-def test_pack_down_removes_a_workspace_begun_before_the_rename(run):
-    git("push", "-q", "origin", "planbranch:master", cwd=run["plan_wt"])
-    old = run["plan_wt"] / ".pitcall" / "wdd" / SLUG
-    old.parent.mkdir(parents=True, exist_ok=True)
-    (run["plan_wt"] / ".pitcall" / "race" / SLUG).rename(old)
-    r = race(run["plan_wt"], "pack-down", PLAN)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert not old.exists()
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "ledger records no dispatched lap" in r.stderr

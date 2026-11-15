@@ -43,8 +43,7 @@ STOP_TASK = re.compile(r"^Task (\d+): BLOCKED\b")
 STOP_REVIEW = re.compile(r"^Final review #(\d+): BLOCKED\b")
 TASK_COMPLETE = re.compile(r"^Task (\d+): complete\b")
 
-# deprecated(0.16.0): `Wave <N>:` is how a run begun on 0.15.0 wrote it; read until 0.17.0.
-LAP_DISPATCHED = re.compile(r"^(?:Lap|Wave) (\d+): dispatched\b")
+LAP_DISPATCHED = re.compile(r"^Lap (\d+): dispatched\b")
 
 
 # Every format SKILL.md's Ledger section documents for the sweep, keyed by
@@ -73,8 +72,7 @@ FORMATS: dict[str, re.Pattern] = {
     "Note: ": re.compile(rf"^Note: ({ONE_LINER}) — (.+)$"),
 }
 
-# deprecated(0.16.0): `Sweep plan: waves` is how a run begun on 0.15.0 wrote it; read until 0.17.0.
-FORMATS["Sweep plan: "] = re.compile(r"^Sweep plan: (?:laps|waves) (\d+)-(\d+)$")
+FORMATS["Sweep plan: "] = re.compile(r"^Sweep plan: laps (\d+)-(\d+)$")
 
 COMMANDS = ("stops", "sweep-guard", "lint", "closes", "sweep-section", "verdict", "chain")
 

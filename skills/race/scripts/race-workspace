@@ -65,12 +65,6 @@ esac
 
 base="$root/.pitcall/race"
 
-# deprecated(0.16.0): a run begun on 0.15.0 keeps its scratch where it began --
-# a ledger never moves mid-run, or two places would hold the evidence. Read until 0.17.0.
-if [ ! -d "$base/$slug" ] && [ -d "$root/.pitcall/wdd/$slug" ]; then
-  base="$root/.pitcall/wdd"
-fi
-
 dir="$base/$slug"
 mkdir -p "$dir"
 printf '*\n' > "$base/.gitignore"

@@ -1,0 +1,14 @@
+{
+  "runners": 3,
+  "recipe": {
+    "start": "~/.local/share/pitcall/garage/recipes/docker/start.sh",
+    "stop": "~/.local/share/pitcall/garage/recipes/docker/stop.sh",
+    "exec": "~/.local/share/pitcall/garage/recipes/docker/exec.sh",
+    "cleanup": "~/.local/share/pitcall/garage/recipes/docker/cleanup.sh"
+  },
+  "idle_timeout_minutes": 10,
+  "poll_seconds": 15,
+  "pickup_deadline_minutes": 5,
+  "token_file": "~/.config/pitcall/garage.token",
+  "repos": {}
+}

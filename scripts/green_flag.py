@@ -49,13 +49,9 @@ import tracker  # noqa: E402
 #: Applied by a maintainer. Authorizes; never asserts correctness.
 LABEL = "green-flag"
 
-# deprecated(0.16.0): the label's 0.15.0 name still authorizes until 0.17.0.
-OLD_LABEL = "solution-ready"
-
 
 def authorized_by_label(labels) -> bool:
-    # deprecated(0.16.0): `solution-ready` authorizes as `green-flag` does until 0.17.0.
-    return LABEL in labels or OLD_LABEL in labels
+    return LABEL in labels
 
 
 #: `author_association` values that put the issue's author on the maintainer
@@ -329,12 +325,6 @@ def main(argv=None):
     state = issue_state(args.issue, repo)
     body, labels = state["body"] or "", state["labels"]
     association = state.get("association")
-
-    if LABEL not in labels and OLD_LABEL in labels:
-        # deprecated(0.16.0): the label is renamed; the issue is never relabelled.
-        print(f"pitcall: label '{OLD_LABEL}' is deprecated and goes in 0.17.0; use '{LABEL}'",
-              file=sys.stderr)
-
 
     action, detail = decide(body, labels, association, None)
     if action == "refuse":

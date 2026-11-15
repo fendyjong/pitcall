@@ -1,7 +1,7 @@
 ---
 description: Write .pitcall/config.json by executing this plugin's own configuration reference, key by key, proposing an evidence-backed value for each key this project justifies
 argument-hint: [--force]
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash(git rev-parse:*), Bash(git symbolic-ref:*), Bash(rm:*), Bash(gh pr list:*), Bash(gh api repos/*/milestones)
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash(git rev-parse:*), Bash(git symbolic-ref:*), Bash(rm:*), Bash(gh pr list:*), Bash(gh api repos/*/milestones), Bash(test -f:*)
 ---
 
 Configure this project for the plugin by writing `.pitcall/config.json`. This command
@@ -43,10 +43,6 @@ If `--force` is present, continue. Remember which path was found, and whether it
 legacy `pitcall.config.json` — Step 8 needs both facts, because overwriting the legacy file
 in place is not an option: only `.pitcall/config.json` is ever written, so a legacy config
 found here is migrated, not overwritten.
-
-<!-- deprecated(0.16.0) -->
-A config that still has `bringup` or `teardown` is written back with those values under
-`out_lap` and `in_lap`, and the old keys are dropped.
 
 ---
 
@@ -119,8 +115,8 @@ default this command is entitled to make for it.
 # Step 6 — Propose the remaining optional and declared keys
 
 For `regenerated_paths`, `refresh_commands`, `migration_homes`, `status_labels`, `in_lap`,
-`branch_prefix`, `backlog_milestone`, `claim_expiry_hours`, and `bounded_via_wdd`: follow each
-key's own "how to recognise the right value" guidance in
+`branch_prefix`, `backlog_milestone`, `claim_expiry_hours`, `bounded_via_wdd`, and `runner`:
+follow each key's own "how to recognise the right value" guidance in
 `${CLAUDE_PLUGIN_ROOT}/docs/configuration.md`. Propose
 with evidence exactly as in Step 4, and leave unset and record what you looked at wherever the
 project gives you nothing to stand on. (`worktree_dir` and `plan_dir` moved to Step 4 — both are
@@ -169,6 +165,21 @@ from a file that went missing.
 
 ---
 
+# Step 9 — Offer to join this machine's garage
+
+Check whether this machine has a garage config:
+`test -f "${XDG_CONFIG_HOME:-$HOME/.config}/pitcall/garage.json"`.
+
+- Absent → say nothing about the garage, here or in the output.
+- Present → offer, once, to run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/garage.py join` for this
+  checkout. Run it only if your human partner says yes. Without `--yes` it writes nothing: it
+  prints the repo's visibility, whether the token covers it, the label sets it found and the
+  trust line. Relay that output whole, and run it again with `--yes` only on a second, explicit
+  yes. Never pass `--allow-public` on your own: a public repo is joined only when your human
+  partner asks for it by name, after reading the fork pull request risk `garage join` printed.
+
+---
+
 # Output
 
 Report, in this order:
@@ -182,6 +193,8 @@ Report, in this order:
    or that neither was needed.
 5. If Step 8 migrated a legacy config, say so explicitly, naming both paths — the legacy file
    that was removed and the new one that replaced it.
+6. If Step 9 found a garage config: that you offered `garage join`, and what it printed or
+   wrote — or that the offer was declined. Without a garage config, nothing.
 
 If Step 1 stopped the command, report only that: which config exists, and that `--force`
 would migrate or overwrite it (per Step 1's distinction).

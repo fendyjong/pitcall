@@ -175,17 +175,6 @@ print(pit.pit_passes_dir())
 PY
 }
 
-# deprecated(0.16.0): where 0.15.0's lane filed receipts; still evidence until 0.17.0.
-# `pit.receipts_dir()` creates an empty `.pitcall/receipts/` when absent: harmless, machine-local.
-receipts_dir() {
-  python3 - "$HERE" <<'PY'
-import pathlib, sys
-sys.path.insert(0, str(pathlib.Path(sys.argv[1]).resolve().parents[2] / "scripts"))
-import pit
-print(pit.receipts_dir())
-PY
-}
-
 fail=0
 # --- the PR must close the issue its branch was cut for ----------------------
 # `--fill` composes the body from commit subjects and nothing else, so a merged
@@ -445,9 +434,8 @@ if [ ! -f "$LEDGER" ]; then
 else
   head -1 "$LEDGER" | grep -qF "$PLAN" || bad "ledger's first line names a different plan — that is another run's, never yours to finish"
 
-  # deprecated(0.16.0): a run begun on 0.15.0 wrote `Wave <N>:`; read until 0.17.0.
-  dispatched="$(grep -oE '^(Lap|Wave) ([0-9]+): dispatched' "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
-  integrated="$(grep -oE '^(Lap|Wave) ([0-9]+): integrated'  "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
+  dispatched="$(grep -oE '^Lap ([0-9]+): dispatched' "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
+  integrated="$(grep -oE '^Lap ([0-9]+): integrated'  "$LEDGER" | grep -oE '[0-9]+' | sort -un || true)"
 
   [ -n "$dispatched" ] || bad "ledger records no dispatched lap"
   for w in $dispatched; do
@@ -707,11 +695,6 @@ PY
     exit 1
   fi
   PASS="$PASSES/$PR_SHA.json"
-
-  # deprecated(0.16.0): a receipt filed by 0.15.0's lane is evidence too, until 0.17.0.
-  if [ ! -f "$PASS" ] && LEGACY="$(receipts_dir)" && [ -f "$LEGACY/$PR_SHA.json" ]; then
-    PASS="$LEGACY/$PR_SHA.json"
-  fi
 
   if [ ! -f "$PASS" ]; then
     echo "race: no pit pass for $PR_SHA -- refusing to merge." >&2

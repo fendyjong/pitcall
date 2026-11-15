@@ -108,21 +108,11 @@ def test_workspace_accepts_a_plain_checkout_named_like_a_task_worktree(repo, tmp
     assert r.stdout.strip().endswith("/.pitcall/race/plan")
 
 
-# deprecated(0.16.0): a run begun on 0.15.0 carries on in its old scratch until 0.17.0.
-def test_a_run_begun_in_the_old_directory_carries_on_there(repo):
+def test_a_directory_in_the_old_scratch_home_is_ignored(repo):
     plan = _plan(repo)
-    (repo.path / ".pitcall" / "wdd" / "plan").mkdir(parents=True)
+    (repo.path / ".pitcall" / ("w" + "dd") / "plan").mkdir(parents=True)
     r = run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip().endswith("/.pitcall/wdd/plan")
-
-
-# deprecated(0.16.0): when both exist the new directory wins -- it is the newer run's.
-def test_the_new_directory_wins_when_both_exist(repo):
-    plan = _plan(repo)
-    (repo.path / ".pitcall" / "wdd" / "plan").mkdir(parents=True)
-    (repo.path / ".pitcall" / "race" / "plan").mkdir(parents=True)
-    r = run_script("race-workspace", str(plan), cwd=repo.path, env=repo.env)
     assert r.stdout.strip().endswith("/.pitcall/race/plan")
 
 

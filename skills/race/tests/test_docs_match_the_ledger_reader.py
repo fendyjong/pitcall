@@ -11,8 +11,6 @@ rather than trusted.
 import re
 from pathlib import Path
 
-import pytest
-
 from conftest import run_script
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
@@ -21,21 +19,6 @@ FENCE = re.compile(r"^```(\w+)\n(.*?)^```$", re.M | re.S)
 EVERY_SWEEP_FORMAT = ("Sweep", "Sorting", "Route", "Owner", "Amendment", "Sweep plan",
                       "Final review", "Fixed", "Seen", "Filed", "Note")
 
-# deprecated(0.16.0): the 0.15.0 spelling of the same ledger lines, read until 0.17.0.
-OLD_SPELLING = [(re.compile(r"^Lap (\d+):", re.M), r"Wave \1:"),
-                (re.compile(r"^Sweep plan: laps ", re.M), "Sweep plan: waves "),
-                (re.compile(r"^# Race ledger — ", re.M), "# WDD ledger — ")]
-NEW_SPELLING = [(re.compile(r"^Wave (\d+):", re.M), r"Lap \1:"),
-                (re.compile(r"^Sweep plan: waves ", re.M), "Sweep plan: laps "),
-                (re.compile(r"^# WDD ledger — ", re.M), "# Race ledger — ")]
-
-
-def spelled(text, rules):
-    for pattern, replacement in rules:
-        text = pattern.sub(replacement, text)
-    return text
-
-
 def only_block(path: Path, info: str) -> str:
     blocks = [body for name, body in FENCE.findall(path.read_text(encoding="utf-8"))
               if name == info]
@@ -43,21 +26,19 @@ def only_block(path: Path, info: str) -> str:
     return blocks[0]
 
 
-@pytest.mark.parametrize("rules", [NEW_SPELLING, OLD_SPELLING], ids=["new", "old"])
-def test_the_example_ledger_parses_and_shows_every_sweep_format(tmp_path, rules):
+def test_the_example_ledger_parses_and_shows_every_sweep_format(tmp_path):
     p = tmp_path / "progress.md"
-    p.write_text(spelled(only_block(SKILL_DIR / "SKILL.md", "ledger"), rules), encoding="utf-8")
+    p.write_text(only_block(SKILL_DIR / "SKILL.md", "ledger"), encoding="utf-8")
     r = run_script("race-ledger", "lint", str(p), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     for label in EVERY_SWEEP_FORMAT:
         assert f"{label}: " in r.stdout, f"SKILL.md's example ledger shows no {label!r} line"
 
 
-@pytest.mark.parametrize("rules", [NEW_SPELLING, OLD_SPELLING], ids=["new", "old"])
-def test_the_example_ledger_passes_the_stop_and_sweep_checks(tmp_path, rules):
+def test_the_example_ledger_passes_the_stop_and_sweep_checks(tmp_path):
     """It shows a stop marker and its resolution, and one sweep in range."""
     p = tmp_path / "progress.md"
-    p.write_text(spelled(only_block(SKILL_DIR / "SKILL.md", "ledger"), rules), encoding="utf-8")
+    p.write_text(only_block(SKILL_DIR / "SKILL.md", "ledger"), encoding="utf-8")
     assert run_script("race-ledger", "stops", str(p), cwd=tmp_path).returncode == 0
     assert run_script("race-ledger", "sweep-guard", str(p), cwd=tmp_path).returncode == 0
     assert "BLOCKED" in p.read_text(), "the example should show a stop marker being resolved"
