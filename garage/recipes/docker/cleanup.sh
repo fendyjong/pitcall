@@ -23,6 +23,7 @@ docker volume prune -a -f >/dev/null
 # The work directory and the one-job runner's own files.
 cd /home/runner/actions-runner
 rm -rf _work _diag .runner .credentials .credentials_rsaparams
-rm -rf /home/runner/work
+# ~/work, except the tool cache setup-* actions fill (#69); workspaces and the rest go.
+[ ! -d /home/runner/work ] || find /home/runner/work -mindepth 1 -maxdepth 1 ! -name _tool -exec rm -rf {} +
 find /tmp -mindepth 1 -delete
 EOF
