@@ -197,7 +197,7 @@ def test_active_jobs_reads_queued_and_in_progress_runs():
     )
     assert [job["id"] for job in gh.active_jobs("octo/app")] == [70, 80]
     assert [r.full_url.removeprefix("https://api.github.com") for r in opener.requests] == [
-        "/repos/octo/app/actions/runs?per_page=100",
+        "/repos/octo/app/actions/runs?per_page=30&exclude_pull_requests=true",
         "/repos/octo/app/actions/runs?status=queued&per_page=100",
         "/repos/octo/app/actions/runs/7/jobs?per_page=100",
         "/repos/octo/app/actions/runs?status=in_progress&per_page=100",

@@ -207,8 +207,8 @@ class GitHub:
         used: set[str] = set()
         seen: set[int] = set()
         # GitHub's filtered lists can leave out a queued run for good (#65), so the newest page
-        # unfiltered too; the filtered lists still reach an active run older than that page.
-        for query, wanted in (("per_page=100", ("queued", "in_progress")),
+        # unfiltered too, kept short because each run object is large; the filtered lists reach older runs.
+        for query, wanted in (("per_page=30&exclude_pull_requests=true", ("queued", "in_progress")),
                               ("status=queued&per_page=100", None),
                               ("status=in_progress&per_page=100", None)):
             _, runs = self.request("GET", f"/repos/{repo}/actions/runs?{query}", conditional=True)

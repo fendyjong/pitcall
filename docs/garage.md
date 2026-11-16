@@ -27,7 +27,7 @@ Every `poll_seconds` the service:
 
 1. **Polls.** For each joined repo, it lists the workflow runs that are queued or in progress (a
    run in progress can still have jobs waiting for a runner), then their jobs. GitHub's lists
-   filtered by status can leave a queued run out entirely, so it also reads the newest 100 runs
+   filtered by status can leave a queued run out entirely, so it also reads the newest 30 runs
    unfiltered and keeps the queued and in-progress ones. Every request is
    conditional, carrying the last ETag, so an unchanged answer costs no rate limit. A job is
    wanted when it is queued and its `runs-on` label set **equals** one of the repo's confirmed
