@@ -205,10 +205,17 @@ class GitHub:
     def active_jobs(self, repo: str) -> list[dict]:
         jobs: list[dict] = []
         used: set[str] = set()
-        for status in ("queued", "in_progress"):
-            _, runs = self.request(
-                "GET", f"/repos/{repo}/actions/runs?status={status}&per_page=100", conditional=True)
+        seen: set[int] = set()
+        # GitHub's filtered lists can leave out a queued run for good (#65), so a short newest page
+        # unfiltered too (each run object is large); the filtered lists reach older runs.
+        for query, wanted in (("per_page=30&exclude_pull_requests=true", ("queued", "in_progress")),
+                              ("status=queued&per_page=100", None),
+                              ("status=in_progress&per_page=100", None)):
+            _, runs = self.request("GET", f"/repos/{repo}/actions/runs?{query}", conditional=True)
             for run in (runs or {}).get("workflow_runs", []):
+                if (wanted and run.get("status") not in wanted) or run["id"] in seen:
+                    continue
+                seen.add(run["id"])
                 path = f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100"
                 used.add(API + path)
                 _, body = self.request("GET", path, conditional=True)
@@ -246,8 +253,10 @@ class GitHub:
         return True
 
     def jit_config(self, repo: str, name: str, labels) -> tuple[int, str]:
+        # ../work beside the runner's directory puts the workspace at ~/work/<repo>/<repo>, as on a
+        # GitHub-hosted runner, so a cached path saved there relative to it restores in place (#67).
         _, body = self.request("POST", f"/repos/{repo}/actions/runners/generate-jitconfig", {
-            "name": name, "runner_group_id": 1, "labels": list(labels), "work_folder": "_work"})
+            "name": name, "runner_group_id": 1, "labels": list(labels), "work_folder": "../work"})
         return body["runner"]["id"], body["encoded_jit_config"]
 
     def probe(self, repo: str, permission: str) -> ApiError | None:

@@ -189,6 +189,7 @@ def test_list_dir_names_the_entries():
 
 def test_active_jobs_reads_queued_and_in_progress_runs():
     gh, opener = client(
+        Response(200, {"workflow_runs": []}),
         Response(200, {"workflow_runs": [{"id": 7}]}),
         Response(200, {"jobs": [{"id": 70, "status": "queued", "labels": ["self-hosted"]}]}),
         Response(200, {"workflow_runs": [{"id": 8}]}),
@@ -196,6 +197,7 @@ def test_active_jobs_reads_queued_and_in_progress_runs():
     )
     assert [job["id"] for job in gh.active_jobs("octo/app")] == [70, 80]
     assert [r.full_url.removeprefix("https://api.github.com") for r in opener.requests] == [
+        "/repos/octo/app/actions/runs?per_page=30&exclude_pull_requests=true",
         "/repos/octo/app/actions/runs?status=queued&per_page=100",
         "/repos/octo/app/actions/runs/7/jobs?per_page=100",
         "/repos/octo/app/actions/runs?status=in_progress&per_page=100",
@@ -203,10 +205,30 @@ def test_active_jobs_reads_queued_and_in_progress_runs():
     ]
 
 
+def test_active_jobs_finds_a_queued_run_the_status_filters_leave_out():
+    # Measured on GitHub (#65): a queued run missing from every filtered list, present unfiltered.
+    gh, opener = client(
+        Response(200, {"workflow_runs": [{"id": 9, "status": "queued"},
+                                         {"id": 7, "status": "in_progress"},
+                                         {"id": 6, "status": "completed"}]}),
+        Response(200, {"jobs": [{"id": 90, "status": "queued", "labels": ["self-hosted"]}]}),
+        Response(200, {"jobs": [{"id": 70, "status": "in_progress", "labels": ["self-hosted"]}]}),
+        Response(200, {"workflow_runs": []}),
+        Response(200, {"workflow_runs": [{"id": 7}, {"id": 5}]}),
+        Response(200, {"jobs": [{"id": 50, "status": "in_progress", "labels": ["self-hosted"]}]}),
+    )
+    assert [job["id"] for job in gh.active_jobs("octo/app")] == [90, 70, 50]
+    paths = [r.full_url.removeprefix("https://api.github.com") for r in opener.requests]
+    assert "/repos/octo/app/actions/runs/6/jobs?per_page=100" not in paths  # completed: not read
+    assert paths.count("/repos/octo/app/actions/runs/7/jobs?per_page=100") == 1  # in both: read once
+
+
 def test_a_finished_runs_cached_jobs_are_forgotten():
     gh, _ = client(
+        Response(200, {"workflow_runs": []}),
         Response(200, {"workflow_runs": [{"id": 7}]}, ETag='"a"'),
         Response(200, {"jobs": []}, ETag='"b"'),
+        Response(200, {"workflow_runs": []}),
         Response(200, {"workflow_runs": []}),
         Response(200, {"workflow_runs": []}, ETag='"c"'),
         Response(200, {"workflow_runs": []}),
@@ -249,7 +271,7 @@ def test_jit_config_registers_with_the_exact_labels():
     req = opener.requests[0]
     assert req.full_url.endswith("/repos/octo/app/actions/runners/generate-jitconfig")
     assert json.loads(req.data) == {"name": "pitcall-3f9c2a71-r1-1", "runner_group_id": 1,
-                                    "labels": ["self-hosted", "Linux"], "work_folder": "_work"}
+                                    "labels": ["self-hosted", "Linux"], "work_folder": "../work"}
 
 
 def test_probe_returns_the_error_instead_of_raising():

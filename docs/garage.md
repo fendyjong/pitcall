@@ -26,7 +26,9 @@ or, from a clone of this repository, `python3 scripts/garage.py <command>`.
 Every `poll_seconds` the service:
 
 1. **Polls.** For each joined repo, it lists the workflow runs that are queued or in progress (a
-   run in progress can still have jobs waiting for a runner), then their jobs. Every request is
+   run in progress can still have jobs waiting for a runner), then their jobs. GitHub's lists
+   filtered by status can leave a queued run out entirely, so it also reads the newest 30 runs
+   unfiltered and keeps the queued and in-progress ones. Every request is
    conditional, carrying the last ETag, so an unchanged answer costs no rate limit. A job is
    wanted when it is queued and its `runs-on` label set **equals** one of the repo's confirmed
    sets, compared case-insensitively with order ignored. Jobs that ask for GitHub-hosted labels
@@ -147,6 +149,13 @@ got.
 The JIT config reaches the runner in the variable `ACTIONS_RUNNER_INPUT_JITCONFIG`. The runner reads
 it like its `--jitconfig` argument and removes it from its environment once read, so job steps never
 see it, and no command line shows it to anyone who can list processes.
+
+The service registers each runner with its work folder beside the runner's own directory, not
+inside it, so a recipe that installs the runner at `~/actions-runner`, as both examples do, gets a
+job workspace at
+`~/work/<repo>/<repo>`: the same layout as a GitHub-hosted runner. `actions/cache` stores a path
+outside the workspace relative to the workspace, so with any other depth a cache saved by a hosted
+run restores to the wrong place. `cleanup` empties `~/work` along with the runner's own files.
 
 Two examples ship with the plugin, each with a README that says what it does and why:
 [`garage/recipes/docker/`](../garage/recipes/docker/README.md) and
