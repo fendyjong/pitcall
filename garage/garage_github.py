@@ -206,8 +206,8 @@ class GitHub:
         jobs: list[dict] = []
         used: set[str] = set()
         seen: set[int] = set()
-        # GitHub's filtered lists can leave out a queued run for good (#65), so the newest page
-        # unfiltered too, kept short because each run object is large; the filtered lists reach older runs.
+        # GitHub's filtered lists can leave out a queued run for good (#65), so a short newest page
+        # unfiltered too (each run object is large); the filtered lists reach older runs.
         for query, wanted in (("per_page=30&exclude_pull_requests=true", ("queued", "in_progress")),
                               ("status=queued&per_page=100", None),
                               ("status=in_progress&per_page=100", None)):
