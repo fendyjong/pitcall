@@ -150,8 +150,9 @@ The JIT config reaches the runner in the variable `ACTIONS_RUNNER_INPUT_JITCONFI
 it like its `--jitconfig` argument and removes it from its environment once read, so job steps never
 see it, and no command line shows it to anyone who can list processes.
 
-The service registers each runner with the work folder `../work`, so a recipe that installs the
-runner at `~/actions-runner`, as both examples do, gets a job workspace at
+The service registers each runner with its work folder beside the runner's own directory, not
+inside it, so a recipe that installs the runner at `~/actions-runner`, as both examples do, gets a
+job workspace at
 `~/work/<repo>/<repo>`: the same layout as a GitHub-hosted runner. `actions/cache` stores a path
 outside the workspace relative to the workspace, so with any other depth a cache saved by a hosted
 run restores to the wrong place. `cleanup` empties `~/work` along with the runner's own files.
