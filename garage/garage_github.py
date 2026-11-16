@@ -205,10 +205,17 @@ class GitHub:
     def active_jobs(self, repo: str) -> list[dict]:
         jobs: list[dict] = []
         used: set[str] = set()
-        for status in ("queued", "in_progress"):
-            _, runs = self.request(
-                "GET", f"/repos/{repo}/actions/runs?status={status}&per_page=100", conditional=True)
+        seen: set[int] = set()
+        # GitHub's filtered lists can leave out a queued run for good (#65), so the newest page
+        # unfiltered too; the filtered lists still reach an active run older than that page.
+        for query, wanted in (("per_page=100", ("queued", "in_progress")),
+                              ("status=queued&per_page=100", None),
+                              ("status=in_progress&per_page=100", None)):
+            _, runs = self.request("GET", f"/repos/{repo}/actions/runs?{query}", conditional=True)
             for run in (runs or {}).get("workflow_runs", []):
+                if (wanted and run.get("status") not in wanted) or run["id"] in seen:
+                    continue
+                seen.add(run["id"])
                 path = f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100"
                 used.add(API + path)
                 _, body = self.request("GET", path, conditional=True)
