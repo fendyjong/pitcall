@@ -14,7 +14,7 @@ machine config's `recipe` at it.
 | `start.sh` | On first use, creates the network `pitcall-garage-<runner>` and the container of the same name (`--privileged`, `--init`, the inner Docker's data on the volume `pitcall-garage-<runner>-docker`) and installs Docker and the latest Actions runner inside. Then starts the container and its Docker daemon, and exits 0 once `docker exec` works. |
 | `exec.sh setup` | Runs `$PITCALL_SETUP` as root inside the container. |
 | `exec.sh job` | Starts the Actions runner as the unprivileged user `runner`, carrying in every variable named in `$PITCALL_ENV_NAMES` with `docker exec -e NAME`. |
-| `cleanup.sh` | Ends every process of the `runner` user, removes the containers, networks and volumes the job's Docker created, and empties the runner's work directory (`~/work`) and `/tmp`. Image layers and package caches stay. Succeeds when the container is missing, and starts a stopped one first so its leftovers can be removed. |
+| `cleanup.sh` | Ends every process of the `runner` user, removes the containers, networks and volumes the job's Docker created, and empties the runner's work directory (`~/work`, keeping its tool cache `_tool`) and `/tmp`. Image layers and package caches stay. Succeeds when the container is missing, and starts a stopped one first so its leftovers can be removed. |
 | `stop.sh` | Stops the container. Its disk stays, so caches survive. |
 
 ## Why each runner has its own network and its own Docker

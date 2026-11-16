@@ -155,7 +155,9 @@ inside it, so a recipe that installs the runner at `~/actions-runner`, as both e
 job workspace at
 `~/work/<repo>/<repo>`: the same layout as a GitHub-hosted runner. `actions/cache` stores a path
 outside the workspace relative to the workspace, so with any other depth a cache saved by a hosted
-run restores to the wrong place. `cleanup` empties `~/work` along with the runner's own files.
+run restores to the wrong place. `cleanup` empties `~/work` along with the runner's own files, except
+`~/work/_tool`: the tool cache where `setup-node`, `flutter-action` and the like keep the SDKs they
+download, which, like image layers, is shared by every joined repo's later jobs.
 
 Two examples ship with the plugin, each with a README that says what it does and why:
 [`garage/recipes/docker/`](../garage/recipes/docker/README.md) and
