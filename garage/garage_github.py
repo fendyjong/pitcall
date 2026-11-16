@@ -253,8 +253,10 @@ class GitHub:
         return True
 
     def jit_config(self, repo: str, name: str, labels) -> tuple[int, str]:
+        # ../work beside the runner's directory puts the workspace at ~/work/<repo>/<repo>, as on a
+        # GitHub-hosted runner, so a cached path saved there relative to it restores in place (#67).
         _, body = self.request("POST", f"/repos/{repo}/actions/runners/generate-jitconfig", {
-            "name": name, "runner_group_id": 1, "labels": list(labels), "work_folder": "_work"})
+            "name": name, "runner_group_id": 1, "labels": list(labels), "work_folder": "../work"})
         return body["runner"]["id"], body["encoded_jit_config"]
 
     def probe(self, repo: str, permission: str) -> ApiError | None:

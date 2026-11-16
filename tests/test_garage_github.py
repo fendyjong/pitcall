@@ -271,7 +271,7 @@ def test_jit_config_registers_with_the_exact_labels():
     req = opener.requests[0]
     assert req.full_url.endswith("/repos/octo/app/actions/runners/generate-jitconfig")
     assert json.loads(req.data) == {"name": "pitcall-3f9c2a71-r1-1", "runner_group_id": 1,
-                                    "labels": ["self-hosted", "Linux"], "work_folder": "_work"}
+                                    "labels": ["self-hosted", "Linux"], "work_folder": "../work"}
 
 
 def test_probe_returns_the_error_instead_of_raising():
